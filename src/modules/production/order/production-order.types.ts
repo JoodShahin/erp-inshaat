@@ -1,5 +1,6 @@
 import { ProductionOrderLineDto } from '../order-line/production-order-line.types.js';
 import { ProductionOrderPriority } from './production-order.entity.js';
+import { OrderUnitsSummaryDto } from '../unit/production-unit.types.js';
 
 export { ProductionOrderStatus, ProductionOrderPriority } from './production-order.entity.js';
 
@@ -28,6 +29,8 @@ export interface ProductionOrderDto {
   createdByUser?: ProductionOrderUserSummaryDto;
   summary: ProductionOrderSummaryDto;
   lines?: ProductionOrderLineDto[];
+  hasExecutionPlans?: boolean;
+  unitsSummary?: OrderUnitsSummaryDto | null;
 }
 
 export interface ProductionOrderListSummaryDto {

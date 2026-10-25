@@ -199,4 +199,42 @@ productionOrderApiRouter.post(
   productionOrderController.reopenOrder
 );
 
+// ==========================================
+// 6. EXECUTION PLANS & PRODUCTION UNITS (PHASE 1)
+// ==========================================
+
+// GET /api/production/orders/:orderId/execution-plans - List execution plans for an order
+productionOrderApiRouter.get(
+  '/:orderId/execution-plans',
+  requirePermission(SystemPermission.PRODUCTION_ORDER_VIEW),
+  validateUuidParam('orderId'),
+  productionOrderController.getOrderExecutionPlans
+);
+
+// GET /api/production/orders/:orderId/execution-plans/:planId - Get execution plan detail
+productionOrderApiRouter.get(
+  '/:orderId/execution-plans/:planId',
+  requirePermission(SystemPermission.PRODUCTION_ORDER_VIEW),
+  validateUuidParam('orderId'),
+  validateUuidParam('planId'),
+  productionOrderController.getExecutionPlanById
+);
+
+// GET /api/production/orders/:orderId/units - List units for an order
+productionOrderApiRouter.get(
+  '/:orderId/units',
+  requirePermission(SystemPermission.PRODUCTION_ORDER_VIEW),
+  validateUuidParam('orderId'),
+  productionOrderController.getOrderUnits
+);
+
+// GET /api/production/orders/:orderId/units/:unitId/events - List history events of a unit
+productionOrderApiRouter.get(
+  '/:orderId/units/:unitId/events',
+  requirePermission(SystemPermission.PRODUCTION_ORDER_VIEW),
+  validateUuidParam('orderId'),
+  validateUuidParam('unitId'),
+  productionOrderController.getUnitEvents
+);
+
 export { productionOrderApiRouter };
