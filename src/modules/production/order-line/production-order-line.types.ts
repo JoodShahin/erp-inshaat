@@ -1,4 +1,5 @@
 import { ProductionOrderLinePatternSelectionDto } from '../order-line-pattern-selection/production-order-line-pattern-selection.types.js';
+import { ExecutionPlanSummaryDto } from '../execution-plan/production-execution-plan.types.js';
 
 export interface ProductionOrderLineTemplateSummaryDto {
   id: string;
@@ -18,4 +19,6 @@ export interface ProductionOrderLineDto {
   updatedAt: Date;
   template?: ProductionOrderLineTemplateSummaryDto;
   patternSelections: ProductionOrderLinePatternSelectionDto[];
+  executionPlan?: ExecutionPlanSummaryDto | null;
+  unitCount?: number;
 }

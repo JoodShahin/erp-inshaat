@@ -9,3 +9,5 @@ storage/uploads/*
 !storage/uploads/.gitkeep
 storage/template-stage-attachments/*
 !storage/template-stage-attachments/.gitkeep
+
+*.docx

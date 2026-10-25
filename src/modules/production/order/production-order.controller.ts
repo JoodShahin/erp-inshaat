@@ -1,3 +1,12 @@
+import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import {
+  ProductionExecutionPlanService,
+  productionExecutionPlanService,
+} from '../execution-plan/production-execution-plan.service.js';
+import {
+  ProductionUnitService,
+  productionUnitService,
+} from '../unit/production-unit.service.js';
 import { Request, Response, NextFunction } from 'express';
 import { ApiResponse } from '../../../common/responses/api-response.js';
 import { ProductionOrderService, productionOrderService } from './production-order.service.js';
@@ -11,10 +20,17 @@ import { UpdateProductionOrderLineDto } from '../order-line/dto/update-productio
 import { ReorderProductionOrderLinesDto } from '../order-line/dto/reorder-production-order-lines.dto.js';
 import { CommitProductionOrderDraftLinesDto } from '../order-line/dto/commit-production-order-draft-lines.dto.js';
 import { UpdatePatternSelectionDto } from '../order-line-pattern-selection/dto/update-pattern-selection.dto.js';
+import { ListProductionUnitsQueryDto } from '../unit/dto/list-production-units-query.dto.js';
+import { ListProductionUnitEventsQueryDto } from '../unit/dto/list-production-unit-events-query.dto.js';
+import { AuthPrincipal } from '../../system/auth/auth.types.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 
 export class ProductionOrderController {
-  constructor(private orderService: ProductionOrderService = productionOrderService) {}
+  constructor(
+    private orderService: ProductionOrderService = productionOrderService,
+    private executionPlanService: ProductionExecutionPlanService = productionExecutionPlanService,
+    private unitService: ProductionUnitService = productionUnitService
+  ) {}
 
   // ==========================================
   // 1. ORDER HEADER OPERATIONS
@@ -275,6 +291,94 @@ export class ProductionOrderController {
       const currentUser = (req as any).user;
       const order = await this.orderService.reopenOrder(orderId as string, currentUser);
       res.status(200).json(ApiResponse.success(order, 'تمت إعادة أمر الإنتاج إلى المسودة بنجاح'));
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  // ==========================================
+  // 7. EXECUTION PLANS & UNITS (PHASE 1)
+  // ==========================================
+
+  getOrderExecutionPlans = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const { orderId } = req.params;
+      const currentUser = req.user as AuthPrincipal | undefined;
+      const plans = await this.executionPlanService.getPlansByOrderId(
+        orderId as string,
+        currentUser
+      );
+      res.status(200).json(ApiResponse.success(plans));
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  getExecutionPlanById = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const { orderId, planId } = req.params;
+      const currentUser = req.user as AuthPrincipal | undefined;
+      const plan = await this.executionPlanService.getPlanById(
+        orderId as string,
+        planId as string,
+        currentUser
+      );
+      if (!plan) {
+        throw new NotFoundError(
+          'الخطة التنفيذية غير موجودة في أمر الإنتاج المحدد',
+          'PRODUCTION_EXECUTION_PLAN_NOT_FOUND'
+        );
+      }
+      res.status(200).json(ApiResponse.success(plan));
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  getOrderUnits = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const { orderId } = req.params;
+      const currentUser = req.user as AuthPrincipal | undefined;
+      const query = (req.validatedQuery ?? req.query) as unknown as ListProductionUnitsQueryDto;
+      const units = await this.unitService.getUnitsByOrderId(
+        orderId as string,
+        currentUser,
+        query
+      );
+      res.status(200).json(ApiResponse.success(units));
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  getUnitEvents = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      const { orderId, unitId } = req.params;
+      const currentUser = req.user as AuthPrincipal | undefined;
+      const query = (req.validatedQuery ?? req.query) as unknown as ListProductionUnitEventsQueryDto;
+      const events = await this.unitService.getUnitEvents(
+        orderId as string,
+        unitId as string,
+        currentUser,
+        query
+      );
+      res.status(200).json(ApiResponse.success(events));
     } catch (error) {
       next(error);
     }

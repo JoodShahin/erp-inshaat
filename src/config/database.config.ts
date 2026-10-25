@@ -28,6 +28,10 @@ import { ProductionOrderSequenceEntity } from '../modules/production/order/produ
 import { ProductionOrderEntity } from '../modules/production/order/production-order.entity.js';
 import { ProductionOrderLineEntity } from '../modules/production/order-line/production-order-line.entity.js';
 import { ProductionOrderLinePatternSelectionEntity } from '../modules/production/order-line-pattern-selection/production-order-line-pattern-selection.entity.js';
+import { ProductionExecutionPlanEntity } from '../modules/production/execution-plan/production-execution-plan.entity.js';
+import { ProductionExecutionTaskEntity } from '../modules/production/execution-plan/production-execution-task.entity.js';
+import { ProductionUnitEntity } from '../modules/production/unit/production-unit.entity.js';
+import { ProductionUnitEventEntity } from '../modules/production/unit/production-unit-event.entity.js';
 import { CreateSystemCoreTables1710000000000 } from '../database/migrations/1710000000000-CreateSystemCoreTables.js';
 import { CreateSystemSessionTable1710000000001 } from '../database/migrations/1710000000001-CreateSystemSessionTable.js';
 import { CreateProductionDepartmentsAndYards1710000000002 } from '../database/migrations/1710000000002-CreateProductionDepartmentsAndYards.js';
@@ -45,6 +49,9 @@ import { CreateProductionOrderDraftingFoundation1710000000013 } from '../databas
 import { AddProductionOrderLineConfigurationUniqueness1710000000014 } from '../database/migrations/1710000000014-AddProductionOrderLineConfigurationUniqueness.js';
 import { AddProductionOrderApprovalStatus1710000000015 } from '../database/migrations/1710000000015-AddProductionOrderApprovalStatus.js';
 import { AddProductionOrderPriority1710000000016 } from '../database/migrations/1710000000016-AddProductionOrderPriority.js';
+import { CreateProductionExecutionPlansAndUnits1710000000017 } from '../database/migrations/1710000000017-CreateProductionExecutionPlansAndUnits.js';
+import { AddSpecificationsToExecutionPlan1710000000018 } from '../database/migrations/1710000000018-AddSpecificationsToExecutionPlan.js';
+import { AddAvailablePatternOptionsToExecutionPlan1710000000019 } from '../database/migrations/1710000000019-AddAvailablePatternOptionsToExecutionPlan.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -84,6 +91,10 @@ export const databaseConfig: DataSourceOptions = {
     ProductionOrderEntity,
     ProductionOrderLineEntity,
     ProductionOrderLinePatternSelectionEntity,
+    ProductionExecutionPlanEntity,
+    ProductionExecutionTaskEntity,
+    ProductionUnitEntity,
+    ProductionUnitEventEntity,
   ],
   migrations: [
     CreateSystemCoreTables1710000000000,
@@ -103,6 +114,9 @@ export const databaseConfig: DataSourceOptions = {
     AddProductionOrderLineConfigurationUniqueness1710000000014,
     AddProductionOrderApprovalStatus1710000000015,
     AddProductionOrderPriority1710000000016,
+    CreateProductionExecutionPlansAndUnits1710000000017,
+    AddSpecificationsToExecutionPlan1710000000018,
+    AddAvailablePatternOptionsToExecutionPlan1710000000019,
   ],
   subscribers: [],
 };

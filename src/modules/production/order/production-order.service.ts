@@ -1,3 +1,16 @@
+import { randomUUID } from 'node:crypto';
+import { ProductionExecutionPlanEntity } from '../execution-plan/production-execution-plan.entity.js';
+import { ProductionExecutionTaskEntity } from '../execution-plan/production-execution-task.entity.js';
+import { ProductionUnitEntity, ProductionUnitStatus } from '../unit/production-unit.entity.js';
+import { ProductionUnitEventEntity } from '../unit/production-unit-event.entity.js';
+import {
+  ProductionExecutionPlanService,
+  productionExecutionPlanService,
+} from '../execution-plan/production-execution-plan.service.js';
+import {
+  ProductionUnitService,
+  productionUnitService,
+} from '../unit/production-unit.service.js';
 import { DataSource, EntityManager, Repository, IsNull, In, Not } from 'typeorm';
 import { AppDataSource } from '../../../database/data-source.js';
 import { ProductionOrderEntity, ProductionOrderStatus, ProductionOrderPriority } from './production-order.entity.js';
@@ -48,10 +61,14 @@ export class ProductionOrderService {
   private optionRepo: Repository<ProductionTemplatePatternOptionEntity>;
   private workflowItemRepo: Repository<ProductionTemplateWorkflowItemEntity>;
   private guardService: ProductionOrderGuardService;
+  private executionPlanService: ProductionExecutionPlanService;
+  private unitService: ProductionUnitService;
 
   constructor(
     private dataSource: DataSource = AppDataSource,
-    guardService: ProductionOrderGuardService = productionOrderGuardService
+    guardService: ProductionOrderGuardService = productionOrderGuardService,
+    executionPlanService: ProductionExecutionPlanService = productionExecutionPlanService,
+    unitService: ProductionUnitService = productionUnitService
   ) {
     this.orderRepo = this.dataSource.getRepository(ProductionOrderEntity);
     this.lineRepo = this.dataSource.getRepository(ProductionOrderLineEntity);
@@ -61,6 +78,8 @@ export class ProductionOrderService {
     this.optionRepo = this.dataSource.getRepository(ProductionTemplatePatternOptionEntity);
     this.workflowItemRepo = this.dataSource.getRepository(ProductionTemplateWorkflowItemEntity);
     this.guardService = guardService;
+    this.executionPlanService = executionPlanService;
+    this.unitService = unitService;
   }
 
   // ==========================================
@@ -1498,11 +1517,11 @@ export class ProductionOrderService {
   // ==========================================
 
   /**
-   * Approves a DRAFT production order (Administrative Approval only).
-   * Requires:
-   * 1. Order is in DRAFT status.
-   * 2. Readiness check passes without any issues.
-   * Never creates runtime, units, snapshots, or releases order.
+   * Approves a DRAFT production order:
+   * 1. Validates order is DRAFT and readiness check passes.
+   * 2. Atomically generates isolated execution plans for all lines.
+   * 3. Generates production units and immutable initial history events.
+   * 4. Transitions status to APPROVED.
    */
   async approveOrder(
     orderId: string,
@@ -1530,7 +1549,37 @@ export class ProductionOrderService {
         );
       }
 
-      // 3. Set APPROVED
+      // 3. Load active lines
+      const lineRepo = manager.getRepository(ProductionOrderLineEntity);
+      const lines = await lineRepo.find({
+        where: { orderId, deletedAt: IsNull() },
+        order: { sortOrder: 'ASC', createdAt: 'ASC' },
+      });
+
+      if (lines.length === 0) {
+        throw new BusinessRuleError(
+          'يجب أن يحتوي طلب الإنتاج على بند إنتاج واحد على الأقل',
+          'PRODUCTION_ORDER_EMPTY'
+        );
+      }
+
+      // 4. Batch correlation ID for all unit creation events
+      const batchCorrelationId = randomUUID();
+
+      // 5. Generate Execution Plan, Tasks, and Units for each line
+      for (const line of lines) {
+        const { plan } = await this.executionPlanService.createPlanForLine(line, manager);
+        await this.unitService.generateUnitsForPlan(
+          order,
+          line,
+          plan,
+          batchCorrelationId,
+          userId,
+          manager
+        );
+      }
+
+      // 6. Set APPROVED
       order.status = ProductionOrderStatus.APPROVED;
       order.approvedAt = new Date();
       order.approvedByUserId = userId;
@@ -1543,6 +1592,7 @@ export class ProductionOrderService {
 
   /**
    * Reopens an APPROVED production order back to DRAFT for edits.
+   * Blocked with PRODUCTION_ORDER_HAS_EXECUTION_PLANS if execution plans or units exist.
    */
   async reopenOrder(
     orderId: string,
@@ -1563,6 +1613,23 @@ export class ProductionOrderService {
         throw new BusinessRuleError(
           'لا يمكن إعادة طلب إنتاج ليس في حالة معتمد إلى مسودة',
           'PRODUCTION_ORDER_NOT_APPROVED'
+        );
+      }
+
+      // Invariant: Block reopening if execution plans or units exist
+      const planRepo = manager.getRepository(ProductionExecutionPlanEntity);
+      const planCount = await planRepo.count({
+        where: { orderId, deletedAt: IsNull() },
+      });
+      const unitRepo = manager.getRepository(ProductionUnitEntity);
+      const unitCount = await unitRepo.count({
+        where: { orderId, deletedAt: IsNull() },
+      });
+
+      if (planCount > 0 || unitCount > 0) {
+        throw new BusinessRuleError(
+          'لا يمكن إعادة فتح أمر إنتاج تم إنشاء خطط تنفيذية أو غرف إنتاج له',
+          'PRODUCTION_ORDER_HAS_EXECUTION_PLANS'
         );
       }
 
@@ -1857,6 +1924,8 @@ export class ProductionOrderService {
           : undefined,
         summary: { lineCount: 0, totalQuantity: 0 },
         lines: [],
+        hasExecutionPlans: false,
+        unitsSummary: null,
       };
     }
 
@@ -1956,6 +2025,65 @@ export class ProductionOrderService {
       patternsByTemplateId.set(pat.templateId, list);
     }
 
+    // 5.1 Batch load execution plans, task counts, and units
+    const planRepo = manager
+      ? manager.getRepository(ProductionExecutionPlanEntity)
+      : this.dataSource.getRepository(ProductionExecutionPlanEntity);
+    const taskRepo = manager
+      ? manager.getRepository(ProductionExecutionTaskEntity)
+      : this.dataSource.getRepository(ProductionExecutionTaskEntity);
+    const unitRepo = manager
+      ? manager.getRepository(ProductionUnitEntity)
+      : this.dataSource.getRepository(ProductionUnitEntity);
+
+    const activePlans = lines.length > 0
+      ? await planRepo.find({
+          where: { orderId, deletedAt: IsNull() },
+        })
+      : [];
+    const planByLineId = new Map(activePlans.map((p) => [p.orderLineId, p]));
+
+    const planIds = activePlans.map((p) => p.id);
+    const activeTasks = planIds.length > 0
+      ? await taskRepo.find({
+          where: { planId: In(planIds), deletedAt: IsNull() },
+          select: { id: true, planId: true },
+        })
+      : [];
+    const taskCountByPlanId = new Map<string, number>();
+    for (const t of activeTasks) {
+      taskCountByPlanId.set(t.planId, (taskCountByPlanId.get(t.planId) || 0) + 1);
+    }
+
+    const activeUnits = lines.length > 0
+      ? await unitRepo.find({
+          where: { orderId, deletedAt: IsNull() },
+          select: { id: true, orderLineId: true, status: true, isCancelled: true },
+        })
+      : [];
+
+    const unitCountByLineId = new Map<string, number>();
+    const unitsSummary = {
+      totalUnits: activeUnits.length,
+      createdUnits: 0,
+      inProgressUnits: 0,
+      completedUnits: 0,
+      cancelledUnits: 0,
+    };
+
+    for (const u of activeUnits) {
+      unitCountByLineId.set(u.orderLineId, (unitCountByLineId.get(u.orderLineId) || 0) + 1);
+      if (u.isCancelled || u.status === ProductionUnitStatus.CANCELLED) {
+        unitsSummary.cancelledUnits++;
+      } else if (u.status === ProductionUnitStatus.COMPLETED) {
+        unitsSummary.completedUnits++;
+      } else if (u.status === ProductionUnitStatus.IN_PROGRESS) {
+        unitsSummary.inProgressUnits++;
+      } else {
+        unitsSummary.createdUnits++;
+      }
+    }
+
     // 6. Map Line DTOs
     let totalQuantity = 0;
     const lineDtos: ProductionOrderLineDto[] = lines.map((line) => {
@@ -2015,6 +2143,23 @@ export class ProductionOrderService {
             }
           : undefined,
         patternSelections: selectionDtos,
+        executionPlan: (() => {
+          const plan = planByLineId.get(line.id);
+          return plan
+            ? {
+                id: plan.id,
+                orderLineId: plan.orderLineId,
+                templateId: plan.templateId,
+                templateName: plan.templateName,
+                templateCode: plan.templateCode,
+                lineQuantity: plan.lineQuantity,
+                configurationHash: plan.configurationHash,
+                tasksCount: taskCountByPlanId.get(plan.id) || 0,
+                unitsCount: plan.lineQuantity,
+              }
+            : null;
+        })(),
+        unitCount: unitCountByLineId.get(line.id) || 0,
       };
     });
 
@@ -2046,6 +2191,8 @@ export class ProductionOrderService {
         totalQuantity,
       },
       lines: lineDtos,
+      hasExecutionPlans: activePlans.length > 0,
+      unitsSummary: activeUnits.length > 0 ? unitsSummary : null,
     };
   }
 }
