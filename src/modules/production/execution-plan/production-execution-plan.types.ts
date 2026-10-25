@@ -68,6 +68,7 @@ export interface ExecutionPlanDto {
   configurationHash: string;
   patternSummary: ExecutionPlanPatternSummaryDto[] | null;
   specifications?: ExecutionPlanSpecificationSnapshot[] | null;
+  availablePatternOptions?: any[] | null;
   tasksCount: number;
   unitsCount: number;
   tasks?: ExecutionTaskDto[];

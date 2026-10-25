@@ -30,6 +30,7 @@ import {
 } from '../authorization/production-responsibility.resolver.js';
 import {
   applyUnitEventAccessScope,
+  applyUnitAccessScope,
   canAccessUnit,
 } from '../authorization/production-access-query.helper.js';
 import { ResolvedProductionAccessPolicy } from '../authorization/production-access-policy.types.js';
@@ -227,73 +228,7 @@ export class ProductionUnitService {
 
     // Apply unit-level row authorization scoping
     if (policy) {
-      if (!policy.allowAll) {
-        const hasAllowDepts = policy.allowDepartmentIds.length > 0;
-        const hasAllowYards = policy.allowYardIds.length > 0;
-
-        if (!hasAllowDepts && !hasAllowYards) {
-          qb.andWhere('1 = 0');
-        } else {
-          qb.andWhere(
-            new Brackets((subQb) => {
-              if (hasAllowDepts && hasAllowYards) {
-                subQb
-                  .where('currentYard.department_id IN (:...authAllowUnitDeptIds)', {
-                    authAllowUnitDeptIds: policy.allowDepartmentIds,
-                  })
-                  .orWhere('unit.current_yard_id IN (:...authAllowUnitYardIds)', {
-                    authAllowUnitYardIds: policy.allowYardIds,
-                  });
-              } else if (hasAllowDepts) {
-                subQb.where('currentYard.department_id IN (:...authAllowUnitDeptIds)', {
-                  authAllowUnitDeptIds: policy.allowDepartmentIds,
-                });
-              } else {
-                subQb.where('unit.current_yard_id IN (:...authAllowUnitYardIds)', {
-                  authAllowUnitYardIds: policy.allowYardIds,
-                });
-              }
-            })
-          );
-        }
-      }
-
-      // DENY overrides ALLOW
-      const hasDenyDepts = policy.denyDepartmentIds.length > 0;
-      const hasDenyYards = policy.denyYardIds.length > 0;
-
-      if (hasDenyDepts || hasDenyYards) {
-        qb.andWhere(
-          new Brackets((subQb) => {
-            if (policy.allowAll) {
-              subQb.where('unit.current_yard_id IS NULL');
-            }
-            if (hasDenyDepts && hasDenyYards) {
-              subQb.orWhere(
-                '(currentYard.department_id NOT IN (:...authDenyUnitDeptIds) AND (unit.current_yard_id IS NULL OR unit.current_yard_id NOT IN (:...authDenyUnitYardIds)))',
-                {
-                  authDenyUnitDeptIds: policy.denyDepartmentIds,
-                  authDenyUnitYardIds: policy.denyYardIds,
-                }
-              );
-            } else if (hasDenyDepts) {
-              subQb.orWhere(
-                '(unit.current_yard_id IS NULL OR currentYard.department_id NOT IN (:...authDenyUnitDeptIds))',
-                {
-                  authDenyUnitDeptIds: policy.denyDepartmentIds,
-                }
-              );
-            } else if (hasDenyYards) {
-              subQb.orWhere(
-                '(unit.current_yard_id IS NULL OR unit.current_yard_id NOT IN (:...authDenyUnitYardIds))',
-                {
-                  authDenyUnitYardIds: policy.denyYardIds,
-                }
-              );
-            }
-          })
-        );
-      }
+      applyUnitAccessScope(qb, policy, 'unit', 'currentYard');
     }
 
     qb.orderBy('unit.order_line_id', 'ASC')
@@ -332,16 +267,50 @@ export class ProductionUnitService {
 
   /**
    * Retrieves summary counts of units for an order.
+   * If currentUser is passed, applies unit row authorization to prevent leaking counts of out-of-scope units.
    */
   async getUnitsSummaryByOrderId(
     orderId: string,
+    currentUser?: AuthPrincipal,
     manager?: EntityManager
   ): Promise<OrderUnitsSummaryDto> {
     const repo = manager ? manager.getRepository(ProductionUnitEntity) : this.unitRepo;
-    const units = await repo.find({
-      where: { orderId, deletedAt: IsNull() },
-      select: { id: true, status: true, isCancelled: true },
-    });
+
+    let policy: ResolvedProductionAccessPolicy | null = null;
+    if (currentUser) {
+      const rules = await this.authzService.getApplicableAccessRules(
+        currentUser,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+      const responsibility = await this.respResolver.resolve(currentUser);
+      policy = this.policyService.resolvePolicy(
+        rules,
+        responsibility,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+      if (policy.denyAll || !policy.hasAnyAccess) {
+        return {
+          totalUnits: 0,
+          createdUnits: 0,
+          inProgressUnits: 0,
+          completedUnits: 0,
+          cancelledUnits: 0,
+        };
+      }
+    }
+
+    const qb = repo
+      .createQueryBuilder('unit')
+      .leftJoin('unit.currentYard', 'currentYard')
+      .where('unit.order_id = :orderId', { orderId })
+      .andWhere('unit.deleted_at IS NULL')
+      .select(['unit.id', 'unit.status', 'unit.isCancelled']);
+
+    if (policy) {
+      applyUnitAccessScope(qb, policy, 'unit', 'currentYard');
+    }
+
+    const units = await qb.getMany();
 
     const summary: OrderUnitsSummaryDto = {
       totalUnits: units.length,
@@ -380,7 +349,7 @@ export class ProductionUnitService {
   async getUnitEvents(
     orderId: string,
     unitId: string,
-    currentUser: AuthPrincipal,
+    currentUser?: AuthPrincipal,
     query?: ListProductionUnitEventsQueryDto,
     manager?: EntityManager
   ): Promise<PaginatedProductionUnitEventsResult> {

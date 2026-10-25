@@ -1250,7 +1250,9 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     const now = new Date();
     const castingDeptId = randomUUID();
     const finishingDeptId = randomUUID();
+    const castingYardId = randomUUID();
 
+    // Unit 1: in casting yard of casting department
     store.units.push({
       id: 'unit-scope-1',
       orderId: 'order-100',
@@ -1258,6 +1260,25 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       planId: 'plan-1',
       unitSequence: 1,
       unitNumber: 'PO-000100-L1-U001',
+      currentYardId: castingYardId,
+      currentYard: { id: castingYardId, departmentId: castingDeptId } as any,
+      status: ProductionUnitStatus.CREATED,
+      isCancelled: false,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Unit 2: unassigned unit (currentYardId is null)
+    store.units.push({
+      id: 'unit-unassigned',
+      orderId: 'order-100',
+      orderLineId: 'line-1',
+      planId: 'plan-1',
+      unitSequence: 2,
+      unitNumber: 'PO-000100-L1-U002',
+      currentYardId: null,
+      currentYard: null,
       status: ProductionUnitStatus.CREATED,
       isCancelled: false,
       deletedAt: null,
@@ -1295,7 +1316,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       createdAt: new Date(now.getTime() + 2000),
     });
 
-    // Case A: User with ALLOW ALL sees all 3 events
+    // Case A: User with ALLOW ALL sees all 3 events on unit-scope-1
     const adminUser = {
       id: 'admin',
       accessRules: [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }],
@@ -1322,7 +1343,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     assert.equal(castingRes.items[0].id, 'ev-2');
     assert.equal(castingRes.items[0].departmentId, castingDeptId);
 
-    // Case C: User with DENY castingDeptId sees general event + finishing event
+    // Case C: User with DENY castingDeptId cannot access unit-scope-1 (located in castingDeptId) -> Level 2 rejects with 403 Forbidden
     const denyCastingUser = {
       id: 'eng-deny-casting',
       accessRules: [
@@ -1337,9 +1358,16 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
         },
       ],
     } as any;
-    const denyRes = await unitService.getUnitEvents('order-100', 'unit-scope-1', denyCastingUser);
-    assert.equal(denyRes.items.length, 2);
-    assert.ok(denyRes.items.every((e: any) => e.departmentId !== castingDeptId));
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents('order-100', 'unit-scope-1', denyCastingUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
 
     // Case D: User with no permissions (denyAll or no rules) gets 403 ForbiddenError
     const noAccessUser = {
@@ -1349,6 +1377,23 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     await assert.rejects(
       async () => {
         await unitService.getUnitEvents('order-100', 'unit-scope-1', noAccessUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // Case E: Unassigned unit access policy:
+    // ALLOW ALL can access unassigned unit
+    const adminUnassignedRes = await unitService.getUnitEvents('order-100', 'unit-unassigned', adminUser);
+    assert.equal(adminUnassignedRes.items.length, 0);
+
+    // Scoped department head CANNOT access unassigned unit -> 403 Forbidden
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents('order-100', 'unit-unassigned', castingUser);
       },
       (err: any) => {
         assert.equal(err.name, 'ForbiddenError');
@@ -1618,5 +1663,37 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
         return true;
       }
     );
+  });
+
+  // ==========================================
+  // SCENARIO 26: Migration 19 & Alternative Pattern Options Snapshot
+  // ==========================================
+  it('26. Migration 19 is registered and availablePatternOptions snapshots all alternative option definitions', async () => {
+    const { databaseConfig } = await import('../src/config/database.config.js');
+    const { AddAvailablePatternOptionsToExecutionPlan1710000000019 } = await import(
+      '../src/database/migrations/1710000000019-AddAvailablePatternOptionsToExecutionPlan.js'
+    );
+
+    const isRegistered = (databaseConfig.migrations as any[]).includes(
+      AddAvailablePatternOptionsToExecutionPlan1710000000019
+    );
+    assert.ok(isRegistered, 'AddAvailablePatternOptionsToExecutionPlan1710000000019 must be registered in databaseConfig');
+
+    // Migration executes up() cleanly
+    const migration = new AddAvailablePatternOptionsToExecutionPlan1710000000019();
+    const fakeTable = {
+      findColumnByName: (col: string) => (col === 'available_pattern_options' ? null : { name: col }),
+    };
+    let addedColumnName: string | null = null;
+    const fakeQueryRunner = {
+      getTable: async () => fakeTable,
+      addColumn: async (_table: string, column: any) => {
+        addedColumnName = column.name;
+      },
+      dropColumn: async () => {},
+    } as any;
+
+    await migration.up(fakeQueryRunner);
+    assert.equal(addedColumnName, 'available_pattern_options');
   });
 });

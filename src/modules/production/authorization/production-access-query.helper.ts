@@ -57,12 +57,12 @@ export function canAccessYard(
  *
  * Invariants & Business Rules:
  * 1. Default Deny / Global Deny: if policy.denyAll or !policy.hasAnyAccess -> false.
- * 2. If unit is assigned to a yard (unit.currentYardId):
+ * 2. If unit is assigned to a yard (unit.currentYardId != null):
  *    - Must have currentYard loaded with a valid departmentId. If missing -> fail closed (false).
  *    - Delegates to canAccessYard(policy, { id: unit.currentYardId, departmentId: unit.currentYard.departmentId }).
- * 3. If unit is unassigned (unit.currentYardId is null):
+ * 3. If unit is unassigned (unit.currentYardId === null):
  *    - Accessible ONLY if policy.allowAll is true (and not denied by global rules).
- *    - Engineers and scoped users with specific yard/department permissions CANNOT access unassigned units.
+ *    - Scoped users (whether scoped to yards or departments) CANNOT access unassigned units.
  */
 export function canAccessUnit(
   policy: ResolvedProductionAccessPolicy,
@@ -87,18 +87,162 @@ export function canAccessUnit(
   }
 
   // Unassigned unit (currentYardId is null):
-  // Engineers scoped ONLY to yards cannot access unassigned units (Default Deny).
-  // Accessible only to users with ALLOW ALL or explicit Department-level scope
-  // (events are subsequently filtered by applyUnitEventAccessScope at Level 3).
+  // Strictly accessible ONLY to users with full access (ALLOW ALL).
+  // Scoped engineers and department heads cannot access unassigned units.
+  return policy.allowAll;
+}
+
+/**
+ * Pure evaluation helper: checks if the policy grants access to an execution plan task.
+ *
+ * Invariants & Business Rules:
+ * 1. Default Deny: if policy.denyAll or !policy.hasAnyAccess -> false.
+ * 2. If policy.allowAll:
+ *    - If task has departmentId and it is in policy.denyDepartmentIds -> false (DENY overrides ALLOW).
+ *    - Otherwise -> true.
+ * 3. If !policy.allowAll (scoped user):
+ *    - Tasks without department (departmentId === null) are strictly NOT visible to scoped users.
+ *    - If task.departmentId is in policy.denyDepartmentIds -> false (DENY overrides ALLOW).
+ *    - If task.departmentId is in policy.allowDepartmentIds -> true.
+ *    - Otherwise -> false (Default Deny).
+ */
+export function canAccessExecutionTask(
+  policy: ResolvedProductionAccessPolicy,
+  task: { departmentId: string | null }
+): boolean {
+  if (policy.denyAll || !policy.hasAnyAccess) {
+    return false;
+  }
+
   if (policy.allowAll) {
+    if (task.departmentId && policy.denyDepartmentIds.includes(task.departmentId)) {
+      return false;
+    }
     return true;
   }
 
-  if (policy.allowDepartmentIds.length > 0) {
-    return true;
+  // Scoped user: tasks with no department are hidden
+  if (!task.departmentId) {
+    return false;
   }
 
-  return false;
+  // DENY overrides ALLOW
+  if (policy.denyDepartmentIds.includes(task.departmentId)) {
+    return false;
+  }
+
+  // ALLOW check
+  return policy.allowDepartmentIds.includes(task.departmentId);
+}
+
+/**
+ * Translates a ResolvedProductionAccessPolicy into Unit QueryBuilder WHERE conditions.
+ * Ensures row-level authorization is enforced before pagination, count, and sorting.
+ *
+ * Invariants & Business Rules:
+ * 1. Default Deny: if policy.denyAll or !policy.hasAnyAccess -> 1 = 0.
+ * 2. If policy.allowAll:
+ *    - Unassigned units (current_yard_id IS NULL) are included.
+ *    - Assigned units are included EXCEPT if denied by denyDepartmentIds or denyYardIds.
+ * 3. If !policy.allowAll (scoped user):
+ *    - Unassigned units (current_yard_id IS NULL) are STRICTLY EXCLUDED.
+ *    - Assigned units MUST have an explicit ALLOW (department or yard).
+ *    - DENY overrides ALLOW (denyDepartmentIds / denyYardIds).
+ */
+export function applyUnitAccessScope<T extends ObjectLiteral>(
+  qb: SelectQueryBuilder<T>,
+  policy: ResolvedProductionAccessPolicy,
+  unitAlias = 'unit',
+  yardAlias = 'currentYard'
+): void {
+  if (policy.denyAll || !policy.hasAnyAccess) {
+    qb.andWhere('1 = 0');
+    return;
+  }
+
+  if (policy.allowAll) {
+    const hasDenyDepts = policy.denyDepartmentIds.length > 0;
+    const hasDenyYards = policy.denyYardIds.length > 0;
+
+    if (hasDenyDepts || hasDenyYards) {
+      qb.andWhere(
+        new Brackets((subQb) => {
+          subQb.where(`${unitAlias}.current_yard_id IS NULL`);
+
+          if (hasDenyDepts && hasDenyYards) {
+            subQb.orWhere(
+              `(${yardAlias}.department_id NOT IN (:...authDenyUnitDeptIds) AND ${unitAlias}.current_yard_id NOT IN (:...authDenyUnitYardIds))`,
+              {
+                authDenyUnitDeptIds: policy.denyDepartmentIds,
+                authDenyUnitYardIds: policy.denyYardIds,
+              }
+            );
+          } else if (hasDenyDepts) {
+            subQb.orWhere(`${yardAlias}.department_id NOT IN (:...authDenyUnitDeptIds)`, {
+              authDenyUnitDeptIds: policy.denyDepartmentIds,
+            });
+          } else {
+            subQb.orWhere(`${unitAlias}.current_yard_id NOT IN (:...authDenyUnitYardIds)`, {
+              authDenyUnitYardIds: policy.denyYardIds,
+            });
+          }
+        })
+      );
+    }
+    return;
+  }
+
+  // Scoped Users (!policy.allowAll):
+  // 1. Unassigned units are strictly excluded (current_yard_id IS NOT NULL)
+  qb.andWhere(`${unitAlias}.current_yard_id IS NOT NULL`);
+
+  // 2. Must match explicit ALLOW
+  const hasAllowDepts = policy.allowDepartmentIds.length > 0;
+  const hasAllowYards = policy.allowYardIds.length > 0;
+
+  if (!hasAllowDepts && !hasAllowYards) {
+    qb.andWhere('1 = 0');
+    return;
+  }
+
+  qb.andWhere(
+    new Brackets((subQb) => {
+      if (hasAllowDepts && hasAllowYards) {
+        subQb
+          .where(`${yardAlias}.department_id IN (:...authAllowUnitDeptIds)`, {
+            authAllowUnitDeptIds: policy.allowDepartmentIds,
+          })
+          .orWhere(`${unitAlias}.current_yard_id IN (:...authAllowUnitYardIds)`, {
+            authAllowUnitYardIds: policy.allowYardIds,
+          });
+      } else if (hasAllowDepts) {
+        subQb.where(`${yardAlias}.department_id IN (:...authAllowUnitDeptIds)`, {
+          authAllowUnitDeptIds: policy.allowDepartmentIds,
+        });
+      } else {
+        subQb.where(`${unitAlias}.current_yard_id IN (:...authAllowUnitYardIds)`, {
+          authAllowUnitYardIds: policy.allowYardIds,
+        });
+      }
+    })
+  );
+
+  // 3. DENY overrides ALLOW
+  const hasDenyDepts = policy.denyDepartmentIds.length > 0;
+  const hasDenyYards = policy.denyYardIds.length > 0;
+
+  if (hasDenyDepts || hasDenyYards) {
+    if (hasDenyDepts) {
+      qb.andWhere(`${yardAlias}.department_id NOT IN (:...authDenyUnitDeptIds)`, {
+        authDenyUnitDeptIds: policy.denyDepartmentIds,
+      });
+    }
+    if (hasDenyYards) {
+      qb.andWhere(`${unitAlias}.current_yard_id NOT IN (:...authDenyUnitYardIds)`, {
+        authDenyUnitYardIds: policy.denyYardIds,
+      });
+    }
+  }
 }
 
 /**

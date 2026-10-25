@@ -5,6 +5,8 @@ import {
   ProductionExecutionPlanEntity,
   ExecutionPlanPatternSummaryItem,
   ExecutionPlanSpecificationSnapshot,
+  ExecutionPlanPatternOptionSnapshot,
+  ExecutionPlanAlternativeOptionTaskSnapshot,
 } from './production-execution-plan.entity.js';
 import {
   ProductionExecutionTaskEntity,
@@ -51,6 +53,7 @@ import {
   ProductionResponsibilityResolver,
 } from '../authorization/production-responsibility.resolver.js';
 import { ResolvedProductionAccessPolicy } from '../authorization/production-access-policy.types.js';
+import { canAccessExecutionTask } from '../authorization/production-access-query.helper.js';
 import { SystemPermission } from '../../system/permission/constants/system-permission.enum.js';
 
 export class ProductionExecutionPlanService {
@@ -136,16 +139,31 @@ export class ProductionExecutionPlanService {
     const selectedOptionIds = selections.map((s) => s.selectedOptionId);
     const selectedPatternIds = selections.map((s) => s.templatePatternId);
 
-    // 4. Batch load patterns and options for snapshot summary
-    const patterns = selectedPatternIds.length > 0
-      ? await patternRepo.find({ where: { id: In(selectedPatternIds) }, withDeleted: true })
+    // 4. Load workflow items for template in strict sortOrder
+    const workflowItems = await workflowItemRepo.find({
+      where: { templateId: template.id, deletedAt: IsNull() },
+      order: { sortOrder: 'ASC' },
+    });
+
+    const workflowPatternIds = workflowItems
+      .filter((w) => w.itemType === 'PATTERN' && w.patternId)
+      .map((w) => w.patternId as string);
+
+    const allPatternIds = Array.from(new Set([...selectedPatternIds, ...workflowPatternIds]));
+
+    // Batch load patterns and options for snapshot summary and alternative options
+    const patterns = allPatternIds.length > 0
+      ? await patternRepo.find({ where: { id: In(allPatternIds) }, withDeleted: true })
       : [];
     const patternMap = new Map(patterns.map((p) => [p.id, p]));
 
-    const options = selectedOptionIds.length > 0
-      ? await optionRepo.find({ where: { id: In(selectedOptionIds) }, withDeleted: true })
+    const allOptions = allPatternIds.length > 0
+      ? await optionRepo.find({
+          where: { patternId: In(allPatternIds), deletedAt: IsNull() },
+          order: { sortOrder: 'ASC', createdAt: 'ASC' },
+        })
       : [];
-    const optionMap = new Map(options.map((o) => [o.id, o]));
+    const optionMap = new Map(allOptions.map((o) => [o.id, o]));
 
     const patternSummary: ExecutionPlanPatternSummaryItem[] = selections.map((sel) => {
       const p = patternMap.get(sel.templatePatternId);
@@ -157,6 +175,84 @@ export class ProductionExecutionPlanService {
         optionName: o ? o.name : 'خيار غير معروف',
       };
     });
+
+    // Build available pattern options snapshot (including non-selected alternative options and tasks)
+    let availablePatternOptionsSnapshot: ExecutionPlanPatternOptionSnapshot[] | null = null;
+
+    if (allOptions.length > 0) {
+      const allOptionIds = allOptions.map((o) => o.id);
+      const allOptionTasks = await optionTaskRepo.find({
+        where: { optionId: In(allOptionIds), deletedAt: IsNull() },
+        order: { sortOrder: 'ASC', createdAt: 'ASC' },
+        relations: { department: true },
+      });
+
+      const allOptionTaskIds = allOptionTasks.map((t) => t.id);
+
+      const [allOptMaterials, allOptAttachments] = await Promise.all([
+        allOptionTaskIds.length > 0
+          ? optionTaskMatRepo.find({ where: { taskId: In(allOptionTaskIds) } })
+          : Promise.resolve([]),
+        allOptionTaskIds.length > 0
+          ? optionTaskAttRepo.find({
+              where: { taskId: In(allOptionTaskIds), deletedAt: IsNull() },
+              order: { sortOrder: 'ASC', createdAt: 'ASC' },
+            })
+          : Promise.resolve([]),
+      ]);
+
+      const optMatMap = new Map<string, ExecutionTaskPlannedMaterialSnapshot[]>();
+      for (const m of allOptMaterials) {
+        const list = optMatMap.get(m.taskId) || [];
+        list.push({
+          productId: m.productId,
+          productUnitId: m.productUnitId,
+          plannedQuantity: String(m.plannedQuantity),
+        });
+        optMatMap.set(m.taskId, list);
+      }
+
+      const optAttMap = new Map<string, ExecutionTaskAttachmentSnapshot[]>();
+      for (const a of allOptAttachments) {
+        const list = optAttMap.get(a.taskId) || [];
+        list.push({
+          originalFileName: a.originalFileName,
+          storageKey: a.storageKey,
+          mimeType: a.mimeType,
+          sizeBytes: String(a.sizeBytes),
+          description: a.description,
+          sortOrder: a.sortOrder,
+        });
+        optAttMap.set(a.taskId, list);
+      }
+
+      const tasksByOptId = new Map<string, ExecutionPlanAlternativeOptionTaskSnapshot[]>();
+      for (const ot of allOptionTasks) {
+        const list = tasksByOptId.get(ot.optionId) || [];
+        list.push({
+          taskId: ot.id,
+          name: ot.name,
+          description: ot.description,
+          departmentId: ot.departmentId,
+          departmentName: ot.department?.name || null,
+          sortOrder: ot.sortOrder,
+          estimatedDurationMinutes: ot.estimatedDurationMinutes,
+          estimatedCost: ot.estimatedCost,
+          plannedMaterials: optMatMap.get(ot.id) || null,
+          attachments: optAttMap.get(ot.id) || null,
+        });
+        tasksByOptId.set(ot.optionId, list);
+      }
+
+      availablePatternOptionsSnapshot = allOptions.map((opt) => ({
+        patternId: opt.patternId,
+        patternName: patternMap.get(opt.patternId)?.name || '',
+        optionId: opt.id,
+        optionName: opt.name,
+        isActiveSelection: selectedOptionIds.includes(opt.id),
+        tasks: tasksByOptId.get(opt.id) || [],
+      }));
+    }
 
     // 5. Snapshot technical specifications of the template
     const specifications = await specRepo.find({
@@ -185,19 +281,14 @@ export class ProductionExecutionPlanService {
       configurationHash: line.activeConfigurationHash || '',
       patternSummary: patternSummary.length > 0 ? patternSummary : null,
       specifications: specificationsSnapshot.length > 0 ? specificationsSnapshot : null,
+      availablePatternOptions: availablePatternOptionsSnapshot,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
     await planRepo.save(plan);
 
-    // 7. Load workflow items for template in strict sortOrder
-    const workflowItems = await workflowItemRepo.find({
-      where: { templateId: template.id, deletedAt: IsNull() },
-      order: { sortOrder: 'ASC' },
-    });
-
-    // Determine referenced stage IDs and pattern option IDs
+    // 7. Validate workflow items for template in strict sortOrder
     const neededStageIds: string[] = [];
     const neededOptionIds: string[] = [];
 
@@ -555,10 +646,8 @@ export class ProductionExecutionPlanService {
 
     return plans.map((p) => {
       let planTasks = tasksByPlanMap.get(p.id) || [];
-      if (policy && policy.denyDepartmentIds.length > 0) {
-        planTasks = planTasks.filter(
-          (t) => !t.departmentId || !policy!.denyDepartmentIds.includes(t.departmentId)
-        );
+      if (policy) {
+        planTasks = planTasks.filter((t) => canAccessExecutionTask(policy, t));
       }
       return this.toPlanDto(p, planTasks);
     });
@@ -636,10 +725,8 @@ export class ProductionExecutionPlanService {
     });
 
     let visibleTasks = tasks;
-    if (policy && policy.denyDepartmentIds.length > 0) {
-      visibleTasks = tasks.filter(
-        (t) => !t.departmentId || !policy!.denyDepartmentIds.includes(t.departmentId)
-      );
+    if (policy) {
+      visibleTasks = tasks.filter((t) => canAccessExecutionTask(policy, t));
     }
 
     return this.toPlanDto(plan, visibleTasks);
@@ -665,6 +752,7 @@ export class ProductionExecutionPlanService {
       configurationHash: plan.configurationHash,
       patternSummary: plan.patternSummary,
       specifications: plan.specifications,
+      availablePatternOptions: plan.availablePatternOptions,
       tasksCount: tasks.length,
       unitsCount: plan.lineQuantity,
       tasks: tasks.map(this.toTaskDto),

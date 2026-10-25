@@ -19,7 +19,7 @@ import { ProductionOrderGuardService } from '../src/modules/production/order/pro
 import { ProductionExecutionPlanService } from '../src/modules/production/execution-plan/production-execution-plan.service.js';
 import { ProductionUnitService } from '../src/modules/production/unit/production-unit.service.js';
 import { ProductionAccessPolicyService } from '../src/modules/production/authorization/production-access-policy.service.js';
-import { QueryFailedError } from 'typeorm';
+import { QueryFailedError, In } from 'typeorm';
 
 describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurrency & Security', () => {
   let testUser1Id: string;
@@ -203,8 +203,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
       await wfRepo.delete({ templateId: testTemplateId });
       await stageRepo.delete({ templateId: testTemplateId });
       await tmplRepo.delete({ id: testTemplateId });
-      await yardRepo.delete({ id: testYardAId });
-      await yardRepo.delete({ id: testYardBId });
+      await yardRepo.delete({ departmentId: In([testDeptAId, testDeptBId]) });
       await deptRepo.delete({ id: testDeptAId });
       await deptRepo.delete({ id: testDeptBId });
     } catch (e: any) {
@@ -642,6 +641,102 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
       }
     );
 
+    // 4b. Level 2 Access: Department Head Dept A requesting unassigned room (Unit 3) -> 403 Forbidden!
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit3Id, headDeptAUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // 4c. Level 2 Access: Department Head Dept A requesting room in Dept B (Unit 2) -> 403 Forbidden!
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit2Id, headDeptAUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // 4d. Level 2 Access: User with ALLOW Dept A but explicit DENY Yard A -> 403 Forbidden!
+    const userWithAllowDeptADenyYardA = {
+      id: 'user-allow-depta-deny-yarda',
+      accessRules: [
+        {
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'ALLOW',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            departmentIds: [testDeptAId],
+          },
+        },
+        {
+          scopeType: 'PRODUCTION_YARD',
+          effect: 'DENY',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            yardIds: [testYardAId],
+          },
+        },
+      ],
+    } as any;
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit1Id, userWithAllowDeptADenyYardA);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // 4e. Level 2 Access: Room assigned to an archived yard fails closed -> 403 Forbidden!
+    const yardRepo = AppDataSource.getRepository(ProductionYardEntity);
+    const archivedYardId = randomUUID();
+    await yardRepo.save(
+      yardRepo.create({
+        id: archivedYardId,
+        departmentId: testDeptAId,
+        name: 'ساحة مؤرشفة تكامل',
+        code: `YARD-ARCH-${Date.now().toString().slice(-4)}`,
+        capacity: 10,
+        isActive: true,
+      })
+    );
+    await yardRepo.softDelete({ id: archivedYardId });
+
+    const archivedYardUnitId = randomUUID();
+    await unitRepo.save(
+      unitRepo.create({
+        id: archivedYardUnitId,
+        orderId,
+        orderLineId: lineId,
+        planId,
+        unitSequence: 4,
+        unitNumber: 'UNIT-SEC-ARCHIVED-YARD',
+        currentYardId: archivedYardId,
+        status: ProductionUnitStatus.CREATED,
+      })
+    );
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, archivedYardUnitId, engineerYardAUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
     // 5. Level 3 Scoping: Department Head Dept A sees ONLY Dept A events on Unit 1 (administrative UNIT_CREATED hidden)
     const headEvents = await unitService.getUnitEvents(orderId, unit1Id, headDeptAUser);
     assert.equal(headEvents.items.length, 1);
@@ -693,6 +788,11 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
     assert.equal(engUnits.items.length, 1);
     assert.equal(engUnits.items[0].id, unit1Id);
 
+    // 10b. Summary counts security: Engineer 1 summary sees only 1 unit in their yard, 0 unassigned, 0 in Yard B
+    const engSummary = await unitService.getUnitsSummaryByOrderId(orderId, engineerYardAUser);
+    assert.equal(engSummary.totalUnits, 1);
+    assert.equal(engSummary.inProgressUnits, 1);
+
     // 11. Execution plan reading task filtering: User with DENY Dept B sees Plan with Task 1 only
     const userWithDenyDeptB = {
       id: 'user-deny-dept-b',
@@ -714,5 +814,12 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
     assert.equal(filteredPlans[0].tasks.length, 1);
     assert.equal(filteredPlans[0].tasks[0].id, task1Id);
     assert.equal(filteredPlans[0].tasks[0].departmentId, testDeptAId);
+
+    // 11b. Execution plan task scoping for Scoped Department Head: sees only Dept A tasks
+    const headDeptAPlans = await planService.getPlansByOrderId(orderId, headDeptAUser);
+    assert.equal(headDeptAPlans.length, 1);
+    assert.equal(headDeptAPlans[0].tasksCount, 1);
+    assert.equal(headDeptAPlans[0].tasks.length, 1);
+    assert.equal(headDeptAPlans[0].tasks[0].departmentId, testDeptAId);
   });
 });

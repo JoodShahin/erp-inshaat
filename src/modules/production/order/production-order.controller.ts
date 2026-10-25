@@ -20,6 +20,9 @@ import { UpdateProductionOrderLineDto } from '../order-line/dto/update-productio
 import { ReorderProductionOrderLinesDto } from '../order-line/dto/reorder-production-order-lines.dto.js';
 import { CommitProductionOrderDraftLinesDto } from '../order-line/dto/commit-production-order-draft-lines.dto.js';
 import { UpdatePatternSelectionDto } from '../order-line-pattern-selection/dto/update-pattern-selection.dto.js';
+import { ListProductionUnitsQueryDto } from '../unit/dto/list-production-units-query.dto.js';
+import { ListProductionUnitEventsQueryDto } from '../unit/dto/list-production-unit-events-query.dto.js';
+import { AuthPrincipal } from '../../system/auth/auth.types.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 
 export class ProductionOrderController {
@@ -304,7 +307,7 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId } = req.params;
-      const currentUser = (req as any).user;
+      const currentUser = req.user as AuthPrincipal | undefined;
       const plans = await this.executionPlanService.getPlansByOrderId(
         orderId as string,
         currentUser
@@ -322,7 +325,7 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId, planId } = req.params;
-      const currentUser = (req as any).user;
+      const currentUser = req.user as AuthPrincipal | undefined;
       const plan = await this.executionPlanService.getPlanById(
         orderId as string,
         planId as string,
@@ -347,8 +350,8 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId } = req.params;
-      const currentUser = (req as any).user;
-      const query = req.query as any;
+      const currentUser = req.user as AuthPrincipal | undefined;
+      const query = (req.validatedQuery ?? req.query) as unknown as ListProductionUnitsQueryDto;
       const units = await this.unitService.getUnitsByOrderId(
         orderId as string,
         currentUser,
@@ -367,8 +370,8 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId, unitId } = req.params;
-      const currentUser = (req as any).user;
-      const query = req.query as any;
+      const currentUser = req.user as AuthPrincipal | undefined;
+      const query = (req.validatedQuery ?? req.query) as unknown as ListProductionUnitEventsQueryDto;
       const events = await this.unitService.getUnitEvents(
         orderId as string,
         unitId as string,

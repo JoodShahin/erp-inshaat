@@ -31,6 +31,28 @@ export interface ExecutionPlanSpecificationSnapshot {
   sortOrder: number;
 }
 
+export interface ExecutionPlanAlternativeOptionTaskSnapshot {
+  taskId: string;
+  name: string;
+  description: string | null;
+  departmentId: string;
+  departmentName?: string | null;
+  sortOrder: number;
+  estimatedDurationMinutes: number | null;
+  estimatedCost: string | null;
+  plannedMaterials: any[] | null;
+  attachments: any[] | null;
+}
+
+export interface ExecutionPlanPatternOptionSnapshot {
+  patternId: string;
+  patternName: string;
+  optionId: string;
+  optionName: string;
+  isActiveSelection: boolean;
+  tasks: ExecutionPlanAlternativeOptionTaskSnapshot[];
+}
+
 @Entity('production_execution_plan')
 export class ProductionExecutionPlanEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -71,6 +93,9 @@ export class ProductionExecutionPlanEntity {
 
   @Column({ name: 'specifications', type: 'json', nullable: true, default: null })
   specifications!: ExecutionPlanSpecificationSnapshot[] | null;
+
+  @Column({ name: 'available_pattern_options', type: 'json', nullable: true, default: null })
+  availablePatternOptions!: ExecutionPlanPatternOptionSnapshot[] | null;
 
   @ManyToOne(() => ProductionOrderEntity, {
     eager: false,
