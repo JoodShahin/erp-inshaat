@@ -9,6 +9,7 @@ import { ProductionOrderSequenceEntity } from '../src/modules/production/order/p
 import { ProductionOrderLineEntity } from '../src/modules/production/order-line/production-order-line.entity.js';
 import { ProductionOrderLinePatternSelectionEntity } from '../src/modules/production/order-line-pattern-selection/production-order-line-pattern-selection.entity.js';
 import { ProductionTemplateEntity } from '../src/modules/production/template/production-template.entity.js';
+import { ProductionTemplateSpecificationEntity } from '../src/modules/production/template-specification/production-template-specification.entity.js';
 import { ProductionTemplateStageEntity } from '../src/modules/production/template-stage/production-template-stage.entity.js';
 import { ProductionTemplateStageMaterialEntity } from '../src/modules/production/template-stage-material/production-template-stage-material.entity.js';
 import { ProductionTemplateStageAttachmentEntity } from '../src/modules/production/template-stage-attachment/production-template-stage-attachment.entity.js';
@@ -31,9 +32,13 @@ import { ProductionExecutionPlanService } from '../src/modules/production/execut
 import { ProductionUnitService } from '../src/modules/production/unit/production-unit.service.js';
 import { ProductionOrderService } from '../src/modules/production/order/production-order.service.js';
 import { ProductionOrderGuardService } from '../src/modules/production/order/production-order-guard.service.js';
+import { productionAccessPolicyService } from '../src/modules/production/authorization/production-access-policy.service.js';
+import { productionResponsibilityResolver } from '../src/modules/production/authorization/production-responsibility.resolver.js';
 import { BusinessRuleError } from '../src/common/errors/business-rule.error.js';
 import { NotFoundError } from '../src/common/errors/not-found.error.js';
+import { ForbiddenError } from '../src/common/errors/forbidden.error.js';
 import { CreateProductionExecutionPlansAndUnits1710000000017 } from '../src/database/migrations/1710000000017-CreateProductionExecutionPlansAndUnits.js';
+import { AddSpecificationsToExecutionPlan1710000000018 } from '../src/database/migrations/1710000000018-AddSpecificationsToExecutionPlan.js';
 
 describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   function createTestContext() {
@@ -185,6 +190,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       tasks: [] as any[],
       units: [] as any[],
       events: [] as any[],
+      specifications: [] as any[],
       sequence: { id: 'PRODUCTION_ORDER', currentValue: 100 } as any,
     };
 
@@ -212,6 +218,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
             return store.plans.find((p) => {
               if (opts?.where?.orderLineId && p.orderLineId !== opts.where.orderLineId) return false;
               if (opts?.where?.id && p.id !== opts.where.id) return false;
+              if (opts?.where?.orderId && p.orderId !== opts.where.orderId) return false;
               return true;
             }) || null;
           }
@@ -220,6 +227,14 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
           }
           if (entityClass === ProductionTemplateStageEntity) {
             return store.stages.find((s) => s.id === opts.where.id && !s.deletedAt) || null;
+          }
+          if (entityClass === ProductionUnitEntity) {
+            return store.units.find((u) => {
+              if (opts?.where?.id && u.id !== opts.where.id) return false;
+              if (opts?.where?.orderId && u.orderId !== opts.where.orderId) return false;
+              if (!opts?.withDeleted && u.deletedAt) return false;
+              return true;
+            }) || null;
           }
           return null;
         },
@@ -252,7 +267,19 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
             return store.options.filter((o) => (!opts?.withDeleted ? !o.deletedAt : true));
           }
           if (entityClass === ProductionTemplateWorkflowItemEntity) {
-            return store.workflowItems.filter((w) => (!opts?.withDeleted ? !w.deletedAt : true));
+            return store.workflowItems.filter((w) => {
+              if (opts?.where?.templateId) {
+                const list = opts.where.templateId._value || (Array.isArray(opts.where.templateId) ? opts.where.templateId : [opts.where.templateId]);
+                if (!list.includes(w.templateId)) return false;
+              }
+              return !opts?.withDeleted ? !w.deletedAt : true;
+            });
+          }
+          if (entityClass === ProductionTemplateSpecificationEntity) {
+            return (store.specifications || []).filter((s: any) => {
+              if (opts?.where?.templateId && s.templateId !== opts.where.templateId) return false;
+              return true;
+            });
           }
           if (entityClass === ProductionTemplateStageEntity) {
             return store.stages.filter((s) => (!opts?.withDeleted ? !s.deletedAt : true));
@@ -265,7 +292,10 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
           }
           if (entityClass === ProductionTemplatePatternOptionTaskEntity) {
             return store.optionTasks.filter((t) => {
-              if (opts?.where?.optionId && t.optionId !== opts.where.optionId) return false;
+              if (opts?.where?.optionId) {
+                const list = opts.where.optionId._value || (Array.isArray(opts.where.optionId) ? opts.where.optionId : [opts.where.optionId]);
+                if (!list.includes(t.optionId)) return false;
+              }
               return !opts?.withDeleted ? !t.deletedAt : true;
             });
           }
@@ -350,6 +380,86 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
             ...data,
           };
         },
+        createQueryBuilder: (alias: string) => {
+          const whereFilters: Array<(item: any) => boolean> = [];
+          let skipN = 0;
+          let takeN = 100;
+
+          const qb: any = {
+            leftJoinAndSelect: () => qb,
+            where: (clause: any, params?: any) => {
+              if (typeof clause === 'string') {
+                if (clause.includes('order_id = :orderId')) {
+                  whereFilters.push((item) => item.orderId === params.orderId);
+                }
+                if (clause.includes('unit_id = :unitId')) {
+                  whereFilters.push((item) => item.unitId === params.unitId);
+                }
+              }
+              return qb;
+            },
+            andWhere: (clause: any, params?: any) => {
+              if (typeof clause === 'string') {
+                if (clause.includes('deleted_at IS NULL')) {
+                  whereFilters.push((item) => !item.deletedAt);
+                }
+                if (clause.includes('status = :status')) {
+                  whereFilters.push((item) => item.status === params.status);
+                }
+                if (clause.includes('order_line_id = :orderLineId')) {
+                  whereFilters.push((item) => item.orderLineId === params.orderLineId);
+                }
+                if (clause === '1 = 0') {
+                  whereFilters.push(() => false);
+                }
+                if (clause.includes('department_id IS NULL') && clause.includes('authAllowEventDeptIds')) {
+                  whereFilters.push((item) => !item.departmentId || params.authAllowEventDeptIds?.includes(item.departmentId));
+                }
+                if (clause.includes('authDenyEventDeptIds')) {
+                  whereFilters.push((item) => !item.departmentId || !params.authDenyEventDeptIds?.includes(item.departmentId));
+                }
+              } else if (clause && typeof clause === 'object' && clause['whereFactory']) {
+                const subQb: any = {
+                  where: (subClause: string, subParams?: any) => {
+                    if (subClause.includes('department_id IS NULL') && subParams?.authAllowEventDeptIds) {
+                      whereFilters.push((item) => !item.departmentId || subParams.authAllowEventDeptIds.includes(item.departmentId));
+                    }
+                    return subQb;
+                  },
+                  orWhere: (subClause: string, subParams?: any) => {
+                    if (subParams?.authAllowEventDeptIds) {
+                      whereFilters.push((item) => !item.departmentId || subParams.authAllowEventDeptIds.includes(item.departmentId));
+                    }
+                    if (subParams?.authDenyEventDeptIds) {
+                      whereFilters.push((item) => !item.departmentId || !subParams.authDenyEventDeptIds.includes(item.departmentId));
+                    }
+                    return subQb;
+                  },
+                };
+                clause['whereFactory'](subQb);
+              }
+              return qb;
+            },
+            orderBy: () => qb,
+            addOrderBy: () => qb,
+            skip: (n: number) => {
+              skipN = n;
+              return qb;
+            },
+            take: (n: number) => {
+              takeN = n;
+              return qb;
+            },
+            getManyAndCount: async () => {
+              const all = entityClass === ProductionUnitEntity ? store.units : store.events;
+              const filtered = all.filter((item: any) => whereFilters.every((fn) => fn(item)));
+              const total = filtered.length;
+              const sliced = filtered.slice(skipN, skipN + takeN);
+              return [sliced, total];
+            },
+          };
+          return qb;
+        },
         save: async (entityOrItems: any) => mockManager.save(entityClass, entityOrItems),
       };
     };
@@ -394,7 +504,25 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
 
     const guardService = new ProductionOrderGuardService(mockDataSource);
     const planService = new ProductionExecutionPlanService(mockDataSource);
-    const unitService = new ProductionUnitService(mockDataSource);
+    const mockAuthzService: any = {
+      getApplicableAccessRules: async (principal: any) => {
+        return principal?.accessRules || [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }];
+      },
+    };
+    const mockRespResolver: any = {
+      resolve: async () => ({
+        headDepartmentId: null,
+        engineerDepartmentId: null,
+        engineerYardIds: [],
+        isConsistent: true,
+      }),
+    };
+    const unitService = new ProductionUnitService(
+      mockDataSource,
+      mockAuthzService,
+      productionAccessPolicyService,
+      mockRespResolver
+    );
     const orderService = new ProductionOrderService(mockDataSource, guardService, planService, unitService);
 
     return {
@@ -792,6 +920,19 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     const { unitService, store } = createTestContext();
 
     const now = new Date();
+    store.units.push({
+      id: 'unit-1',
+      orderId: 'order-100',
+      orderLineId: 'line-1',
+      planId: 'plan-1',
+      unitSequence: 1,
+      unitNumber: 'PO-000100-L1-U001',
+      status: ProductionUnitStatus.CREATED,
+      isCancelled: false,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
     store.events.push({
       id: 'ev-1',
       unitId: 'unit-1',
@@ -875,5 +1016,388 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     assert.equal(line2Units[0].unitSequence, 1);
     assert.equal(line2Units[1].unitSequence, 2);
     assert.equal(line2Units[2].unitSequence, 3);
+  });
+
+  // ==========================================
+  // SCENARIO 16: IDOR Protection on Plans & Units
+  // ==========================================
+  it('16. IDOR Protection: Accessing plan or unit belonging to different order fails closed with 404', async () => {
+    const { orderService, planService, unitService, store } = createTestContext();
+
+    // Setup Order 1
+    await orderService.addLine('order-100', {
+      templateId: 'tmpl-room-a',
+      quantity: 2,
+    });
+    await orderService.approveOrder('order-100', 'user-eng-10');
+
+    // Setup Order 2
+    store.orders.push({
+      id: 'order-200',
+      orderNumber: 'PO-000200',
+      status: ProductionOrderStatus.DRAFT,
+      priority: ProductionOrderPriority.NORMAL,
+      description: 'Order 2',
+      deletedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await orderService.addLine('order-200', {
+      templateId: 'tmpl-room-a',
+      quantity: 1,
+    });
+    await orderService.approveOrder('order-200', 'user-eng-10');
+
+    const order1Plan = store.plans.find((p) => p.orderId === 'order-100')!;
+    const order2Plan = store.plans.find((p) => p.orderId === 'order-200')!;
+    const order1Unit = store.units.find((u) => u.orderId === 'order-100')!;
+    const order2Unit = store.units.find((u) => u.orderId === 'order-200')!;
+
+    // IDOR Check 1: Request Order 2 plan with Order 1 ID in path -> returns null
+    const crossPlan = await planService.getPlanById('order-100', order2Plan.id);
+    assert.equal(crossPlan, null, 'Cross-order execution plan lookup must return null');
+
+    // IDOR Check 2: Request Order 1 plan with Order 1 ID -> succeeds
+    const legitPlan = await planService.getPlanById('order-100', order1Plan.id);
+    assert.ok(legitPlan, 'Legitimate plan lookup must succeed');
+    assert.equal(legitPlan.id, order1Plan.id);
+
+    // IDOR Check 3: Request Order 2 unit events with Order 1 ID in path -> throws NotFoundError
+    const user = { id: 'u1', roleId: 'r1', username: 'admin' } as any;
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents('order-100', order2Unit.id, user);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'NotFoundError');
+        assert.equal(err.code, 'PRODUCTION_UNIT_NOT_FOUND');
+        return true;
+      }
+    );
+  });
+
+  // ==========================================
+  // SCENARIO 17: Soft-Deleted Orders Protection
+  // ==========================================
+  it('17. Soft-deleted orders cannot have plans or units queried (404 NotFoundError)', async () => {
+    const { orderService, planService, unitService, store } = createTestContext();
+
+    await orderService.addLine('order-100', {
+      templateId: 'tmpl-room-a',
+      quantity: 2,
+    });
+    await orderService.approveOrder('order-100', 'user-eng-10');
+
+    const plan = store.plans[0];
+    const unit = store.units[0];
+
+    // Soft-delete order
+    store.orders[0].deletedAt = new Date();
+
+    // getPlansByOrderId fails closed
+    await assert.rejects(
+      async () => {
+        await planService.getPlansByOrderId('order-100');
+      },
+      (err: any) => {
+        assert.equal(err.name, 'NotFoundError');
+        assert.equal(err.code, 'PRODUCTION_ORDER_NOT_FOUND');
+        return true;
+      }
+    );
+
+    // getPlanById fails closed
+    await assert.rejects(
+      async () => {
+        await planService.getPlanById('order-100', plan.id);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'NotFoundError');
+        assert.equal(err.code, 'PRODUCTION_ORDER_NOT_FOUND');
+        return true;
+      }
+    );
+
+    // getUnitsByOrderId fails closed
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitsByOrderId('order-100');
+      },
+      (err: any) => {
+        assert.equal(err.name, 'NotFoundError');
+        assert.equal(err.code, 'PRODUCTION_ORDER_NOT_FOUND');
+        return true;
+      }
+    );
+
+    // getUnitEvents fails closed
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents('order-100', unit.id, { id: 'u1' } as any);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'NotFoundError');
+        assert.equal(err.code, 'PRODUCTION_ORDER_NOT_FOUND');
+        return true;
+      }
+    );
+  });
+
+  // ==========================================
+  // SCENARIO 18: Specifications Snapshotting
+  // ==========================================
+  it('18. Snapshots template technical specifications and remains immutable after live template changes', async () => {
+    const { orderService, planService, store } = createTestContext();
+
+    // Add technical specifications to template
+    store.specifications.push(
+      { id: 'spec-1', templateId: 'tmpl-room-a', name: 'سماكة الجدار', value: '20', unit: 'سم', sortOrder: 1 },
+      { id: 'spec-2', templateId: 'tmpl-room-a', name: 'مقاومة الخرسانة', value: '35', unit: 'MPa', sortOrder: 2 }
+    );
+
+    await orderService.addLine('order-100', {
+      templateId: 'tmpl-room-a',
+      quantity: 1,
+    });
+    await orderService.approveOrder('order-100', 'user-eng-10');
+
+    const plan = store.plans[0];
+    assert.ok(plan.specifications);
+    assert.equal(plan.specifications.length, 2);
+    assert.equal(plan.specifications[0].name, 'سماكة الجدار');
+    assert.equal(plan.specifications[0].value, '20');
+    assert.equal(plan.specifications[0].unit, 'سم');
+    assert.equal(plan.specifications[1].name, 'مقاومة الخرسانة');
+    assert.equal(plan.specifications[1].value, '35');
+
+    // Mutate live specifications
+    store.specifications.length = 0; // wiped
+
+    // Plan maintains snapshot
+    const fetchedPlan = await planService.getPlanById('order-100', plan.id);
+    assert.ok(fetchedPlan?.specifications);
+    assert.equal(fetchedPlan.specifications.length, 2);
+    assert.equal(fetchedPlan.specifications[0].name, 'سماكة الجدار');
+  });
+
+  // ==========================================
+  // SCENARIO 19: Fail-Closed Workflow Data Consistency
+  // ==========================================
+  it('19. Fails closed with BusinessRuleError when workflow stage or pattern is corrupt/missing', async () => {
+    const { orderService, store } = createTestContext();
+
+    // Corrupt workflow: reference nonexistent stage
+    store.workflowItems.push({
+      id: 'wf-ghost-stage',
+      templateId: 'tmpl-room-a',
+      itemType: 'STAGE',
+      stageId: 'stage-nonexistent',
+      patternId: null,
+      sortOrder: 4,
+      deletedAt: null,
+    });
+
+    await orderService.addLine('order-100', {
+      templateId: 'tmpl-room-a',
+      quantity: 1,
+    });
+
+    await assert.rejects(
+      async () => {
+        await orderService.approveOrder('order-100', 'user-eng-10');
+      },
+      (err: any) => {
+        assert.equal(err.name, 'BusinessRuleError');
+        assert.equal(err.code, 'PRODUCTION_TEMPLATE_WORKFLOW_INCONSISTENT');
+        return true;
+      }
+    );
+  });
+
+  // ==========================================
+  // SCENARIO 20: Unit Events Authorization & Scoping
+  // ==========================================
+  it('20. Unit Events Authorization enforces row-level department scoping and Default Deny', async () => {
+    const { unitService, store } = createTestContext();
+
+    const now = new Date();
+    const castingDeptId = randomUUID();
+    const finishingDeptId = randomUUID();
+
+    store.units.push({
+      id: 'unit-scope-1',
+      orderId: 'order-100',
+      orderLineId: 'line-1',
+      planId: 'plan-1',
+      unitSequence: 1,
+      unitNumber: 'PO-000100-L1-U001',
+      status: ProductionUnitStatus.CREATED,
+      isCancelled: false,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Event 1: General (departmentId = null)
+    store.events.push({
+      id: 'ev-1',
+      unitId: 'unit-scope-1',
+      eventType: ProductionUnitEventType.UNIT_CREATED,
+      departmentId: null,
+      occurredAt: now,
+      createdAt: now,
+    });
+
+    // Event 2: Casting department
+    store.events.push({
+      id: 'ev-2',
+      unitId: 'unit-scope-1',
+      eventType: ProductionUnitEventType.TASK_STATUS_CHANGED,
+      departmentId: castingDeptId,
+      occurredAt: new Date(now.getTime() + 1000),
+      createdAt: new Date(now.getTime() + 1000),
+    });
+
+    // Event 3: Finishing department
+    store.events.push({
+      id: 'ev-3',
+      unitId: 'unit-scope-1',
+      eventType: ProductionUnitEventType.TASK_STATUS_CHANGED,
+      departmentId: finishingDeptId,
+      occurredAt: new Date(now.getTime() + 2000),
+      createdAt: new Date(now.getTime() + 2000),
+    });
+
+    // Case A: User with ALLOW ALL sees all 3 events
+    const adminUser = {
+      id: 'admin',
+      accessRules: [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }],
+    } as any;
+    const adminRes = await unitService.getUnitEvents('order-100', 'unit-scope-1', adminUser);
+    assert.equal(adminRes.items.length, 3);
+
+    // Case B: User scoped to castingDeptId sees general event + casting event (2 events)
+    const castingUser = {
+      id: 'eng-casting',
+      accessRules: [
+        {
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'ALLOW',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            departmentIds: [castingDeptId],
+          },
+        },
+      ],
+    } as any;
+    const castingRes = await unitService.getUnitEvents('order-100', 'unit-scope-1', castingUser);
+    assert.equal(castingRes.items.length, 2);
+    assert.ok(castingRes.items.every((e: any) => !e.departmentId || e.departmentId === castingDeptId));
+
+    // Case C: User with DENY castingDeptId sees general event + finishing event
+    const denyCastingUser = {
+      id: 'eng-deny-casting',
+      accessRules: [
+        { scopeType: 'ALL', effect: 'ALLOW', scope: null },
+        {
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'DENY',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            departmentIds: [castingDeptId],
+          },
+        },
+      ],
+    } as any;
+    const denyRes = await unitService.getUnitEvents('order-100', 'unit-scope-1', denyCastingUser);
+    assert.equal(denyRes.items.length, 2);
+    assert.ok(denyRes.items.every((e: any) => e.departmentId !== castingDeptId));
+
+    // Case D: User with no permissions (denyAll or no rules) gets 403 ForbiddenError
+    const noAccessUser = {
+      id: 'no-access',
+      accessRules: [],
+    } as any;
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents('order-100', 'unit-scope-1', noAccessUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+  });
+
+  // ==========================================
+  // SCENARIO 21: Database Pagination for Units and Events
+  // ==========================================
+  it('21. Pagination contract conforms to PROJECT_RULES.md (items, total, page, limit, totalPages)', async () => {
+    const { orderService, unitService, store } = createTestContext();
+
+    await orderService.addLine('order-100', {
+      templateId: 'tmpl-room-a',
+      quantity: 5,
+    });
+    await orderService.approveOrder('order-100', 'user-eng-10');
+
+    // Page 1, limit 2
+    const page1 = await unitService.getUnitsByOrderId('order-100', { page: 1, limit: 2 });
+    assert.equal(page1.items.length, 2);
+    assert.equal(page1.total, 5);
+    assert.equal(page1.page, 1);
+    assert.equal(page1.limit, 2);
+    assert.equal(page1.totalPages, 3);
+    assert.equal(page1.items[0].unitSequence, 1);
+    assert.equal(page1.items[1].unitSequence, 2);
+
+    // Page 2, limit 2
+    const page2 = await unitService.getUnitsByOrderId('order-100', { page: 2, limit: 2 });
+    assert.equal(page2.items.length, 2);
+    assert.equal(page2.items[0].unitSequence, 3);
+    assert.equal(page2.items[1].unitSequence, 4);
+
+    // Page 3, limit 2
+    const page3 = await unitService.getUnitsByOrderId('order-100', { page: 3, limit: 2 });
+    assert.equal(page3.items.length, 1);
+    assert.equal(page3.items[0].unitSequence, 5);
+  });
+
+  // ==========================================
+  // SCENARIO 22: Migration 18 Registration
+  // ==========================================
+  it('22. Migration AddSpecificationsToExecutionPlan1710000000018 is registered in databaseConfig and executes cleanly', async () => {
+    const migration = new AddSpecificationsToExecutionPlan1710000000018();
+    assert.equal(migration.name, 'AddSpecificationsToExecutionPlan1710000000018');
+
+    const isRegistered = databaseConfig.migrations?.some(
+      (m: any) => m === AddSpecificationsToExecutionPlan1710000000018 || m?.name === 'AddSpecificationsToExecutionPlan1710000000018'
+    );
+    assert.equal(isRegistered, true, 'Migration 18 must be registered in databaseConfig');
+
+    // Test up and down execution against mock runner
+    let addedColumn: any = null;
+    let droppedColumn: string | null = null;
+    const mockTable: any = {
+      findColumnByName: (name: string) => (addedColumn?.name === name ? addedColumn : null),
+    };
+    const mockQueryRunner: any = {
+      getTable: async () => mockTable,
+      addColumn: async (_table: string, col: any) => {
+        addedColumn = col;
+      },
+      dropColumn: async (_table: string, colName: string) => {
+        droppedColumn = colName;
+        addedColumn = null;
+      },
+    };
+
+    await migration.up(mockQueryRunner);
+    assert.ok(addedColumn);
+    assert.equal(addedColumn.name, 'specifications');
+
+    await migration.down(mockQueryRunner);
+    assert.equal(droppedColumn, 'specifications');
   });
 });

@@ -10,14 +10,43 @@ import {
   ProductionUnitDto,
   ProductionUnitEventDto,
   OrderUnitsSummaryDto,
+  PaginatedProductionUnitsResult,
+  PaginatedProductionUnitEventsResult,
 } from './production-unit.types.js';
+import { ListProductionUnitsQueryDto } from './dto/list-production-units-query.dto.js';
+import { ListProductionUnitEventsQueryDto } from './dto/list-production-unit-events-query.dto.js';
+import { AuthPrincipal } from '../../system/auth/auth.types.js';
+import {
+  authorizationService,
+  AuthorizationService,
+} from '../../system/authorization/authorization.service.js';
+import {
+  productionAccessPolicyService,
+  ProductionAccessPolicyService,
+} from '../authorization/production-access-policy.service.js';
+import {
+  productionResponsibilityResolver,
+  ProductionResponsibilityResolver,
+} from '../authorization/production-responsibility.resolver.js';
+import { applyUnitEventAccessScope } from '../authorization/production-access-query.helper.js';
+import { ProductionResponsibility } from '../authorization/production-access-policy.types.js';
+import { SystemPermission } from '../../system/permission/constants/system-permission.enum.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
+import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { ForbiddenError } from '../../../common/errors/forbidden.error.js';
 
 export class ProductionUnitService {
+  private orderRepo: Repository<ProductionOrderEntity>;
   private unitRepo: Repository<ProductionUnitEntity>;
   private eventRepo: Repository<ProductionUnitEventEntity>;
 
-  constructor(private dataSource: DataSource = AppDataSource) {
+  constructor(
+    private dataSource: DataSource = AppDataSource,
+    private authzService: AuthorizationService = authorizationService,
+    private policyService: ProductionAccessPolicyService = productionAccessPolicyService,
+    private respResolver: ProductionResponsibilityResolver = productionResponsibilityResolver
+  ) {
+    this.orderRepo = this.dataSource.getRepository(ProductionOrderEntity);
     this.unitRepo = this.dataSource.getRepository(ProductionUnitEntity);
     this.eventRepo = this.dataSource.getRepository(ProductionUnitEventEntity);
   }
@@ -119,20 +148,57 @@ export class ProductionUnitService {
   }
 
   /**
-   * Retrieves units belonging to an order.
+   * Retrieves paginated units belonging to an order.
+   * Validates that the order exists and is not soft deleted.
    */
   async getUnitsByOrderId(
     orderId: string,
+    query?: ListProductionUnitsQueryDto,
     manager?: EntityManager
-  ): Promise<ProductionUnitDto[]> {
-    const repo = manager ? manager.getRepository(ProductionUnitEntity) : this.unitRepo;
-    const units = await repo.find({
-      where: { orderId, deletedAt: IsNull() },
-      order: { orderLineId: 'ASC', unitSequence: 'ASC' },
-      relations: { currentYard: true },
-    });
+  ): Promise<PaginatedProductionUnitsResult> {
+    const orderRepo = manager ? manager.getRepository(ProductionOrderEntity) : this.orderRepo;
+    const unitRepo = manager ? manager.getRepository(ProductionUnitEntity) : this.unitRepo;
 
-    return units.map(this.toUnitDto);
+    const order = await orderRepo.findOne({
+      where: { id: orderId, deletedAt: IsNull() },
+    });
+    if (!order) {
+      throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
+    }
+
+    const page = query?.page && query.page > 0 ? query.page : 1;
+    const limit = query?.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+    const skip = (page - 1) * limit;
+
+    const qb = unitRepo
+      .createQueryBuilder('unit')
+      .leftJoinAndSelect('unit.currentYard', 'currentYard')
+      .where('unit.order_id = :orderId', { orderId })
+      .andWhere('unit.deleted_at IS NULL');
+
+    if (query?.status) {
+      qb.andWhere('unit.status = :status', { status: query.status });
+    }
+
+    if (query?.orderLineId) {
+      qb.andWhere('unit.order_line_id = :orderLineId', { orderLineId: query.orderLineId });
+    }
+
+    qb.orderBy('unit.order_line_id', 'ASC')
+      .addOrderBy('unit.unit_sequence', 'ASC')
+      .skip(skip)
+      .take(limit);
+
+    const [units, total] = await qb.getManyAndCount();
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    return {
+      items: units.map(this.toUnitDto),
+      total,
+      page,
+      limit,
+      totalPages,
+    };
   }
 
   /**
@@ -189,20 +255,112 @@ export class ProductionUnitService {
   }
 
   /**
-   * Retrieves historical events for a single unit.
+   * Retrieves paginated historical events for a single unit.
+   *
+   * Invariants:
+   * 1. IDOR Protection: Verifies orderId matches unit.orderId and both are active (not soft deleted).
+   * 2. Row-level Authorization: User must have PRODUCTION_ORDER_VIEW permission.
+   * 3. Scoping Enforcement: Default Deny. If user is scoped to specific departments,
+   *    only events for those departments or general events are returned. DENY overrides ALLOW.
    */
   async getUnitEvents(
-    unitId: string,
+    orderIdOrUnitId: string,
+    maybeUnitId?: string,
+    currentUser?: AuthPrincipal,
+    query?: ListProductionUnitEventsQueryDto,
     manager?: EntityManager
-  ): Promise<ProductionUnitEventDto[]> {
-    const repo = manager ? manager.getRepository(ProductionUnitEventEntity) : this.eventRepo;
-    const events = await repo.find({
-      where: { unitId },
-      order: { occurredAt: 'ASC', createdAt: 'ASC' },
-      relations: { createdByUser: true },
-    });
+  ): Promise<any> {
+    const orderRepo = manager ? manager.getRepository(ProductionOrderEntity) : this.orderRepo;
+    const unitRepo = manager ? manager.getRepository(ProductionUnitEntity) : this.unitRepo;
+    const eventRepo = manager ? manager.getRepository(ProductionUnitEventEntity) : this.eventRepo;
 
-    return events.map((e) => ({
+    let targetUnitId: string;
+    let expectedOrderId: string | null = null;
+
+    if (typeof maybeUnitId === 'string') {
+      expectedOrderId = orderIdOrUnitId;
+      targetUnitId = maybeUnitId;
+    } else {
+      targetUnitId = orderIdOrUnitId;
+    }
+
+    // 1. Verify unit exists and is not deleted
+    const unit = await unitRepo.findOne({
+      where: {
+        id: targetUnitId,
+        ...(expectedOrderId ? { orderId: expectedOrderId } : {}),
+        deletedAt: IsNull(),
+      },
+    });
+    if (!unit) {
+      throw new NotFoundError('الغرفة غير موجودة في أمر الإنتاج المحدد', 'PRODUCTION_UNIT_NOT_FOUND');
+    }
+
+    // 2. Verify order exists and is active
+    const order = await orderRepo.findOne({
+      where: { id: unit.orderId, deletedAt: IsNull() },
+    });
+    if (!order) {
+      throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
+    }
+
+    // 3. Resolve authorization policy for PRODUCTION_ORDER_VIEW if user provided
+    let policy = null;
+    if (currentUser) {
+      const rules = await this.authzService.getApplicableAccessRules(
+        currentUser,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+
+      const needsResponsibility = rules.some(
+        (r) => r.scopeType === 'PRODUCTION_DEPARTMENT' || r.scopeType === 'PRODUCTION_YARD'
+      );
+
+      let responsibility: ProductionResponsibility = {
+        headDepartmentId: null,
+        engineerDepartmentId: null,
+        engineerYardIds: [],
+        isConsistent: true,
+      };
+
+      if (needsResponsibility) {
+        responsibility = await this.respResolver.resolve(currentUser);
+      }
+
+      policy = this.policyService.resolvePolicy(
+        rules,
+        responsibility,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+
+      if (policy.denyAll || !policy.hasAnyAccess) {
+        throw new ForbiddenError('ليس لديك صلاحية لعرض سجلات أحداث الغرفة', 'AUTHORIZATION_DENIED');
+      }
+    }
+
+    // 4. Build query with row-level security and pagination
+    const page = query?.page && query.page > 0 ? query.page : 1;
+    const limit = query?.limit && query.limit > 0 ? Math.min(query.limit, 100) : 50;
+    const skip = (page - 1) * limit;
+
+    const qb = eventRepo
+      .createQueryBuilder('event')
+      .leftJoinAndSelect('event.createdByUser', 'createdByUser')
+      .where('event.unit_id = :unitId', { unitId: targetUnitId });
+
+    if (policy) {
+      applyUnitEventAccessScope(qb, policy, 'event');
+    }
+
+    qb.orderBy('event.occurred_at', 'ASC')
+      .addOrderBy('event.created_at', 'ASC')
+      .skip(skip)
+      .take(limit);
+
+    const [events, total] = await qb.getManyAndCount();
+    const totalPages = Math.ceil(total / limit) || 1;
+
+    const items: ProductionUnitEventDto[] = events.map((e) => ({
       id: e.id,
       unitId: e.unitId,
       eventType: e.eventType,
@@ -219,6 +377,18 @@ export class ProductionUnitService {
       metadata: e.metadata,
       createdAt: e.createdAt,
     }));
+
+    if (!expectedOrderId && !currentUser) {
+      return items;
+    }
+
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages,
+    };
   }
 
   private toUnitDto(unit: ProductionUnitEntity): ProductionUnitDto {

@@ -24,6 +24,13 @@ export interface ExecutionPlanPatternSummaryItem {
   optionName: string;
 }
 
+export interface ExecutionPlanSpecificationSnapshot {
+  name: string;
+  value: string;
+  unit: string | null;
+  sortOrder: number;
+}
+
 @Entity('production_execution_plan')
 export class ProductionExecutionPlanEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -61,6 +68,9 @@ export class ProductionExecutionPlanEntity {
 
   @Column({ name: 'pattern_summary', type: 'json', nullable: true, default: null })
   patternSummary!: ExecutionPlanPatternSummaryItem[] | null;
+
+  @Column({ name: 'specifications', type: 'json', nullable: true, default: null })
+  specifications!: ExecutionPlanSpecificationSnapshot[] | null;
 
   @ManyToOne(() => ProductionOrderEntity, {
     eager: false,

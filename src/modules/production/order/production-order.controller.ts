@@ -317,10 +317,13 @@ export class ProductionOrderController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const { planId } = req.params;
-      const plan = await this.executionPlanService.getPlanById(planId as string);
+      const { orderId, planId } = req.params;
+      const plan = await this.executionPlanService.getPlanById(orderId as string, planId as string);
       if (!plan) {
-        throw new NotFoundError('الخطة التنفيذية غير موجودة', 'PRODUCTION_EXECUTION_PLAN_NOT_FOUND');
+        throw new NotFoundError(
+          'الخطة التنفيذية غير موجودة في أمر الإنتاج المحدد',
+          'PRODUCTION_EXECUTION_PLAN_NOT_FOUND'
+        );
       }
       res.status(200).json(ApiResponse.success(plan));
     } catch (error) {
@@ -335,7 +338,8 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId } = req.params;
-      const units = await this.unitService.getUnitsByOrderId(orderId as string);
+      const query = req.query as any;
+      const units = await this.unitService.getUnitsByOrderId(orderId as string, query);
       res.status(200).json(ApiResponse.success(units));
     } catch (error) {
       next(error);
@@ -348,8 +352,15 @@ export class ProductionOrderController {
     next: NextFunction
   ): Promise<void> => {
     try {
-      const { unitId } = req.params;
-      const events = await this.unitService.getUnitEvents(unitId as string);
+      const { orderId, unitId } = req.params;
+      const currentUser = (req as any).user;
+      const query = req.query as any;
+      const events = await this.unitService.getUnitEvents(
+        orderId as string,
+        unitId as string,
+        currentUser,
+        query
+      );
       res.status(200).json(ApiResponse.success(events));
     } catch (error) {
       next(error);

@@ -145,3 +145,53 @@ export function applyYardAccessScope<T extends ObjectLiteral>(
     );
   }
 }
+
+
+/**
+ * Translates a ResolvedProductionAccessPolicy into Unit Event QueryBuilder WHERE conditions.
+ * Ensures row-level authorization is enforced before pagination, count, and sorting.
+ * Invariants:
+ * 1. Default Deny: if policy.denyAll or !policy.hasAnyAccess, 1 = 0.
+ * 2. If !policy.allowAll, events with department_id must be in allowDepartmentIds.
+ *    General unit events (where department_id IS NULL) are allowed if user has department access.
+ * 3. Any department in denyDepartmentIds is strictly excluded.
+ */
+export function applyUnitEventAccessScope<T extends ObjectLiteral>(
+  qb: SelectQueryBuilder<T>,
+  policy: ResolvedProductionAccessPolicy,
+  alias = 'event'
+): void {
+  if (policy.denyAll || !policy.hasAnyAccess) {
+    qb.andWhere('1 = 0');
+    return;
+  }
+
+  if (!policy.allowAll) {
+    const hasAllowDept = policy.allowDepartmentIds.length > 0;
+    if (hasAllowDept) {
+      qb.andWhere(
+        new Brackets((subQb) => {
+          subQb
+            .where(`${alias}.department_id IS NULL`)
+            .orWhere(`${alias}.department_id IN (:...authAllowEventDeptIds)`, {
+              authAllowEventDeptIds: policy.allowDepartmentIds,
+            });
+        })
+      );
+    } else {
+      qb.andWhere(`${alias}.department_id IS NULL`);
+    }
+  }
+
+  if (policy.denyDepartmentIds.length > 0) {
+    qb.andWhere(
+      new Brackets((subQb) => {
+        subQb
+          .where(`${alias}.department_id IS NULL`)
+          .orWhere(`${alias}.department_id NOT IN (:...authDenyEventDeptIds)`, {
+            authDenyEventDeptIds: policy.denyDepartmentIds,
+          });
+      })
+    );
+  }
+}

@@ -16,6 +16,8 @@ import { UpdateProductionOrderLineDto } from '../order-line/dto/update-productio
 import { ReorderProductionOrderLinesDto } from '../order-line/dto/reorder-production-order-lines.dto.js';
 import { CommitProductionOrderDraftLinesDto } from '../order-line/dto/commit-production-order-draft-lines.dto.js';
 import { UpdatePatternSelectionDto } from '../order-line-pattern-selection/dto/update-pattern-selection.dto.js';
+import { ListProductionUnitsQueryDto } from '../unit/dto/list-production-units-query.dto.js';
+import { ListProductionUnitEventsQueryDto } from '../unit/dto/list-production-unit-events-query.dto.js';
 
 const productionOrderApiRouter: Router = Router();
 
@@ -225,6 +227,7 @@ productionOrderApiRouter.get(
   '/:orderId/units',
   requirePermission(SystemPermission.PRODUCTION_ORDER_VIEW),
   validateUuidParam('orderId'),
+  validateQueryDto(ListProductionUnitsQueryDto),
   productionOrderController.getOrderUnits
 );
 
@@ -234,6 +237,7 @@ productionOrderApiRouter.get(
   requirePermission(SystemPermission.PRODUCTION_ORDER_VIEW),
   validateUuidParam('orderId'),
   validateUuidParam('unitId'),
+  validateQueryDto(ListProductionUnitEventsQueryDto),
   productionOrderController.getUnitEvents
 );
 

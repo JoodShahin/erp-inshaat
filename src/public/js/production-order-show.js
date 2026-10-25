@@ -221,6 +221,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (metaQty) metaQty.textContent = plan.lineQuantity + ' وحدة';
         if (metaTasks) metaTasks.textContent = (plan.tasks ? plan.tasks.length : 0) + ' مهمة';
 
+        // Render technical specifications snapshot if present
+        const specsSection = document.getElementById('planSpecsSection');
+        const specsContainer = document.getElementById('planSpecsContainer');
+        if (specsSection && specsContainer) {
+          specsContainer.replaceChildren();
+          if (plan.specifications && plan.specifications.length > 0) {
+            specsSection.classList.remove('d-none');
+            plan.specifications.forEach((spec) => {
+              const badge = document.createElement('span');
+              badge.className = 'badge bg-white text-dark border px-2 py-1 small shadow-sm';
+              badge.textContent = spec.name + ': ' + spec.value + (spec.unit ? ' ' + spec.unit : '');
+              specsContainer.appendChild(badge);
+            });
+          } else {
+            specsSection.classList.add('d-none');
+          }
+        }
+
         if (tbodyElem) {
           tbodyElem.replaceChildren();
           const tasks = plan.tasks || [];
@@ -325,14 +343,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       try {
-        const res = await window.erpFetch('/api/production/orders/' + orderId + '/units');
+        const queryParams = new URLSearchParams();
+        if (lineId) queryParams.set('orderLineId', lineId);
+        queryParams.set('limit', '100');
+        const res = await window.erpFetch('/api/production/orders/' + orderId + '/units?' + queryParams.toString());
         const json = await res.json();
         if (!res.ok || !json.success) {
           throw new Error(getErrorMessage(json, 'فشل استرجاع غرف أمر الإنتاج'));
         }
 
-        const allUnits = json.data || [];
-        const units = lineId ? allUnits.filter((u) => u.orderLineId === lineId) : allUnits;
+        const units = json.data?.items || json.data || [];
 
         if (tbodyElem) {
           tbodyElem.replaceChildren();
@@ -469,13 +489,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const res = await window.erpFetch('/api/production/orders/' + orderId + '/units/' + unitId + '/events');
+      const res = await window.erpFetch('/api/production/orders/' + orderId + '/units/' + unitId + '/events?limit=100');
       const json = await res.json();
       if (!res.ok || !json.success) {
         throw new Error(getErrorMessage(json, 'فشل استرجاع سجل أحداث الغرفة'));
       }
 
-      const events = json.data || [];
+      const events = json.data?.items || json.data || [];
       if (tbodyElem) {
         tbodyElem.replaceChildren();
         if (events.length === 0) {

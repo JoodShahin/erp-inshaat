@@ -49,3 +49,20 @@ export interface OrderUnitsSummaryDto {
   completedUnits: number;
   cancelledUnits: number;
 }
+
+export interface PaginatedProductionUnitsResult {
+  items: ProductionUnitDto[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface PaginatedProductionUnitEventsResult {
+  items: ProductionUnitEventDto[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+

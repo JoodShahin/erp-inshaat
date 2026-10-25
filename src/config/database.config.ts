@@ -50,6 +50,7 @@ import { AddProductionOrderLineConfigurationUniqueness1710000000014 } from '../d
 import { AddProductionOrderApprovalStatus1710000000015 } from '../database/migrations/1710000000015-AddProductionOrderApprovalStatus.js';
 import { AddProductionOrderPriority1710000000016 } from '../database/migrations/1710000000016-AddProductionOrderPriority.js';
 import { CreateProductionExecutionPlansAndUnits1710000000017 } from '../database/migrations/1710000000017-CreateProductionExecutionPlansAndUnits.js';
+import { AddSpecificationsToExecutionPlan1710000000018 } from '../database/migrations/1710000000018-AddSpecificationsToExecutionPlan.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -113,6 +114,7 @@ export const databaseConfig: DataSourceOptions = {
     AddProductionOrderApprovalStatus1710000000015,
     AddProductionOrderPriority1710000000016,
     CreateProductionExecutionPlansAndUnits1710000000017,
+    AddSpecificationsToExecutionPlan1710000000018,
   ],
   subscribers: [],
 };

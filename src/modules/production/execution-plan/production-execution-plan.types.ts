@@ -48,6 +48,13 @@ export interface ExecutionPlanPatternSummaryDto {
   optionName: string;
 }
 
+export interface ExecutionPlanSpecificationSnapshot {
+  name: string;
+  value: string;
+  unit: string | null;
+  sortOrder: number;
+}
+
 export interface ExecutionPlanDto {
   id: string;
   orderId: string;
@@ -60,6 +67,7 @@ export interface ExecutionPlanDto {
   lineQuantity: number;
   configurationHash: string;
   patternSummary: ExecutionPlanPatternSummaryDto[] | null;
+  specifications?: ExecutionPlanSpecificationSnapshot[] | null;
   tasksCount: number;
   unitsCount: number;
   tasks?: ExecutionTaskDto[];
