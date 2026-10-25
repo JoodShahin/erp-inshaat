@@ -50,6 +50,7 @@ import {
   productionResponsibilityResolver,
   ProductionResponsibilityResolver,
 } from '../authorization/production-responsibility.resolver.js';
+import { ResolvedProductionAccessPolicy } from '../authorization/production-access-policy.types.js';
 import { SystemPermission } from '../../system/permission/constants/system-permission.enum.js';
 
 export class ProductionExecutionPlanService {
@@ -510,13 +511,14 @@ export class ProductionExecutionPlanService {
       throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
     }
 
+    let policy: ResolvedProductionAccessPolicy | null = null;
     if (currentUser) {
       const rules = await this.authzService.getApplicableAccessRules(
         currentUser,
         SystemPermission.PRODUCTION_ORDER_VIEW
       );
       const responsibility = await this.respResolver.resolve(currentUser);
-      const policy = this.policyService.resolvePolicy(
+      policy = this.policyService.resolvePolicy(
         rules,
         responsibility,
         SystemPermission.PRODUCTION_ORDER_VIEW
@@ -552,7 +554,12 @@ export class ProductionExecutionPlanService {
     }
 
     return plans.map((p) => {
-      const planTasks = tasksByPlanMap.get(p.id) || [];
+      let planTasks = tasksByPlanMap.get(p.id) || [];
+      if (policy && policy.denyDepartmentIds.length > 0) {
+        planTasks = planTasks.filter(
+          (t) => !t.departmentId || !policy!.denyDepartmentIds.includes(t.departmentId)
+        );
+      }
       return this.toPlanDto(p, planTasks);
     });
   }
@@ -603,13 +610,14 @@ export class ProductionExecutionPlanService {
       throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
     }
 
+    let policy: ResolvedProductionAccessPolicy | null = null;
     if (currentUser) {
       const rules = await this.authzService.getApplicableAccessRules(
         currentUser,
         SystemPermission.PRODUCTION_ORDER_VIEW
       );
       const responsibility = await this.respResolver.resolve(currentUser);
-      const policy = this.policyService.resolvePolicy(
+      policy = this.policyService.resolvePolicy(
         rules,
         responsibility,
         SystemPermission.PRODUCTION_ORDER_VIEW
@@ -627,7 +635,14 @@ export class ProductionExecutionPlanService {
       order: { sortOrder: 'ASC' },
     });
 
-    return this.toPlanDto(plan, tasks);
+    let visibleTasks = tasks;
+    if (policy && policy.denyDepartmentIds.length > 0) {
+      visibleTasks = tasks.filter(
+        (t) => !t.departmentId || !policy!.denyDepartmentIds.includes(t.departmentId)
+      );
+    }
+
+    return this.toPlanDto(plan, visibleTasks);
   }
 
   /**

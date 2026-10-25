@@ -18,13 +18,10 @@ import { ProductionOrderService } from '../src/modules/production/order/producti
 import { ProductionOrderGuardService } from '../src/modules/production/order/production-order-guard.service.js';
 import { ProductionExecutionPlanService } from '../src/modules/production/execution-plan/production-execution-plan.service.js';
 import { ProductionUnitService } from '../src/modules/production/unit/production-unit.service.js';
-import { AuthorizationService } from '../src/modules/system/authorization/authorization.service.js';
 import { ProductionAccessPolicyService } from '../src/modules/production/authorization/production-access-policy.service.js';
-import { ProductionResponsibilityResolver } from '../src/modules/production/authorization/production-responsibility.resolver.js';
 import { QueryFailedError } from 'typeorm';
 
 describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurrency & Security', () => {
-  let isDbConnected = false;
   let testUser1Id: string;
   let testUser2Id: string;
   let testDeptAId: string;
@@ -40,145 +37,138 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
   const createdOrderIds: string[] = [];
 
   before(async () => {
-    try {
-      if (!AppDataSource.isInitialized) {
-        await AppDataSource.initialize();
-      }
-      isDbConnected = true;
-
-      const userRepo = AppDataSource.getRepository(UserEntity);
-      const deptRepo = AppDataSource.getRepository(ProductionDepartmentEntity);
-      const yardRepo = AppDataSource.getRepository(ProductionYardEntity);
-      const tmplRepo = AppDataSource.getRepository(ProductionTemplateEntity);
-      const stageRepo = AppDataSource.getRepository(ProductionTemplateStageEntity);
-      const wfRepo = AppDataSource.getRepository(ProductionTemplateWorkflowItemEntity);
-
-      // 0. Ensure Valid Users exist for Foreign Key constraints
-      const existingUsers = await userRepo.find({ take: 2 });
-      if (existingUsers.length === 0) {
-        throw new Error('No system users found in database for integration test foreign keys');
-      }
-      testUser1Id = existingUsers[0].id;
-      testUser2Id = existingUsers.length > 1 ? existingUsers[1].id : existingUsers[0].id;
-
-      // 1. Create Test Departments
-      testDeptAId = randomUUID();
-      testDeptBId = randomUUID();
-      await deptRepo.save([
-        deptRepo.create({
-          id: testDeptAId,
-          name: `قسم الصب تكامل ${Date.now()}`,
-          code: `DEPT-IT-A-${Date.now().toString().slice(-4)}`,
-          isActive: true,
-        }),
-        deptRepo.create({
-          id: testDeptBId,
-          name: `قسم التشطيب تكامل ${Date.now()}`,
-          code: `DEPT-IT-B-${Date.now().toString().slice(-4)}`,
-          isActive: true,
-        }),
-      ]);
-
-      // 2. Create Test Yards
-      testYardAId = randomUUID();
-      testYardBId = randomUUID();
-      await yardRepo.save([
-        yardRepo.create({
-          id: testYardAId,
-          departmentId: testDeptAId,
-          name: 'ساحة الصب تكامل',
-          code: `YARD-IT-A-${Date.now().toString().slice(-4)}`,
-          capacity: 100,
-          isActive: true,
-        }),
-        yardRepo.create({
-          id: testYardBId,
-          departmentId: testDeptBId,
-          name: 'ساحة التشطيب تكامل',
-          code: `YARD-IT-B-${Date.now().toString().slice(-4)}`,
-          capacity: 100,
-          isActive: true,
-        }),
-      ]);
-
-      // 3. Create Test Template with Stage & Workflow
-      testTemplateId = randomUUID();
-      await tmplRepo.save(
-        tmplRepo.create({
-          id: testTemplateId,
-          name: 'قالب تكامل اختباري',
-          code: `TMPL-IT-${Date.now().toString().slice(-4)}`,
-          description: 'قالب لاختبار التكامل',
-          isActive: true,
-        })
-      );
-
-      testStageAId = randomUUID();
-      await stageRepo.save(
-        stageRepo.create({
-          id: testStageAId,
-          templateId: testTemplateId,
-          departmentId: testDeptAId,
-          name: 'مرحلة الصب تكامل',
-          sortOrder: 1,
-          isActive: true,
-        })
-      );
-
-      await wfRepo.save(
-        wfRepo.create({
-          id: randomUUID(),
-          templateId: testTemplateId,
-          itemType: 'STAGE',
-          stageId: testStageAId,
-          sortOrder: 1,
-        })
-      );
-
-      // Services setup with controllable Authz and Responsibility resolvers for row-level testing
-      const guardService = new ProductionOrderGuardService(AppDataSource);
-      const mockAuthzService: any = {
-        getApplicableAccessRules: async (principal: any) => {
-          return principal?.accessRules || [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }];
-        },
-      };
-      const mockRespResolver: any = {
-        resolve: async (user: any) => ({
-          headDepartmentId: user?.headDepartmentId || null,
-          engineerDepartmentId: user?.engineerDepartmentId || null,
-          engineerYardIds: user?.engineerYardIds || [],
-          isConsistent: true,
-        }),
-      };
-      const policyService = new ProductionAccessPolicyService();
-
-      planService = new ProductionExecutionPlanService(
-        AppDataSource,
-        mockAuthzService,
-        policyService,
-        mockRespResolver
-      );
-      unitService = new ProductionUnitService(
-        AppDataSource,
-        mockAuthzService,
-        policyService,
-        mockRespResolver
-      );
-      orderService = new ProductionOrderService(
-        AppDataSource,
-        guardService,
-        planService,
-        unitService
-      );
-    } catch (err: any) {
-      console.warn('MySQL Integration test suite skipped database setup:', err.message);
-      isDbConnected = false;
+    // Fail hard if MySQL is down or data source fails to initialize
+    if (!AppDataSource.isInitialized) {
+      await AppDataSource.initialize();
     }
+
+    const userRepo = AppDataSource.getRepository(UserEntity);
+    const deptRepo = AppDataSource.getRepository(ProductionDepartmentEntity);
+    const yardRepo = AppDataSource.getRepository(ProductionYardEntity);
+    const tmplRepo = AppDataSource.getRepository(ProductionTemplateEntity);
+    const stageRepo = AppDataSource.getRepository(ProductionTemplateStageEntity);
+    const wfRepo = AppDataSource.getRepository(ProductionTemplateWorkflowItemEntity);
+
+    // 0. Ensure Valid Users exist for Foreign Key constraints
+    const existingUsers = await userRepo.find({ take: 2 });
+    if (existingUsers.length === 0) {
+      throw new Error('No system users found in database for integration test foreign keys');
+    }
+    testUser1Id = existingUsers[0].id;
+    testUser2Id = existingUsers.length > 1 ? existingUsers[1].id : existingUsers[0].id;
+
+    // 1. Create Test Departments
+    testDeptAId = randomUUID();
+    testDeptBId = randomUUID();
+    await deptRepo.save([
+      deptRepo.create({
+        id: testDeptAId,
+        name: `قسم الصب تكامل ${Date.now()}`,
+        code: `DEPT-IT-A-${Date.now().toString().slice(-4)}`,
+        isActive: true,
+      }),
+      deptRepo.create({
+        id: testDeptBId,
+        name: `قسم التشطيب تكامل ${Date.now()}`,
+        code: `DEPT-IT-B-${Date.now().toString().slice(-4)}`,
+        isActive: true,
+      }),
+    ]);
+
+    // 2. Create Test Yards
+    testYardAId = randomUUID();
+    testYardBId = randomUUID();
+    await yardRepo.save([
+      yardRepo.create({
+        id: testYardAId,
+        departmentId: testDeptAId,
+        name: 'ساحة الصب تكامل',
+        code: `YARD-IT-A-${Date.now().toString().slice(-4)}`,
+        capacity: 100,
+        isActive: true,
+      }),
+      yardRepo.create({
+        id: testYardBId,
+        departmentId: testDeptBId,
+        name: 'ساحة التشطيب تكامل',
+        code: `YARD-IT-B-${Date.now().toString().slice(-4)}`,
+        capacity: 100,
+        isActive: true,
+      }),
+    ]);
+
+    // 3. Create Test Template with Stage & Workflow
+    testTemplateId = randomUUID();
+    await tmplRepo.save(
+      tmplRepo.create({
+        id: testTemplateId,
+        name: 'قالب تكامل اختباري',
+        code: `TMPL-IT-${Date.now().toString().slice(-4)}`,
+        description: 'قالب لاختبار التكامل',
+        isActive: true,
+      })
+    );
+
+    testStageAId = randomUUID();
+    await stageRepo.save(
+      stageRepo.create({
+        id: testStageAId,
+        templateId: testTemplateId,
+        departmentId: testDeptAId,
+        name: 'مرحلة الصب تكامل',
+        sortOrder: 1,
+        isActive: true,
+      })
+    );
+
+    await wfRepo.save(
+      wfRepo.create({
+        id: randomUUID(),
+        templateId: testTemplateId,
+        itemType: 'STAGE',
+        stageId: testStageAId,
+        sortOrder: 1,
+      })
+    );
+
+    // Services setup with controllable Authz and Responsibility resolvers for row-level testing
+    const guardService = new ProductionOrderGuardService(AppDataSource);
+    const mockAuthzService: any = {
+      getApplicableAccessRules: async (principal: any) => {
+        return principal?.accessRules || [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }];
+      },
+    };
+    const mockRespResolver: any = {
+      resolve: async (user: any) => ({
+        headDepartmentId: user?.headDepartmentId || null,
+        engineerDepartmentId: user?.engineerDepartmentId || null,
+        engineerYardIds: user?.engineerYardIds || [],
+        isConsistent: true,
+      }),
+    };
+    const policyService = new ProductionAccessPolicyService();
+
+    planService = new ProductionExecutionPlanService(
+      AppDataSource,
+      mockAuthzService,
+      policyService,
+      mockRespResolver
+    );
+    unitService = new ProductionUnitService(
+      AppDataSource,
+      mockAuthzService,
+      policyService,
+      mockRespResolver
+    );
+    orderService = new ProductionOrderService(
+      AppDataSource,
+      guardService,
+      planService,
+      unitService
+    );
   });
 
   after(async () => {
-    if (!isDbConnected) return;
-
     try {
       const eventRepo = AppDataSource.getRepository(ProductionUnitEventEntity);
       const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
@@ -229,12 +219,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
   // ==========================================
   // TEST 1: Atomic Rollback on Failure
   // ==========================================
-  it('1. Atomic Rollback: Error during approval rolls back plans, tasks, units, and events with 0 orphaned records', async (t) => {
-    if (!isDbConnected) {
-      t.skip('Real MySQL database not connected');
-      return;
-    }
-
+  it('1. Atomic Rollback: Error during approval rolls back plans, tasks, units, and events with 0 orphaned records', async () => {
     const orderRepo = AppDataSource.getRepository(ProductionOrderEntity);
     const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
     const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
@@ -285,14 +270,8 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
   // ==========================================
   // TEST 2: Concurrency Lock (pessimistic_write)
   // ==========================================
-  it('2. Concurrency Lock: Two concurrent approval calls serialize; one succeeds and one fails with 400', async (t) => {
-    if (!isDbConnected) {
-      t.skip('Real MySQL database not connected');
-      return;
-    }
-
+  it('2. Concurrency Lock: Two concurrent approval calls serialize; one succeeds and one fails with 400', async () => {
     const orderRepo = AppDataSource.getRepository(ProductionOrderEntity);
-    const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
     const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
 
@@ -328,12 +307,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
   // ==========================================
   // TEST 3: Database Unique Constraints
   // ==========================================
-  it('3. Unique Constraint: Duplicate (orderLineId, unitSequence) is rejected by MySQL index UQ_prod_unit_line_sequence', async (t) => {
-    if (!isDbConnected) {
-      t.skip('Real MySQL database not connected');
-      return;
-    }
-
+  it('3. Unique Constraint: Duplicate (orderLineId, unitSequence) is rejected by MySQL index UQ_prod_unit_line_sequence', async () => {
     const orderRepo = AppDataSource.getRepository(ProductionOrderEntity);
     const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
@@ -419,15 +393,11 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
   // ==========================================
   // TEST 4: Row-Level Event & Unit Authorization Isolation
   // ==========================================
-  it('4. Row-Level Security: Scoped engineer and head see only permitted events and units in MySQL', async (t) => {
-    if (!isDbConnected) {
-      t.skip('Real MySQL database not connected');
-      return;
-    }
-
+  it('4. Row-Level Security: Comprehensive audit of 3-level authorization, scoping and IDOR', async () => {
     const orderRepo = AppDataSource.getRepository(ProductionOrderEntity);
     const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
     const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
+    const taskRepo = AppDataSource.getRepository(ProductionExecutionTaskEntity);
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
     const eventRepo = AppDataSource.getRepository(ProductionUnitEventEntity);
 
@@ -439,7 +409,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         id: orderId,
         orderNumber: `PO-SEC-${Date.now().toString().slice(-4)}`,
         status: ProductionOrderStatus.APPROVED,
-        totalQuantity: 2,
+        totalQuantity: 3,
         createdByUserId: testUser1Id,
       })
     );
@@ -450,7 +420,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         id: lineId,
         orderId,
         templateId: testTemplateId,
-        quantity: 2,
+        quantity: 3,
         sortOrder: 1,
         configurationHash: '3333333333333333333333333333333333333333333333333333333333333333',
       })
@@ -463,17 +433,40 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         orderId,
         orderLineId: lineId,
         templateId: testTemplateId,
-        templateName: 'قالب',
-        templateCode: 'TMPL-01',
-        lineQuantity: 2,
+        templateName: 'قالب تكامل أمني',
+        templateCode: 'TMPL-SEC-01',
+        lineQuantity: 3,
         configurationHash: '3333333333333333333333333333333333333333333333333333333333333333',
       })
     );
 
+    // Save tasks for execution plan: Task 1 in Dept A, Task 2 in Dept B
+    const task1Id = randomUUID();
+    const task2Id = randomUUID();
+    await taskRepo.save([
+      taskRepo.create({
+        id: task1Id,
+        planId,
+        departmentId: testDeptAId,
+        departmentName: 'قسم الصب تكامل',
+        name: 'مهمة صب أ',
+        sortOrder: 1,
+      }),
+      taskRepo.create({
+        id: task2Id,
+        planId,
+        departmentId: testDeptBId,
+        departmentName: 'قسم التشطيب تكامل',
+        name: 'مهمة تشطيب ب',
+        sortOrder: 2,
+      }),
+    ]);
+
     const unit1Id = randomUUID();
     const unit2Id = randomUUID();
+    const unit3Id = randomUUID();
 
-    // Unit 1 in Yard A (Dept A), Unit 2 in Yard B (Dept B)
+    // Unit 1 in Yard A (Dept A), Unit 2 in Yard B (Dept B), Unit 3 unassigned (currentYardId = null)
     await unitRepo.save([
       unitRepo.create({
         id: unit1Id,
@@ -495,14 +488,28 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         currentYardId: testYardBId,
         status: ProductionUnitStatus.IN_PROGRESS,
       }),
+      unitRepo.create({
+        id: unit3Id,
+        orderId,
+        orderLineId: lineId,
+        planId,
+        unitSequence: 3,
+        unitNumber: 'UNIT-SEC-003',
+        currentYardId: null,
+        status: ProductionUnitStatus.CREATED,
+      }),
     ]);
 
-    // Event 1: Administrative (UNIT_CREATED, departmentId = null)
+    // Events on Unit 1:
+    // Ev 1: Administrative (UNIT_CREATED, departmentId = null)
+    // Ev 2: Dept A task by testUser1Id
+    // Ev 3: Dept B task by testUser2Id
     const ev1Id = randomUUID();
-    // Event 2: Dept A task by testUser1Id
     const ev2Id = randomUUID();
-    // Event 3: Dept B task by testUser2Id
     const ev3Id = randomUUID();
+
+    // Event on Unit 2: created by testUser1Id (past event when engineer worked on it)
+    const ev4Id = randomUUID();
 
     await eventRepo.save([
       eventRepo.create({
@@ -529,17 +536,36 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         departmentId: testDeptBId,
         occurredAt: new Date(Date.now() - 1000),
       }),
+      eventRepo.create({
+        id: ev4Id,
+        unitId: unit2Id,
+        eventType: ProductionUnitEventType.TASK_STATUS_CHANGED,
+        createdByUserId: testUser1Id,
+        departmentId: testDeptBId,
+        occurredAt: new Date(Date.now() - 500),
+      }),
     ]);
 
-    // Query 1: Admin User (ALLOW ALL) sees all 3 events
+    // Define Principals:
     const adminUser = {
       id: testUser1Id,
       accessRules: [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }],
     } as any;
-    const adminEvents = await unitService.getUnitEvents(orderId, unit1Id, adminUser);
-    assert.equal(adminEvents.items.length, 3);
 
-    // Query 2: Department Head for Dept A sees ONLY Event 2
+    const engineerYardAUser = {
+      id: testUser1Id,
+      accessRules: [
+        {
+          scopeType: 'PRODUCTION_YARD',
+          effect: 'ALLOW',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            yardIds: [testYardAId],
+          },
+        },
+      ],
+    } as any;
+
     const headDeptAUser = {
       id: 'head-dept-a-user',
       accessRules: [
@@ -553,34 +579,103 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         },
       ],
     } as any;
-    const headEvents = await unitService.getUnitEvents(orderId, unit1Id, headDeptAUser);
-    assert.equal(headEvents.items.length, 1);
-    assert.equal(headEvents.items[0].id, ev2Id);
 
-    // Query 3: Engineer 1 (testUser1Id) sees ONLY Event 2 (their own event)
-    const engineerUser1 = {
-      id: testUser1Id,
+    const userWithDenyDeptA = {
+      id: 'user-deny-dept-a',
       accessRules: [
+        { scopeType: 'ALL', effect: 'ALLOW', scope: null },
         {
-          scopeType: 'PRODUCTION_YARD',
-          effect: 'ALLOW',
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'DENY',
           scope: {
             source: 'SPECIFIC_IDS',
-            yardIds: [testYardAId],
+            departmentIds: [testDeptAId],
           },
         },
       ],
     } as any;
-    const engEvents = await unitService.getUnitEvents(orderId, unit1Id, engineerUser1);
+
+    const userWithNoAccess = {
+      id: 'user-no-access',
+      accessRules: [],
+    } as any;
+
+    // 1. Level 2 Access: Engineer Yard A accessing room in Yard A -> ALLOW (sees their own event ev2Id)
+    const engEvents = await unitService.getUnitEvents(orderId, unit1Id, engineerYardAUser);
     assert.equal(engEvents.items.length, 1);
     assert.equal(engEvents.items[0].id, ev2Id);
 
-    // Query 4: Engineer 1 listing units for the order sees ONLY Unit 1 (Yard A)
-    const engUnits = await unitService.getUnitsByOrderId(orderId, engineerUser1);
-    assert.equal(engUnits.items.length, 1);
-    assert.equal(engUnits.items[0].id, unit1Id);
+    // 2. Level 2 Access: Engineer Yard A accessing room in Yard B -> 403 Forbidden!
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit2Id, engineerYardAUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
 
-    // Query 5: IDOR protection - querying Unit 1 with a different orderId throws 404
+    // 3. Level 2 Access: Engineer with past event in Yard B (ev4Id created by testUser1Id)
+    //    accessing Room 2 after losing Yard B access -> 403 Forbidden!
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit2Id, engineerYardAUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // 4. Level 2 Access: Scoped engineer requesting unassigned room (Unit 3) -> 403 Forbidden!
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit3Id, engineerYardAUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // 5. Level 3 Scoping: Department Head Dept A sees ONLY Dept A events on Unit 1 (administrative UNIT_CREATED hidden)
+    const headEvents = await unitService.getUnitEvents(orderId, unit1Id, headDeptAUser);
+    assert.equal(headEvents.items.length, 1);
+    assert.equal(headEvents.items[0].id, ev2Id);
+
+    // 6. Level 3 Scoping: Admin (ALLOW ALL) sees all 3 events on Unit 1
+    const adminEvents = await unitService.getUnitEvents(orderId, unit1Id, adminUser);
+    assert.equal(adminEvents.items.length, 3);
+
+    // 7. Conflicting ALLOW ALL and DENY Dept A: Level 2 rejects Unit 1 (in Dept A) -> 403 Forbidden!
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit1Id, userWithDenyDeptA);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // 8. User without ALLOW rules gets 403 Forbidden
+    await assert.rejects(
+      async () => {
+        await unitService.getUnitEvents(orderId, unit1Id, userWithNoAccess);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    // 9. IDOR protection: requesting Unit 1 with mismatched orderId throws 404 NotFoundError
     await assert.rejects(
       async () => {
         await unitService.getUnitEvents(randomUUID(), unit1Id, adminUser);
@@ -591,5 +686,33 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         return true;
       }
     );
+
+    // 10. Listing units and pagination count accuracy: Engineer 1 sees strictly Unit 1 (Yard A)
+    const engUnits = await unitService.getUnitsByOrderId(orderId, engineerYardAUser);
+    assert.equal(engUnits.total, 1);
+    assert.equal(engUnits.items.length, 1);
+    assert.equal(engUnits.items[0].id, unit1Id);
+
+    // 11. Execution plan reading task filtering: User with DENY Dept B sees Plan with Task 1 only
+    const userWithDenyDeptB = {
+      id: 'user-deny-dept-b',
+      accessRules: [
+        { scopeType: 'ALL', effect: 'ALLOW', scope: null },
+        {
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'DENY',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            departmentIds: [testDeptBId],
+          },
+        },
+      ],
+    } as any;
+    const filteredPlans = await planService.getPlansByOrderId(orderId, userWithDenyDeptB);
+    assert.equal(filteredPlans.length, 1);
+    assert.equal(filteredPlans[0].tasksCount, 1);
+    assert.equal(filteredPlans[0].tasks.length, 1);
+    assert.equal(filteredPlans[0].tasks[0].id, task1Id);
+    assert.equal(filteredPlans[0].tasks[0].departmentId, testDeptAId);
   });
 });

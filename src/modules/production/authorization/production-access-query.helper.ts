@@ -53,6 +53,55 @@ export function canAccessYard(
 }
 
 /**
+ * Pure evaluation helper: checks if the policy grants access to a specific unit.
+ *
+ * Invariants & Business Rules:
+ * 1. Default Deny / Global Deny: if policy.denyAll or !policy.hasAnyAccess -> false.
+ * 2. If unit is assigned to a yard (unit.currentYardId):
+ *    - Must have currentYard loaded with a valid departmentId. If missing -> fail closed (false).
+ *    - Delegates to canAccessYard(policy, { id: unit.currentYardId, departmentId: unit.currentYard.departmentId }).
+ * 3. If unit is unassigned (unit.currentYardId is null):
+ *    - Accessible ONLY if policy.allowAll is true (and not denied by global rules).
+ *    - Engineers and scoped users with specific yard/department permissions CANNOT access unassigned units.
+ */
+export function canAccessUnit(
+  policy: ResolvedProductionAccessPolicy,
+  unit: {
+    currentYardId: string | null;
+    currentYard?: { id: string; departmentId: string } | null;
+  }
+): boolean {
+  if (policy.denyAll || !policy.hasAnyAccess) {
+    return false;
+  }
+
+  if (unit.currentYardId) {
+    if (!unit.currentYard || !unit.currentYard.departmentId) {
+      // Fail closed if yard relation or departmentId is missing
+      return false;
+    }
+    return canAccessYard(policy, {
+      id: unit.currentYardId,
+      departmentId: unit.currentYard.departmentId,
+    });
+  }
+
+  // Unassigned unit (currentYardId is null):
+  // Engineers scoped ONLY to yards cannot access unassigned units (Default Deny).
+  // Accessible only to users with ALLOW ALL or explicit Department-level scope
+  // (events are subsequently filtered by applyUnitEventAccessScope at Level 3).
+  if (policy.allowAll) {
+    return true;
+  }
+
+  if (policy.allowDepartmentIds.length > 0) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Translates a ResolvedProductionAccessPolicy into Department QueryBuilder WHERE conditions.
  * Ensures row-level authorization is enforced before pagination, count, and sorting.
  */

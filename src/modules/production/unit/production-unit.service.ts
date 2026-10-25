@@ -28,7 +28,10 @@ import {
   productionResponsibilityResolver,
   ProductionResponsibilityResolver,
 } from '../authorization/production-responsibility.resolver.js';
-import { applyUnitEventAccessScope } from '../authorization/production-access-query.helper.js';
+import {
+  applyUnitEventAccessScope,
+  canAccessUnit,
+} from '../authorization/production-access-query.helper.js';
 import { ResolvedProductionAccessPolicy } from '../authorization/production-access-policy.types.js';
 import { SystemPermission } from '../../system/permission/constants/system-permission.enum.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
@@ -428,15 +431,9 @@ export class ProductionUnitService {
       throw new ForbiddenError('ليس لديك صلاحية لعرض سجلات أحداث الغرفة', 'AUTHORIZATION_DENIED');
     }
 
-    // Check unit-level access for scoped users if unit is assigned to a yard
-    if (!policy.allowAll && unit.currentYardId) {
-      const yardDeptId = unit.currentYard?.departmentId;
-      if (yardDeptId && policy.denyDepartmentIds.includes(yardDeptId)) {
-        throw new ForbiddenError('ليس لديك صلاحية للوصول إلى هذه الغرفة', 'AUTHORIZATION_DENIED');
-      }
-      if (policy.denyYardIds.includes(unit.currentYardId)) {
-        throw new ForbiddenError('ليس لديك صلاحية للوصول إلى هذه الغرفة', 'AUTHORIZATION_DENIED');
-      }
+    // Level 2: Check unit-level access using unified canAccessUnit helper
+    if (!canAccessUnit(policy, unit)) {
+      throw new ForbiddenError('ليس لديك صلاحية للوصول إلى هذه الغرفة', 'AUTHORIZATION_DENIED');
     }
 
     // 4. Level 3: Build query with row-level event security and pagination
