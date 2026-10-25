@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DataSource, EntityManager, Repository, IsNull } from 'typeorm';
+import { DataSource, EntityManager, Repository, IsNull, Brackets } from 'typeorm';
 import { AppDataSource } from '../../../database/data-source.js';
 import { ProductionUnitEntity, ProductionUnitStatus } from './production-unit.entity.js';
 import { ProductionUnitEventEntity, ProductionUnitEventType } from './production-unit-event.entity.js';
@@ -29,7 +29,7 @@ import {
   ProductionResponsibilityResolver,
 } from '../authorization/production-responsibility.resolver.js';
 import { applyUnitEventAccessScope } from '../authorization/production-access-query.helper.js';
-import { ProductionResponsibility } from '../authorization/production-access-policy.types.js';
+import { ResolvedProductionAccessPolicy } from '../authorization/production-access-policy.types.js';
 import { SystemPermission } from '../../system/permission/constants/system-permission.enum.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
@@ -149,21 +149,59 @@ export class ProductionUnitService {
 
   /**
    * Retrieves paginated units belonging to an order.
-   * Validates that the order exists and is not soft deleted.
+   * Enforces row-level security:
+   * - Validates order existence and active status.
+   * - When currentUser is provided, resolves PRODUCTION_ORDER_VIEW access rules and responsibilities.
+   * - Limits unit results to allowed yards/departments for scoped users (e.g. yard engineer sees their yard rooms only).
+   * - Accurately filters COUNT and pagination directly at SQL query time.
    */
   async getUnitsByOrderId(
     orderId: string,
-    query?: ListProductionUnitsQueryDto,
+    currentUserOrQuery?: AuthPrincipal | ListProductionUnitsQueryDto,
+    maybeQuery?: ListProductionUnitsQueryDto,
     manager?: EntityManager
   ): Promise<PaginatedProductionUnitsResult> {
     const orderRepo = manager ? manager.getRepository(ProductionOrderEntity) : this.orderRepo;
     const unitRepo = manager ? manager.getRepository(ProductionUnitEntity) : this.unitRepo;
+
+    let currentUser: AuthPrincipal | undefined;
+    let query: ListProductionUnitsQueryDto | undefined;
+
+    if (
+      currentUserOrQuery &&
+      typeof currentUserOrQuery === 'object' &&
+      'id' in currentUserOrQuery &&
+      !('page' in currentUserOrQuery || 'limit' in currentUserOrQuery || 'status' in currentUserOrQuery || 'orderLineId' in currentUserOrQuery)
+    ) {
+      currentUser = currentUserOrQuery as AuthPrincipal;
+      query = maybeQuery;
+    } else if (currentUserOrQuery) {
+      query = currentUserOrQuery as ListProductionUnitsQueryDto;
+    }
 
     const order = await orderRepo.findOne({
       where: { id: orderId, deletedAt: IsNull() },
     });
     if (!order) {
       throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
+    }
+
+    let policy: ResolvedProductionAccessPolicy | null = null;
+    if (currentUser) {
+      const rules = await this.authzService.getApplicableAccessRules(
+        currentUser,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+      const responsibility = await this.respResolver.resolve(currentUser);
+      policy = this.policyService.resolvePolicy(
+        rules,
+        responsibility,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+
+      if (policy.denyAll || !policy.hasAnyAccess) {
+        throw new ForbiddenError('ليس لديك صلاحية لعرض غرف أمر الإنتاج', 'AUTHORIZATION_DENIED');
+      }
     }
 
     const page = query?.page && query.page > 0 ? query.page : 1;
@@ -182,6 +220,77 @@ export class ProductionUnitService {
 
     if (query?.orderLineId) {
       qb.andWhere('unit.order_line_id = :orderLineId', { orderLineId: query.orderLineId });
+    }
+
+    // Apply unit-level row authorization scoping
+    if (policy) {
+      if (!policy.allowAll) {
+        const hasAllowDepts = policy.allowDepartmentIds.length > 0;
+        const hasAllowYards = policy.allowYardIds.length > 0;
+
+        if (!hasAllowDepts && !hasAllowYards) {
+          qb.andWhere('1 = 0');
+        } else {
+          qb.andWhere(
+            new Brackets((subQb) => {
+              if (hasAllowDepts && hasAllowYards) {
+                subQb
+                  .where('currentYard.department_id IN (:...authAllowUnitDeptIds)', {
+                    authAllowUnitDeptIds: policy.allowDepartmentIds,
+                  })
+                  .orWhere('unit.current_yard_id IN (:...authAllowUnitYardIds)', {
+                    authAllowUnitYardIds: policy.allowYardIds,
+                  });
+              } else if (hasAllowDepts) {
+                subQb.where('currentYard.department_id IN (:...authAllowUnitDeptIds)', {
+                  authAllowUnitDeptIds: policy.allowDepartmentIds,
+                });
+              } else {
+                subQb.where('unit.current_yard_id IN (:...authAllowUnitYardIds)', {
+                  authAllowUnitYardIds: policy.allowYardIds,
+                });
+              }
+            })
+          );
+        }
+      }
+
+      // DENY overrides ALLOW
+      const hasDenyDepts = policy.denyDepartmentIds.length > 0;
+      const hasDenyYards = policy.denyYardIds.length > 0;
+
+      if (hasDenyDepts || hasDenyYards) {
+        qb.andWhere(
+          new Brackets((subQb) => {
+            if (policy.allowAll) {
+              subQb.where('unit.current_yard_id IS NULL');
+            }
+            if (hasDenyDepts && hasDenyYards) {
+              subQb.orWhere(
+                '(currentYard.department_id NOT IN (:...authDenyUnitDeptIds) AND (unit.current_yard_id IS NULL OR unit.current_yard_id NOT IN (:...authDenyUnitYardIds)))',
+                {
+                  authDenyUnitDeptIds: policy.denyDepartmentIds,
+                  authDenyUnitYardIds: policy.denyYardIds,
+                }
+              );
+            } else if (hasDenyDepts) {
+              subQb.orWhere(
+                '(unit.current_yard_id IS NULL OR currentYard.department_id NOT IN (:...authDenyUnitDeptIds))',
+                {
+                  authDenyUnitDeptIds: policy.denyDepartmentIds,
+                }
+              );
+            } else if (hasDenyYards) {
+              subQb.orWhere(
+                '(unit.current_yard_id IS NULL OR unit.current_yard_id NOT IN (:...authDenyUnitYardIds))',
+                {
+                  authDenyUnitYardIds: policy.denyYardIds,
+                }
+              );
+            }
+          })
+        );
+      }
     }
 
     qb.orderBy('unit.order_line_id', 'ASC')
@@ -257,88 +366,80 @@ export class ProductionUnitService {
   /**
    * Retrieves paginated historical events for a single unit.
    *
-   * Invariants:
-   * 1. IDOR Protection: Verifies orderId matches unit.orderId and both are active (not soft deleted).
-   * 2. Row-level Authorization: User must have PRODUCTION_ORDER_VIEW permission.
-   * 3. Scoping Enforcement: Default Deny. If user is scoped to specific departments,
-   *    only events for those departments or general events are returned. DENY overrides ALLOW.
+   * Invariants & Security:
+   * 1. 3-level Authorization: Order active & accessible -> Unit belongs to order & accessible -> Event scoped.
+   * 2. Strict Typed Signature: (orderId, unitId, currentUser, query, manager).
+   * 3. IDOR Protection: Verifies orderId matches unit.orderId and both are active (not soft deleted).
+   * 4. Row-level Authorization: User must have PRODUCTION_ORDER_VIEW permission.
+   * 5. Scoping Enforcement: Default Deny. Scoped users see only events within allowed departments / their own events.
+   *    Administrative events are never leaked to scoped users. DENY overrides ALLOW.
    */
   async getUnitEvents(
-    orderIdOrUnitId: string,
-    maybeUnitId?: string,
-    currentUser?: AuthPrincipal,
+    orderId: string,
+    unitId: string,
+    currentUser: AuthPrincipal,
     query?: ListProductionUnitEventsQueryDto,
     manager?: EntityManager
-  ): Promise<any> {
+  ): Promise<PaginatedProductionUnitEventsResult> {
     const orderRepo = manager ? manager.getRepository(ProductionOrderEntity) : this.orderRepo;
     const unitRepo = manager ? manager.getRepository(ProductionUnitEntity) : this.unitRepo;
     const eventRepo = manager ? manager.getRepository(ProductionUnitEventEntity) : this.eventRepo;
 
-    let targetUnitId: string;
-    let expectedOrderId: string | null = null;
-
-    if (typeof maybeUnitId === 'string') {
-      expectedOrderId = orderIdOrUnitId;
-      targetUnitId = maybeUnitId;
-    } else {
-      targetUnitId = orderIdOrUnitId;
-    }
-
-    // 1. Verify unit exists and is not deleted
-    const unit = await unitRepo.findOne({
-      where: {
-        id: targetUnitId,
-        ...(expectedOrderId ? { orderId: expectedOrderId } : {}),
-        deletedAt: IsNull(),
-      },
-    });
-    if (!unit) {
-      throw new NotFoundError('الغرفة غير موجودة في أمر الإنتاج المحدد', 'PRODUCTION_UNIT_NOT_FOUND');
-    }
-
-    // 2. Verify order exists and is active
+    // 1. Level 1: Verify order exists and is active
     const order = await orderRepo.findOne({
-      where: { id: unit.orderId, deletedAt: IsNull() },
+      where: { id: orderId, deletedAt: IsNull() },
     });
     if (!order) {
       throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
     }
 
-    // 3. Resolve authorization policy for PRODUCTION_ORDER_VIEW if user provided
-    let policy = null;
-    if (currentUser) {
-      const rules = await this.authzService.getApplicableAccessRules(
-        currentUser,
-        SystemPermission.PRODUCTION_ORDER_VIEW
-      );
+    // 2. Level 2: Verify unit exists, belongs to order, and is active
+    const unit = await unitRepo.findOne({
+      where: {
+        id: unitId,
+        orderId,
+        deletedAt: IsNull(),
+      },
+      relations: { currentYard: true },
+    });
+    if (!unit) {
+      throw new NotFoundError('الغرفة غير موجودة في أمر الإنتاج المحدد', 'PRODUCTION_UNIT_NOT_FOUND');
+    }
 
-      const needsResponsibility = rules.some(
-        (r) => r.scopeType === 'PRODUCTION_DEPARTMENT' || r.scopeType === 'PRODUCTION_YARD'
-      );
+    // 3. Resolve authorization policy for PRODUCTION_ORDER_VIEW
+    if (!currentUser) {
+      throw new ForbiddenError('يجب تسجيل الدخول لعرض سجلات الأحداث', 'AUTHENTICATION_REQUIRED');
+    }
 
-      let responsibility: ProductionResponsibility = {
-        headDepartmentId: null,
-        engineerDepartmentId: null,
-        engineerYardIds: [],
-        isConsistent: true,
-      };
+    const rules = await this.authzService.getApplicableAccessRules(
+      currentUser,
+      SystemPermission.PRODUCTION_ORDER_VIEW
+    );
 
-      if (needsResponsibility) {
-        responsibility = await this.respResolver.resolve(currentUser);
+    const responsibility = await this.respResolver.resolve(currentUser);
+
+    const policy = this.policyService.resolvePolicy(
+      rules,
+      responsibility,
+      SystemPermission.PRODUCTION_ORDER_VIEW
+    );
+
+    if (policy.denyAll || !policy.hasAnyAccess) {
+      throw new ForbiddenError('ليس لديك صلاحية لعرض سجلات أحداث الغرفة', 'AUTHORIZATION_DENIED');
+    }
+
+    // Check unit-level access for scoped users if unit is assigned to a yard
+    if (!policy.allowAll && unit.currentYardId) {
+      const yardDeptId = unit.currentYard?.departmentId;
+      if (yardDeptId && policy.denyDepartmentIds.includes(yardDeptId)) {
+        throw new ForbiddenError('ليس لديك صلاحية للوصول إلى هذه الغرفة', 'AUTHORIZATION_DENIED');
       }
-
-      policy = this.policyService.resolvePolicy(
-        rules,
-        responsibility,
-        SystemPermission.PRODUCTION_ORDER_VIEW
-      );
-
-      if (policy.denyAll || !policy.hasAnyAccess) {
-        throw new ForbiddenError('ليس لديك صلاحية لعرض سجلات أحداث الغرفة', 'AUTHORIZATION_DENIED');
+      if (policy.denyYardIds.includes(unit.currentYardId)) {
+        throw new ForbiddenError('ليس لديك صلاحية للوصول إلى هذه الغرفة', 'AUTHORIZATION_DENIED');
       }
     }
 
-    // 4. Build query with row-level security and pagination
+    // 4. Level 3: Build query with row-level event security and pagination
     const page = query?.page && query.page > 0 ? query.page : 1;
     const limit = query?.limit && query.limit > 0 ? Math.min(query.limit, 100) : 50;
     const skip = (page - 1) * limit;
@@ -346,11 +447,9 @@ export class ProductionUnitService {
     const qb = eventRepo
       .createQueryBuilder('event')
       .leftJoinAndSelect('event.createdByUser', 'createdByUser')
-      .where('event.unit_id = :unitId', { unitId: targetUnitId });
+      .where('event.unit_id = :unitId', { unitId });
 
-    if (policy) {
-      applyUnitEventAccessScope(qb, policy, 'event');
-    }
+    applyUnitEventAccessScope(qb, policy, currentUser, responsibility, 'event');
 
     qb.orderBy('event.occurred_at', 'ASC')
       .addOrderBy('event.created_at', 'ASC')
@@ -377,10 +476,6 @@ export class ProductionUnitService {
       metadata: e.metadata,
       createdAt: e.createdAt,
     }));
-
-    if (!expectedOrderId && !currentUser) {
-      return items;
-    }
 
     return {
       items,

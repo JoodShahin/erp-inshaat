@@ -304,7 +304,11 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId } = req.params;
-      const plans = await this.executionPlanService.getPlansByOrderId(orderId as string);
+      const currentUser = (req as any).user;
+      const plans = await this.executionPlanService.getPlansByOrderId(
+        orderId as string,
+        currentUser
+      );
       res.status(200).json(ApiResponse.success(plans));
     } catch (error) {
       next(error);
@@ -318,7 +322,12 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId, planId } = req.params;
-      const plan = await this.executionPlanService.getPlanById(orderId as string, planId as string);
+      const currentUser = (req as any).user;
+      const plan = await this.executionPlanService.getPlanById(
+        orderId as string,
+        planId as string,
+        currentUser
+      );
       if (!plan) {
         throw new NotFoundError(
           'الخطة التنفيذية غير موجودة في أمر الإنتاج المحدد',
@@ -338,8 +347,13 @@ export class ProductionOrderController {
   ): Promise<void> => {
     try {
       const { orderId } = req.params;
+      const currentUser = (req as any).user;
       const query = req.query as any;
-      const units = await this.unitService.getUnitsByOrderId(orderId as string, query);
+      const units = await this.unitService.getUnitsByOrderId(
+        orderId as string,
+        currentUser,
+        query
+      );
       res.status(200).json(ApiResponse.success(units));
     } catch (error) {
       next(error);

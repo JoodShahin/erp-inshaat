@@ -412,23 +412,41 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
                 if (clause === '1 = 0') {
                   whereFilters.push(() => false);
                 }
-                if (clause.includes('department_id IS NULL') && clause.includes('authAllowEventDeptIds')) {
-                  whereFilters.push((item) => !item.departmentId || params.authAllowEventDeptIds?.includes(item.departmentId));
+                if (clause.includes('event_type NOT IN')) {
+                  whereFilters.push((item) => !params.authAdminEventTypes?.includes(item.eventType));
                 }
-                if (clause.includes('authDenyEventDeptIds')) {
+                if (clause.includes('created_by_user_id = :authUserId')) {
+                  whereFilters.push((item) => item.createdByUserId === params.authUserId);
+                }
+                if (clause.includes('department_id IN (:...authAllowEventDeptIds)')) {
+                  whereFilters.push((item) => item.departmentId && params.authAllowEventDeptIds?.includes(item.departmentId));
+                }
+                if (clause.includes('department_id NOT IN (:...authDenyEventDeptIds)')) {
                   whereFilters.push((item) => !item.departmentId || !params.authDenyEventDeptIds?.includes(item.departmentId));
+                }
+                if (clause.includes('authDenyUnitDeptIds')) {
+                  whereFilters.push((item) => !item.currentYard?.departmentId || !params.authDenyUnitDeptIds?.includes(item.currentYard.departmentId));
+                }
+                if (clause.includes('authDenyUnitYardIds')) {
+                  whereFilters.push((item) => !item.currentYardId || !params.authDenyUnitYardIds?.includes(item.currentYardId));
                 }
               } else if (clause && typeof clause === 'object' && clause['whereFactory']) {
                 const subQb: any = {
                   where: (subClause: string, subParams?: any) => {
-                    if (subClause.includes('department_id IS NULL') && subParams?.authAllowEventDeptIds) {
-                      whereFilters.push((item) => !item.departmentId || subParams.authAllowEventDeptIds.includes(item.departmentId));
+                    if (subClause.includes('currentYard.department_id IN') && subParams?.authAllowUnitDeptIds) {
+                      whereFilters.push((item) => item.currentYard?.departmentId && subParams.authAllowUnitDeptIds.includes(item.currentYard.departmentId));
+                    }
+                    if (subClause.includes('unit.current_yard_id IN') && subParams?.authAllowUnitYardIds) {
+                      whereFilters.push((item) => item.currentYardId && subParams.authAllowUnitYardIds.includes(item.currentYardId));
+                    }
+                    if (subClause.includes('department_id NOT IN') && subParams?.authDenyEventDeptIds) {
+                      whereFilters.push((item) => !item.departmentId || !subParams.authDenyEventDeptIds.includes(item.departmentId));
                     }
                     return subQb;
                   },
                   orWhere: (subClause: string, subParams?: any) => {
-                    if (subParams?.authAllowEventDeptIds) {
-                      whereFilters.push((item) => !item.departmentId || subParams.authAllowEventDeptIds.includes(item.departmentId));
+                    if (subClause.includes('unit.current_yard_id IN') && subParams?.authAllowUnitYardIds) {
+                      whereFilters.push((item) => (item.currentYardId && subParams.authAllowUnitYardIds.includes(item.currentYardId)) || (item.currentYard?.departmentId && subParams.authAllowUnitDeptIds?.includes(item.currentYard.departmentId)));
                     }
                     if (subParams?.authDenyEventDeptIds) {
                       whereFilters.push((item) => !item.departmentId || !subParams.authDenyEventDeptIds.includes(item.departmentId));
@@ -502,21 +520,26 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       transaction: async (cb: any) => cb(mockManager),
     };
 
-    const guardService = new ProductionOrderGuardService(mockDataSource);
-    const planService = new ProductionExecutionPlanService(mockDataSource);
     const mockAuthzService: any = {
       getApplicableAccessRules: async (principal: any) => {
         return principal?.accessRules || [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }];
       },
     };
     const mockRespResolver: any = {
-      resolve: async () => ({
-        headDepartmentId: null,
-        engineerDepartmentId: null,
-        engineerYardIds: [],
+      resolve: async (user: any) => ({
+        headDepartmentId: user?.headDepartmentId || null,
+        engineerDepartmentId: user?.engineerDepartmentId || null,
+        engineerYardIds: user?.engineerYardIds || [],
         isConsistent: true,
       }),
     };
+    const guardService = new ProductionOrderGuardService(mockDataSource);
+    const planService = new ProductionExecutionPlanService(
+      mockDataSource,
+      mockAuthzService,
+      productionAccessPolicyService,
+      mockRespResolver
+    );
     const unitService = new ProductionUnitService(
       mockDataSource,
       mockAuthzService,
@@ -949,11 +972,15 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       createdAt: now,
     });
 
-    const events = await unitService.getUnitEvents('unit-1');
-    assert.equal(events.length, 1);
-    assert.equal(events[0].eventType, 'UNIT_CREATED');
-    assert.equal(events[0].createdByUser?.fullName, 'مهندس أحمد');
-    assert.equal(events[0].correlationId, 'corr-batch-1');
+    const adminUser = {
+      id: 'user-admin',
+      accessRules: [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }],
+    } as any;
+    const events = await unitService.getUnitEvents('order-100', 'unit-1', adminUser);
+    assert.equal(events.items.length, 1);
+    assert.equal(events.items[0].eventType, 'UNIT_CREATED');
+    assert.equal(events.items[0].createdByUser?.fullName, 'مهندس أحمد');
+    assert.equal(events.items[0].correlationId, 'corr-batch-1');
   });
 
   // ==========================================
@@ -1276,7 +1303,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     const adminRes = await unitService.getUnitEvents('order-100', 'unit-scope-1', adminUser);
     assert.equal(adminRes.items.length, 3);
 
-    // Case B: User scoped to castingDeptId sees general event + casting event (2 events)
+    // Case B: Department Head scoped to castingDeptId sees ONLY casting event (1 event) - administrative UNIT_CREATED is not leaked
     const castingUser = {
       id: 'eng-casting',
       accessRules: [
@@ -1291,8 +1318,9 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       ],
     } as any;
     const castingRes = await unitService.getUnitEvents('order-100', 'unit-scope-1', castingUser);
-    assert.equal(castingRes.items.length, 2);
-    assert.ok(castingRes.items.every((e: any) => !e.departmentId || e.departmentId === castingDeptId));
+    assert.equal(castingRes.items.length, 1);
+    assert.equal(castingRes.items[0].id, 'ev-2');
+    assert.equal(castingRes.items[0].departmentId, castingDeptId);
 
     // Case C: User with DENY castingDeptId sees general event + finishing event
     const denyCastingUser = {
@@ -1399,5 +1427,196 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
 
     await migration.down(mockQueryRunner);
     assert.equal(droppedColumn, 'specifications');
+  });
+
+  // ==========================================
+  // SCENARIO 23: Engineer Role Sees Only Their Own Events
+  // ==========================================
+  it('23. Engineer role sees only events created by them, excluding administrative events', async () => {
+    const { unitService, store } = createTestContext();
+    const now = new Date();
+    const deptId = randomUUID();
+    const yardId = randomUUID();
+
+    store.units.push({
+      id: 'unit-eng-test',
+      orderId: 'order-100',
+      orderLineId: 'line-1',
+      planId: 'plan-1',
+      unitSequence: 1,
+      unitNumber: 'PO-000100-L1-U001',
+      status: ProductionUnitStatus.CREATED,
+      currentYardId: yardId,
+      currentYard: { id: yardId, departmentId: deptId },
+      isCancelled: false,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Event 1: Administrative (created by system/admin)
+    store.events.push({
+      id: 'ev-admin-1',
+      unitId: 'unit-eng-test',
+      eventType: ProductionUnitEventType.UNIT_CREATED,
+      createdByUserId: 'admin-user',
+      departmentId: null,
+      occurredAt: now,
+      createdAt: now,
+    });
+
+    // Event 2: Created by Engineer A
+    store.events.push({
+      id: 'ev-eng-a',
+      unitId: 'unit-eng-test',
+      eventType: ProductionUnitEventType.TASK_STATUS_CHANGED,
+      createdByUserId: 'eng-user-a',
+      departmentId: deptId,
+      occurredAt: new Date(now.getTime() + 1000),
+      createdAt: new Date(now.getTime() + 1000),
+    });
+
+    // Event 3: Created by Engineer B
+    store.events.push({
+      id: 'ev-eng-b',
+      unitId: 'unit-eng-test',
+      eventType: ProductionUnitEventType.TASK_STATUS_CHANGED,
+      createdByUserId: 'eng-user-b',
+      departmentId: deptId,
+      occurredAt: new Date(now.getTime() + 2000),
+      createdAt: new Date(now.getTime() + 2000),
+    });
+
+    // Mock responsibility resolver for Engineer A
+    const engineerUserA = {
+      id: 'eng-user-a',
+      accessRules: [
+        {
+          scopeType: 'PRODUCTION_YARD',
+          effect: 'ALLOW',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            yardIds: [yardId],
+          },
+        },
+      ],
+    } as any;
+
+    const resA = await unitService.getUnitEvents('order-100', 'unit-eng-test', engineerUserA);
+    // Engineer A must see ONLY their own event (ev-eng-a)
+    // Administrative event (ev-admin-1) is strictly hidden
+    // Other engineer's event (ev-eng-b) is strictly hidden
+    assert.equal(resA.items.length, 1);
+    assert.equal(resA.items[0].id, 'ev-eng-a');
+    assert.equal(resA.items[0].createdByUserId, 'eng-user-a');
+  });
+
+  // ==========================================
+  // SCENARIO 24: Unit Scoping in getUnitsByOrderId
+  // ==========================================
+  it('24. getUnitsByOrderId restricts units to accessible yards and departments for scoped users', async () => {
+    const { unitService, store } = createTestContext();
+    const now = new Date();
+    const deptA = randomUUID();
+    const deptB = randomUUID();
+    const yardA = randomUUID();
+    const yardB = randomUUID();
+
+    // Unit 1: Yard A (Dept A)
+    store.units.push({
+      id: 'u-1',
+      orderId: 'order-100',
+      orderLineId: 'line-1',
+      planId: 'plan-1',
+      unitSequence: 1,
+      unitNumber: 'PO-000100-L1-U001',
+      status: ProductionUnitStatus.CREATED,
+      currentYardId: yardA,
+      currentYard: { id: yardA, departmentId: deptA },
+      isCancelled: false,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Unit 2: Yard B (Dept B)
+    store.units.push({
+      id: 'u-2',
+      orderId: 'order-100',
+      orderLineId: 'line-1',
+      planId: 'plan-1',
+      unitSequence: 2,
+      unitNumber: 'PO-000100-L1-U002',
+      status: ProductionUnitStatus.CREATED,
+      currentYardId: yardB,
+      currentYard: { id: yardB, departmentId: deptB },
+      isCancelled: false,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Admin sees both units
+    const adminUser = {
+      id: 'admin',
+      accessRules: [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }],
+    } as any;
+    const adminUnits = await unitService.getUnitsByOrderId('order-100', adminUser);
+    assert.equal(adminUnits.items.length, 2);
+
+    // User scoped to Yard A sees only Unit 1
+    const yardAUser = {
+      id: 'yard-a-eng',
+      accessRules: [
+        {
+          scopeType: 'PRODUCTION_YARD',
+          effect: 'ALLOW',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            yardIds: [yardA],
+          },
+        },
+      ],
+    } as any;
+    const yardAUnits = await unitService.getUnitsByOrderId('order-100', yardAUser);
+    assert.equal(yardAUnits.items.length, 1);
+    assert.equal(yardAUnits.items[0].id, 'u-1');
+  });
+
+  // ==========================================
+  // SCENARIO 25: Execution Plan Authorization Enforcement
+  // ==========================================
+  it('25. getPlansByOrderId and getPlanById enforce PRODUCTION_ORDER_VIEW and fail closed on unauthorized user', async () => {
+    const { planService, store } = createTestContext();
+
+    store.orders.push({ id: 'order-100', deletedAt: null } as any);
+    store.plans.push({ id: 'plan-1', orderId: 'order-100', lineQuantity: 1, deletedAt: null } as any);
+
+    const noAccessUser = {
+      id: 'user-forbidden',
+      accessRules: [],
+    } as any;
+
+    await assert.rejects(
+      async () => {
+        await planService.getPlansByOrderId('order-100', noAccessUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      async () => {
+        await planService.getPlanById('order-100', 'plan-1', noAccessUser);
+      },
+      (err: any) => {
+        assert.equal(err.name, 'ForbiddenError');
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
+        return true;
+      }
+    );
   });
 });

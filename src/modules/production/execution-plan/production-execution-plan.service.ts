@@ -36,13 +36,33 @@ import {
 } from './production-execution-plan.types.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { ForbiddenError } from '../../../common/errors/forbidden.error.js';
+import { AuthPrincipal } from '../../system/auth/auth.types.js';
+import {
+  authorizationService,
+  AuthorizationService,
+} from '../../system/authorization/authorization.service.js';
+import {
+  productionAccessPolicyService,
+  ProductionAccessPolicyService,
+} from '../authorization/production-access-policy.service.js';
+import {
+  productionResponsibilityResolver,
+  ProductionResponsibilityResolver,
+} from '../authorization/production-responsibility.resolver.js';
+import { SystemPermission } from '../../system/permission/constants/system-permission.enum.js';
 
 export class ProductionExecutionPlanService {
   private orderRepo: Repository<ProductionOrderEntity>;
   private planRepo: Repository<ProductionExecutionPlanEntity>;
   private taskRepo: Repository<ProductionExecutionTaskEntity>;
 
-  constructor(private dataSource: DataSource = AppDataSource) {
+  constructor(
+    private dataSource: DataSource = AppDataSource,
+    private authzService: AuthorizationService = authorizationService,
+    private policyService: ProductionAccessPolicyService = productionAccessPolicyService,
+    private respResolver: ProductionResponsibilityResolver = productionResponsibilityResolver
+  ) {
     this.orderRepo = this.dataSource.getRepository(ProductionOrderEntity);
     this.planRepo = this.dataSource.getRepository(ProductionExecutionPlanEntity);
     this.taskRepo = this.dataSource.getRepository(ProductionExecutionTaskEntity);
@@ -99,7 +119,7 @@ export class ProductionExecutionPlanService {
     const template = await templateRepo.findOne({
       where: { id: line.templateId },
       withDeleted: true,
-    });
+          });
     if (!template) {
       throw new BusinessRuleError(
         `القالب المرجعي للبند #${line.sortOrder} غير موجود`,
@@ -476,6 +496,7 @@ export class ProductionExecutionPlanService {
    */
   async getPlansByOrderId(
     orderId: string,
+    currentUser?: AuthPrincipal,
     manager?: EntityManager
   ): Promise<ExecutionPlanDto[]> {
     const orderRepo = manager ? manager.getRepository(ProductionOrderEntity) : this.orderRepo;
@@ -487,6 +508,25 @@ export class ProductionExecutionPlanService {
     });
     if (!order) {
       throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
+    }
+
+    if (currentUser) {
+      const rules = await this.authzService.getApplicableAccessRules(
+        currentUser,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+      const responsibility = await this.respResolver.resolve(currentUser);
+      const policy = this.policyService.resolvePolicy(
+        rules,
+        responsibility,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+      if (policy.denyAll || !policy.hasAnyAccess) {
+        throw new ForbiddenError(
+          'ليس لديك صلاحية لعرض الخطط التنفيذية لأمر الإنتاج',
+          'AUTHORIZATION_DENIED'
+        );
+      }
     }
 
     const plans = await planRepo.find({
@@ -523,7 +563,8 @@ export class ProductionExecutionPlanService {
    */
   async getPlanById(
     orderIdOrPlanId: string,
-    maybePlanId?: string,
+    maybePlanIdOrUser?: string | AuthPrincipal,
+    maybeUser?: AuthPrincipal,
     manager?: EntityManager
   ): Promise<ExecutionPlanDto | null> {
     const orderRepo = manager ? manager.getRepository(ProductionOrderEntity) : this.orderRepo;
@@ -532,12 +573,17 @@ export class ProductionExecutionPlanService {
 
     let targetPlanId: string;
     let expectedOrderId: string | null = null;
+    let currentUser: AuthPrincipal | undefined;
 
-    if (typeof maybePlanId === 'string') {
+    if (typeof maybePlanIdOrUser === 'string') {
       expectedOrderId = orderIdOrPlanId;
-      targetPlanId = maybePlanId;
+      targetPlanId = maybePlanIdOrUser;
+      currentUser = maybeUser;
     } else {
       targetPlanId = orderIdOrPlanId;
+      if (maybePlanIdOrUser && typeof maybePlanIdOrUser === 'object' && 'id' in maybePlanIdOrUser) {
+        currentUser = maybePlanIdOrUser as AuthPrincipal;
+      }
     }
 
     const plan = await planRepo.findOne({
@@ -555,6 +601,25 @@ export class ProductionExecutionPlanService {
     });
     if (!order) {
       throw new NotFoundError('طلب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_NOT_FOUND');
+    }
+
+    if (currentUser) {
+      const rules = await this.authzService.getApplicableAccessRules(
+        currentUser,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+      const responsibility = await this.respResolver.resolve(currentUser);
+      const policy = this.policyService.resolvePolicy(
+        rules,
+        responsibility,
+        SystemPermission.PRODUCTION_ORDER_VIEW
+      );
+      if (policy.denyAll || !policy.hasAnyAccess) {
+        throw new ForbiddenError(
+          'ليس لديك صلاحية لعرض الخطة التنفيذية لأمر الإنتاج',
+          'AUTHORIZATION_DENIED'
+        );
+      }
     }
 
     const tasks = await taskRepo.find({
