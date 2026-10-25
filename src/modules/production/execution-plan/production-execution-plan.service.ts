@@ -649,7 +649,7 @@ export class ProductionExecutionPlanService {
       if (policy) {
         planTasks = planTasks.filter((t) => canAccessExecutionTask(policy, t));
       }
-      return this.toPlanDto(p, planTasks);
+      return this.toPlanDto(p, planTasks, policy);
     });
   }
 
@@ -729,16 +729,41 @@ export class ProductionExecutionPlanService {
       visibleTasks = tasks.filter((t) => canAccessExecutionTask(policy, t));
     }
 
-    return this.toPlanDto(plan, visibleTasks);
+    return this.toPlanDto(plan, visibleTasks, policy);
   }
 
   /**
-   * Converts entity to clean client DTO without leaking internal ORM state.
+   * Converts entity to clean client DTO without leaking internal ORM state or out-of-scope details.
+   * Filters nested availablePatternOptions and tasks based on the resolved access policy.
    */
   private toPlanDto(
     plan: ProductionExecutionPlanEntity,
-    tasks: ProductionExecutionTaskEntity[]
+    tasks: ProductionExecutionTaskEntity[],
+    policy?: ResolvedProductionAccessPolicy | null
   ): ExecutionPlanDto {
+    let authorizedPatternOptions: ExecutionPlanPatternOptionSnapshot[] | null = null;
+
+    if (plan.availablePatternOptions && plan.availablePatternOptions.length > 0) {
+      if (policy) {
+        const filteredOptions: ExecutionPlanPatternOptionSnapshot[] = [];
+        for (const opt of plan.availablePatternOptions) {
+          const visibleOptionTasks = (opt.tasks || []).filter((t) => canAccessExecutionTask(policy, t));
+          // If option has zero visible tasks for the user, omit the entire option to avoid leaking its name/existence
+          if (visibleOptionTasks.length > 0) {
+            filteredOptions.push({
+              ...opt,
+              tasks: visibleOptionTasks,
+            });
+          }
+        }
+        authorizedPatternOptions = filteredOptions;
+      } else {
+        authorizedPatternOptions = plan.availablePatternOptions;
+      }
+    } else if (plan.availablePatternOptions) {
+      authorizedPatternOptions = [];
+    }
+
     return {
       id: plan.id,
       orderId: plan.orderId,
@@ -752,7 +777,7 @@ export class ProductionExecutionPlanService {
       configurationHash: plan.configurationHash,
       patternSummary: plan.patternSummary,
       specifications: plan.specifications,
-      availablePatternOptions: plan.availablePatternOptions,
+      availablePatternOptions: authorizedPatternOptions,
       tasksCount: tasks.length,
       unitsCount: plan.lineQuantity,
       tasks: tasks.map(this.toTaskDto),

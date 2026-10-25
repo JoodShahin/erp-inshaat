@@ -1,6 +1,8 @@
 import { ExecutionTaskSource } from './production-execution-task.entity.js';
+import { ExecutionPlanPatternOptionSnapshot } from './production-execution-plan.entity.js';
 
 export { ExecutionTaskSource } from './production-execution-task.entity.js';
+export { ExecutionPlanPatternOptionSnapshot } from './production-execution-plan.entity.js';
 
 export interface ExecutionTaskDto {
   id: string;
@@ -68,7 +70,7 @@ export interface ExecutionPlanDto {
   configurationHash: string;
   patternSummary: ExecutionPlanPatternSummaryDto[] | null;
   specifications?: ExecutionPlanSpecificationSnapshot[] | null;
-  availablePatternOptions?: any[] | null;
+  availablePatternOptions?: ExecutionPlanPatternOptionSnapshot[] | null;
   tasksCount: number;
   unitsCount: number;
   tasks?: ExecutionTaskDto[];

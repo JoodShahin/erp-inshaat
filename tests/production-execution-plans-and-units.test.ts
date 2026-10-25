@@ -1696,4 +1696,285 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     await migration.up(fakeQueryRunner);
     assert.equal(addedColumnName, 'available_pattern_options');
   });
+
+  // ==========================================
+  // SCENARIO 27: Execution Plan Nested Data & Available Pattern Options Security Authorization
+  // ==========================================
+  it('27. getPlansByOrderId and getPlanById securely filter availablePatternOptions and tasks by department scope', async () => {
+    const { planService, store } = createTestContext();
+
+    const deptA = '11111111-1111-4111-8111-111111111111';
+    const deptB = '22222222-2222-4222-8222-222222222222';
+    const deptC = '33333333-3333-4333-8333-333333333333';
+
+    store.orders.push({ id: 'order-sec-1', deletedAt: null } as any);
+
+    // Create a plan with main tasks across Dept A and Dept B
+    const planId = 'plan-sec-1';
+    store.plans.push({
+      id: planId,
+      orderId: 'order-sec-1',
+      orderLineId: 'line-sec-1',
+      templateId: 'tmpl-room-a',
+      templateName: 'قالب غرفة نموذج أ',
+      templateCode: 'TMPL-RM-A',
+      templateReferenceNumber: 'REF-001',
+      templateDescription: 'مواصفات',
+      lineQuantity: 2,
+      configurationHash: 'hash-sec-1',
+      patternSummary: [],
+      specifications: [],
+      availablePatternOptions: [
+        {
+          patternId: 'pat-1',
+          patternName: 'نمط التجهيزات',
+          optionId: 'opt-hybrid',
+          optionName: 'خيار هجين (صب وكهرباء)',
+          isActiveSelection: true,
+          tasks: [
+            {
+              taskId: 'task-opt-a',
+              name: 'صب مسبق',
+              description: 'مهمة صب تتبع قسم الصب',
+              departmentId: deptA,
+              sortOrder: 1,
+              estimatedDurationMinutes: 60,
+              estimatedCost: '200.0000',
+              plannedMaterials: [{ productId: 'p1', productUnitId: 'u1', plannedQuantity: '5' }],
+              attachments: [{ originalFileName: 'drawing-casting.pdf', storageKey: 'k1', mimeType: 'application/pdf', sizeBytes: 1024, description: null, sortOrder: 1 }],
+            },
+            {
+              taskId: 'task-opt-b',
+              name: 'تمديدات كهربائية مسبقة',
+              description: 'مهمة كهرباء تتبع قسم الكهرباء',
+              departmentId: deptB,
+              sortOrder: 2,
+              estimatedDurationMinutes: 90,
+              estimatedCost: '450.0000',
+              plannedMaterials: [{ productId: 'p2', productUnitId: 'u2', plannedQuantity: '10' }],
+              attachments: [{ originalFileName: 'wire-diagram.pdf', storageKey: 'k2', mimeType: 'application/pdf', sizeBytes: 2048, description: null, sortOrder: 2 }],
+            },
+          ],
+        },
+        {
+          patternId: 'pat-1',
+          patternName: 'نمط التجهيزات',
+          optionId: 'opt-finishing-casting',
+          optionName: 'خيار تشطيب وصب',
+          isActiveSelection: false,
+          tasks: [
+            {
+              taskId: 'task-opt-c',
+              name: 'صقل وتشطيب أولي',
+              description: 'مهمة تتبع التشطيب',
+              departmentId: deptC,
+              sortOrder: 1,
+              estimatedDurationMinutes: 40,
+              estimatedCost: '120.0000',
+              plannedMaterials: null,
+              attachments: null,
+            },
+            {
+              taskId: 'task-opt-d',
+              name: 'صب كمرات إضافية',
+              description: 'مهمة صب إضافية',
+              departmentId: deptA,
+              sortOrder: 2,
+              estimatedDurationMinutes: 50,
+              estimatedCost: '180.0000',
+              plannedMaterials: null,
+              attachments: null,
+            },
+          ],
+        },
+        {
+          patternId: 'pat-2',
+          patternName: 'نمط الإنارة المتقدم',
+          optionId: 'opt-electrical-only',
+          optionName: 'خيار كهرباء حصري',
+          isActiveSelection: false,
+          tasks: [
+            {
+              taskId: 'task-opt-e',
+              name: 'تركيب لوحة توزيع',
+              description: 'كهرباء فقط',
+              departmentId: deptB,
+              sortOrder: 1,
+              estimatedDurationMinutes: 120,
+              estimatedCost: '800.0000',
+              plannedMaterials: [{ productId: 'p3', productUnitId: 'u3', plannedQuantity: '1' }],
+              attachments: null,
+            },
+          ],
+        },
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
+    } as any);
+
+    // Main tasks for plan
+    store.tasks.push(
+      {
+        id: 'main-task-1',
+        planId,
+        name: 'المهمة الأساسية للصب',
+        departmentId: deptA,
+        departmentName: 'قسم الصب',
+        sortOrder: 1,
+        taskSource: 'STAGE',
+        sourceStageId: 'st-1',
+        isActive: true,
+        archivedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+      } as any,
+      {
+        id: 'main-task-2',
+        planId,
+        name: 'المهمة الأساسية للكهرباء',
+        departmentId: deptB,
+        departmentName: 'قسم الكهرباء',
+        sortOrder: 2,
+        taskSource: 'STAGE',
+        sourceStageId: 'st-2',
+        isActive: true,
+        archivedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+      } as any
+    );
+
+    // 1. User scoped to Dept A (Casting Department Head)
+    const deptAUser = {
+      id: 'head-dept-a',
+      accessRules: [
+        {
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'ALLOW',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            departmentIds: [deptA],
+          },
+        },
+      ],
+    } as any;
+
+    const [plansForDeptA] = await planService.getPlansByOrderId('order-sec-1', deptAUser);
+    const planByIdForDeptA = await planService.getPlanById('order-sec-1', planId, deptAUser);
+
+    // Consistency check: getPlansByOrderId and getPlanById must match exactly
+    assert.deepEqual(plansForDeptA, planByIdForDeptA);
+
+    // Main tasks check: only deptA task is visible, tasksCount is 1 (never leaks hidden count)
+    assert.equal(plansForDeptA.tasksCount, 1);
+    assert.equal(plansForDeptA.tasks?.length, 1);
+    assert.equal(plansForDeptA.tasks?.[0].id, 'main-task-1');
+    assert.equal(plansForDeptA.tasks?.[0].departmentId, deptA);
+
+    // availablePatternOptions check for Dept A:
+    // - opt-hybrid: contains ONLY task-opt-a (Dept A). task-opt-b (Dept B) is completely stripped!
+    // - opt-finishing-casting: contains ONLY task-opt-d (Dept A). task-opt-c (Dept C) is completely stripped!
+    // - opt-electrical-only: ZERO visible tasks -> COMPLETELY OMITTED from availablePatternOptions!
+    assert.equal(plansForDeptA.availablePatternOptions?.length, 2);
+
+    const hybridOptA = plansForDeptA.availablePatternOptions?.find((o) => o.optionId === 'opt-hybrid');
+    assert.ok(hybridOptA, 'opt-hybrid must be present because it contains a Dept A task');
+    assert.equal(hybridOptA.tasks.length, 1);
+    assert.equal(hybridOptA.tasks[0].taskId, 'task-opt-a');
+    assert.equal(hybridOptA.tasks[0].departmentId, deptA);
+    // Ensure Dept B task is absent
+    assert.ok(!hybridOptA.tasks.some((t: any) => t.departmentId === deptB));
+
+    const finishingCastingOptA = plansForDeptA.availablePatternOptions?.find((o) => o.optionId === 'opt-finishing-casting');
+    assert.ok(finishingCastingOptA, 'opt-finishing-casting must be present because it contains a Dept A task');
+    assert.equal(finishingCastingOptA.tasks.length, 1);
+    assert.equal(finishingCastingOptA.tasks[0].taskId, 'task-opt-d');
+    assert.equal(finishingCastingOptA.tasks[0].departmentId, deptA);
+    // Ensure Dept C task is absent
+    assert.ok(!finishingCastingOptA.tasks.some((t: any) => t.departmentId === deptC));
+
+    const electricalOnlyOptA = plansForDeptA.availablePatternOptions?.find((o) => o.optionId === 'opt-electrical-only');
+    assert.equal(electricalOnlyOptA, undefined, 'opt-electrical-only must be omitted completely because it has zero Dept A tasks');
+
+    // 2. User scoped to Dept C (Finishing Department Head)
+    const deptCUser = {
+      id: 'head-dept-c',
+      accessRules: [
+        {
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'ALLOW',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            departmentIds: [deptC],
+          },
+        },
+      ],
+    } as any;
+
+    const [plansForDeptC] = await planService.getPlansByOrderId('order-sec-1', deptCUser);
+    assert.equal(plansForDeptC.tasksCount, 0, 'Dept C has no main tasks -> tasksCount must be 0');
+    assert.equal(plansForDeptC.tasks?.length, 0);
+
+    // Only opt-finishing-casting has a Dept C task; others have zero visible tasks and must be omitted!
+    assert.equal(plansForDeptC.availablePatternOptions?.length, 1);
+    assert.equal(plansForDeptC.availablePatternOptions?.[0].optionId, 'opt-finishing-casting');
+    assert.equal(plansForDeptC.availablePatternOptions?.[0].tasks.length, 1);
+    assert.equal(plansForDeptC.availablePatternOptions?.[0].tasks[0].taskId, 'task-opt-c');
+
+    // 3. Admin User (ALLOW ALL)
+    const adminUser = {
+      id: 'admin-user',
+      accessRules: [{ scopeType: 'ALL', effect: 'ALLOW', scope: null }],
+    } as any;
+
+    const [adminPlan] = await planService.getPlansByOrderId('order-sec-1', adminUser);
+    assert.equal(adminPlan.tasksCount, 2);
+    assert.equal(adminPlan.tasks?.length, 2);
+    assert.equal(adminPlan.availablePatternOptions?.length, 3, 'Admin sees all 3 available options');
+    const adminHybrid = adminPlan.availablePatternOptions?.find((o) => o.optionId === 'opt-hybrid');
+    assert.equal(adminHybrid.tasks.length, 2, 'Admin sees both Dept A and Dept B tasks in hybrid option');
+
+    // 4. Admin User with DENY deptB (Electrical)
+    const adminDenyDeptBUser = {
+      id: 'admin-deny-dept-b',
+      accessRules: [
+        { scopeType: 'ALL', effect: 'ALLOW', scope: null },
+        {
+          scopeType: 'PRODUCTION_DEPARTMENT',
+          effect: 'DENY',
+          scope: {
+            source: 'SPECIFIC_IDS',
+            departmentIds: [deptB],
+          },
+        },
+      ],
+    } as any;
+
+    const [adminDenyPlan] = await planService.getPlansByOrderId('order-sec-1', adminDenyDeptBUser);
+    // Main tasks: Dept B task denied, only Dept A visible -> tasksCount is 1
+    assert.equal(adminDenyPlan.tasksCount, 1);
+    assert.equal(adminDenyPlan.tasks?.length, 1);
+    assert.equal(adminDenyPlan.tasks?.[0].id, 'main-task-1');
+
+    // availablePatternOptions:
+    // opt-hybrid has Dept B task stripped -> Dept A task only
+    // opt-finishing-casting has Dept C and Dept A tasks -> intact
+    // opt-electrical-only has ONLY Dept B task -> DENIED -> 0 visible tasks -> OMITTED completely!
+    assert.equal(adminDenyPlan.availablePatternOptions?.length, 2);
+    assert.ok(adminDenyPlan.availablePatternOptions?.some((o) => o.optionId === 'opt-hybrid'));
+    assert.ok(adminDenyPlan.availablePatternOptions?.some((o) => o.optionId === 'opt-finishing-casting'));
+    assert.ok(!adminDenyPlan.availablePatternOptions?.some((o) => o.optionId === 'opt-electrical-only'));
+
+    // 5. Database entity integrity check:
+    // Stored entity in store.plans must remain 100% UNTOUCHED!
+    const storedEntity = store.plans.find((p) => p.id === planId);
+    assert.equal(storedEntity.availablePatternOptions.length, 3, 'Stored snapshot must keep all 3 options');
+    const storedHybrid = storedEntity.availablePatternOptions.find((o: any) => o.optionId === 'opt-hybrid');
+    assert.equal(storedHybrid.tasks.length, 2, 'Stored snapshot must keep all tasks intact in DB');
+    assert.ok(storedHybrid.tasks[1].plannedMaterials, 'Stored materials snapshot must not be mutated');
+    assert.ok(storedHybrid.tasks[1].attachments, 'Stored attachments snapshot must not be mutated');
+  });
 });

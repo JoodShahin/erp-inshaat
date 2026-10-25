@@ -436,6 +436,59 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         templateCode: 'TMPL-SEC-01',
         lineQuantity: 3,
         configurationHash: '3333333333333333333333333333333333333333333333333333333333333333',
+        availablePatternOptions: [
+          {
+            patternId: 'pat-it-1',
+            patternName: 'نمط تكامل بديل',
+            optionId: 'opt-it-hybrid',
+            optionName: 'خيار هجين صب وتشطيب',
+            isActiveSelection: true,
+            tasks: [
+              {
+                taskId: 'task-it-opt-a',
+                name: 'مهمة صب بديلة',
+                description: 'تابعة لقسم الصب',
+                departmentId: testDeptAId,
+                sortOrder: 1,
+                estimatedDurationMinutes: 50,
+                estimatedCost: '150.0000',
+                plannedMaterials: null,
+                attachments: null,
+              },
+              {
+                taskId: 'task-it-opt-b',
+                name: 'مهمة تشطيب بديلة',
+                description: 'تابعة لقسم التشطيب',
+                departmentId: testDeptBId,
+                sortOrder: 2,
+                estimatedDurationMinutes: 70,
+                estimatedCost: '220.0000',
+                plannedMaterials: null,
+                attachments: null,
+              },
+            ],
+          },
+          {
+            patternId: 'pat-it-1',
+            patternName: 'نمط تكامل بديل',
+            optionId: 'opt-it-deptb-only',
+            optionName: 'خيار تشطيب حصري',
+            isActiveSelection: false,
+            tasks: [
+              {
+                taskId: 'task-it-opt-c',
+                name: 'مهمة تلميع تشطيب',
+                description: 'تشطيب فقط',
+                departmentId: testDeptBId,
+                sortOrder: 1,
+                estimatedDurationMinutes: 40,
+                estimatedCost: '90.0000',
+                plannedMaterials: null,
+                attachments: null,
+              },
+            ],
+          },
+        ],
       })
     );
 
@@ -814,12 +867,40 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
     assert.equal(filteredPlans[0].tasks.length, 1);
     assert.equal(filteredPlans[0].tasks[0].id, task1Id);
     assert.equal(filteredPlans[0].tasks[0].departmentId, testDeptAId);
+    // availablePatternOptions for DENY Dept B: Dept B tasks stripped, Dept B only option omitted
+    assert.equal(filteredPlans[0].availablePatternOptions?.length, 1);
+    assert.equal(filteredPlans[0].availablePatternOptions?.[0].optionId, 'opt-it-hybrid');
+    assert.equal(filteredPlans[0].availablePatternOptions?.[0].tasks.length, 1);
+    assert.equal(filteredPlans[0].availablePatternOptions?.[0].tasks[0].departmentId, testDeptAId);
 
-    // 11b. Execution plan task scoping for Scoped Department Head: sees only Dept A tasks
+    // 11b. Execution plan task scoping for Scoped Department Head: sees only Dept A tasks and Dept A alternative options
     const headDeptAPlans = await planService.getPlansByOrderId(orderId, headDeptAUser);
     assert.equal(headDeptAPlans.length, 1);
     assert.equal(headDeptAPlans[0].tasksCount, 1);
     assert.equal(headDeptAPlans[0].tasks.length, 1);
     assert.equal(headDeptAPlans[0].tasks[0].departmentId, testDeptAId);
+    // availablePatternOptions for Dept A: Dept B tasks stripped, Dept B only option omitted
+    assert.equal(headDeptAPlans[0].availablePatternOptions?.length, 1);
+    assert.equal(headDeptAPlans[0].availablePatternOptions?.[0].optionId, 'opt-it-hybrid');
+    assert.equal(headDeptAPlans[0].availablePatternOptions?.[0].tasks.length, 1);
+    assert.equal(headDeptAPlans[0].availablePatternOptions?.[0].tasks[0].departmentId, testDeptAId);
+
+    // 11c. getPlanById returns identical authorized DTO structure as getPlansByOrderId
+    const headDeptAPlanById = await planService.getPlanById(orderId, planId, headDeptAUser);
+    assert.deepEqual(headDeptAPlans[0], headDeptAPlanById);
+
+    // 11d. Admin sees all options and tasks intact in DTO
+    const adminPlanById = await planService.getPlanById(orderId, planId, adminUser);
+    assert.equal(adminPlanById?.tasksCount, 2);
+    assert.equal(adminPlanById?.tasks?.length, 2);
+    assert.equal(adminPlanById?.availablePatternOptions?.length, 2);
+    assert.equal(adminPlanById?.availablePatternOptions?.[0].tasks.length, 2);
+
+    // 11e. Real MySQL database verification: the underlying JSON snapshot in MySQL was NOT mutated!
+    const persistedPlan = await planRepo.findOne({ where: { id: planId } });
+    assert.ok(persistedPlan, 'Plan must exist in MySQL');
+    assert.equal(persistedPlan.availablePatternOptions?.length, 2, 'MySQL snapshot must retain both options');
+    assert.equal(persistedPlan.availablePatternOptions?.[0].tasks.length, 2, 'MySQL snapshot must retain all tasks');
+    assert.equal(persistedPlan.availablePatternOptions?.[0].tasks[1].departmentId, testDeptBId);
   });
 });
