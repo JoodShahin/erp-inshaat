@@ -16,6 +16,31 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
+  function extractApiErrorMessage(responseBody, fallback) {
+    if (!responseBody) return fallback || 'حدث خطأ غير متوقع';
+    var errorMessages = [];
+    if (responseBody.errors && typeof responseBody.errors === 'object' && !Array.isArray(responseBody.errors)) {
+      Object.keys(responseBody.errors).forEach(function (key) {
+        var val = responseBody.errors[key];
+        if (Array.isArray(val)) {
+          val.forEach(function (msg) {
+            if (typeof msg === 'string' && msg.trim()) errorMessages.push(msg.trim());
+          });
+        } else if (typeof val === 'string' && val.trim()) {
+          errorMessages.push(val.trim());
+        }
+      });
+    } else if (Array.isArray(responseBody.errors)) {
+      responseBody.errors.forEach(function (msg) {
+        if (typeof msg === 'string' && msg.trim()) errorMessages.push(msg.trim());
+      });
+    }
+    if (errorMessages.length === 0 && responseBody.message && typeof responseBody.message === 'string') {
+      errorMessages.push(responseBody.message);
+    }
+    var uniqueMessages = Array.from(new Set(errorMessages));
+    return uniqueMessages.length > 0 ? uniqueMessages.join('، ') : fallback || 'حدث خطأ أثناء معالجة الطلب';
+  }
   function formatTaskDurationText(val, unit, minutes) {
     if (val != null && unit) {
       if (unit === 'DAYS') {
@@ -2206,8 +2231,8 @@ document.addEventListener('DOMContentLoaded', () => {
         departmentId,
         estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
         estimatedDurationUnit: durationVal ? durationUnit : null,
-        estimatedCost: costVal ? costVal : undefined,
-        description,
+        estimatedCost: costVal ? costVal : null,
+        description: description ? description : null,
       };
 
       try {
@@ -2229,13 +2254,27 @@ document.addEventListener('DOMContentLoaded', () => {
           activeDrawerStage.estimatedCost = costVal ? costVal : null;
           activeDrawerStage.description = description || null;
 
+          // Sync currentWorkflowItems so renderWorkflow() reflects updated stage data
+          const wfItem = currentWorkflowItems.find((w) => w.stage && w.stage.id === activeDrawerStage.id);
+          if (wfItem && wfItem.stage) {
+            Object.assign(wfItem.stage, data.data, {
+              departmentName: activeDrawerStage.departmentName,
+              departmentCode: activeDrawerStage.departmentCode,
+              estimatedDurationValue: activeDrawerStage.estimatedDurationValue,
+              estimatedDurationUnit: activeDrawerStage.estimatedDurationUnit,
+              estimatedDurationMinutes: activeDrawerStage.estimatedDurationMinutes,
+              estimatedCost: activeDrawerStage.estimatedCost,
+              description: activeDrawerStage.description,
+            });
+          }
+
           if (stageDrawerTitle) stageDrawerTitle.textContent = name;
           if (stageDrawerDeptBadge) stageDrawerDeptBadge.textContent = activeDrawerStage.departmentName;
 
           renderWorkflow();
           showToast('تم حفظ تعديلات المرحلة بنجاح');
         } else {
-          Swal.fire('خطأ', data.message || 'تعذر تعديل المرحلة', 'error');
+          Swal.fire('خطأ', extractApiErrorMessage(data, 'تعذر تعديل المرحلة'), 'error');
         }
       } catch {
         Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
@@ -3033,8 +3072,8 @@ document.addEventListener('DOMContentLoaded', () => {
         departmentId,
         estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
         estimatedDurationUnit: durationVal ? durationUnit : null,
-        estimatedCost: costVal ? costVal : undefined,
-        description,
+        estimatedCost: costVal ? costVal : null,
+        description: description ? description : null,
       };
 
       try {
@@ -3054,13 +3093,28 @@ document.addEventListener('DOMContentLoaded', () => {
           task.departmentName = dept ? dept.name : 'قسم غير محدد';
           task.departmentCode = dept ? dept.code : 'N/A';
 
+          // Sync task in currentPatterns so renderWorkflow() reflects updated task data
+          const targetPattern = currentPatterns.find((p) => p.id === patternId);
+          if (targetPattern && Array.isArray(targetPattern.options)) {
+            const targetOption = targetPattern.options.find((o) => o.id === optionId);
+            if (targetOption && Array.isArray(targetOption.tasks)) {
+              const targetTask = targetOption.tasks.find((t) => t.id === task.id);
+              if (targetTask) {
+                Object.assign(targetTask, data.data, {
+                  departmentName: task.departmentName,
+                  departmentCode: task.departmentCode,
+                });
+              }
+            }
+          }
+
           if (taskModalTitle) taskModalTitle.textContent = task.name;
           if (taskModalDeptBadge) taskModalDeptBadge.textContent = task.departmentName;
 
           renderWorkflow();
           showToast('تم حفظ تعديلات المهمة بنجاح');
         } else {
-          Swal.fire('خطأ', data.message || 'تعذر تعديل المهمة', 'error');
+          Swal.fire('خطأ', extractApiErrorMessage(data, 'تعذر تعديل المهمة'), 'error');
         }
       } catch {
         Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
