@@ -16,6 +16,7 @@ import { ProductionOrderLineEntity } from '../order-line/production-order-line.e
 import { ProductionTemplateEntity } from '../template/production-template.entity.js';
 import { ProductionExecutionTaskEntity } from './production-execution-task.entity.js';
 import { ProductionUnitEntity } from '../unit/production-unit.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export interface ExecutionPlanPatternSummaryItem {
   patternId: string;
@@ -38,6 +39,8 @@ export interface ExecutionPlanAlternativeOptionTaskSnapshot {
   departmentId: string;
   departmentName?: string | null;
   sortOrder: number;
+  estimatedDurationValue?: number | null;
+  estimatedDurationUnit?: TaskDurationUnit | null;
   estimatedDurationMinutes: number | null;
   estimatedCost: string | null;
   plannedMaterials: any[] | null;

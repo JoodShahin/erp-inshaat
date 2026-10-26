@@ -39,6 +39,7 @@ import { NotFoundError } from '../src/common/errors/not-found.error.js';
 import { ForbiddenError } from '../src/common/errors/forbidden.error.js';
 import { CreateProductionExecutionPlansAndUnits1710000000017 } from '../src/database/migrations/1710000000017-CreateProductionExecutionPlansAndUnits.js';
 import { AddSpecificationsToExecutionPlan1710000000018 } from '../src/database/migrations/1710000000018-AddSpecificationsToExecutionPlan.js';
+import { TaskDurationUnit } from '../src/modules/production/task-duration/task-duration.types.js';
 
 describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   function createTestContext() {
@@ -657,6 +658,83 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     const taskNames = store.tasks.map((t) => t.name);
     assert.ok(taskNames.includes('تثبيت إطار الخشب'));
     assert.ok(!taskNames.includes('تركيب حلق الباب الحديدي'), 'Unselected option task MUST be excluded');
+  });
+
+  // ==========================================
+  // SCENARIO 3b: Task Duration Snapshotting & Immutability Invariant
+  // ==========================================
+  it('3b. Task Duration Invariant: approveOrder snapshots duration value, unit, and minutes, and remains immutable upon template mutation', async () => {
+    const { orderService, store } = createTestContext();
+
+    // Configure stage-1 with 10 DAYS (14400 minutes)
+    store.stages[0].estimatedDurationValue = 10;
+    store.stages[0].estimatedDurationUnit = TaskDurationUnit.DAYS;
+    store.stages[0].estimatedDurationMinutes = 14400;
+
+    // Configure option task with 3 HOURS (180 minutes)
+    store.optionTasks[0].estimatedDurationValue = 3;
+    store.optionTasks[0].estimatedDurationUnit = TaskDurationUnit.HOURS;
+    store.optionTasks[0].estimatedDurationMinutes = 180;
+
+    // Configure stage-2 without duration (null)
+    store.stages[1].estimatedDurationValue = null;
+    store.stages[1].estimatedDurationUnit = null;
+    store.stages[1].estimatedDurationMinutes = null;
+
+    // Add line with pattern selection (opt-steel-door)
+    await orderService.addLine('order-100', {
+      templateId: 'tmpl-room-a',
+      quantity: 1,
+      patternSelections: [
+        { patternId: 'pat-doors', optionId: 'opt-steel-door' },
+      ],
+    });
+
+    await orderService.approveOrder('order-100', 'user-eng-10');
+
+    // 1. Verify Task 0 (General Stage 1: 10 DAYS = 14400 minutes)
+    const task0 = store.tasks[0];
+    assert.equal(task0.estimatedDurationValue, 10);
+    assert.equal(task0.estimatedDurationUnit, TaskDurationUnit.DAYS);
+    assert.equal(task0.estimatedDurationMinutes, 14400);
+
+    // 2. Verify Task 1 (Option Task: 3 HOURS = 180 minutes)
+    const task1 = store.tasks[1];
+    assert.equal(task1.estimatedDurationValue, 3);
+    assert.equal(task1.estimatedDurationUnit, TaskDurationUnit.HOURS);
+    assert.equal(task1.estimatedDurationMinutes, 180);
+
+    // 3. Verify Task 2 (General Stage 2: NULL duration)
+    const task2 = store.tasks[2];
+    assert.equal(task2.estimatedDurationValue, null);
+    assert.equal(task2.estimatedDurationUnit, null);
+    assert.equal(task2.estimatedDurationMinutes, null);
+
+    // 4. Verify availablePatternOptionsSnapshot captures duration value & unit
+    const plan = store.plans[0];
+    const snap = plan.availablePatternOptions;
+    assert.ok(Array.isArray(snap) && snap.length > 0);
+    const snapSteelOpt = snap.find((o) => o.optionId === 'opt-steel-door');
+    assert.ok(snapSteelOpt);
+    assert.equal(snapSteelOpt.tasks[0].estimatedDurationValue, 3);
+    assert.equal(snapSteelOpt.tasks[0].estimatedDurationUnit, TaskDurationUnit.HOURS);
+    assert.equal(snapSteelOpt.tasks[0].estimatedDurationMinutes, 180);
+
+    // 5. Test Immutability: Mutate template stage-1 to 20 DAYS
+    store.stages[0].estimatedDurationValue = 20;
+    store.stages[0].estimatedDurationUnit = TaskDurationUnit.DAYS;
+    store.stages[0].estimatedDurationMinutes = 28800;
+
+    // Mutate option task to 5 HOURS
+    store.optionTasks[0].estimatedDurationValue = 5;
+    store.optionTasks[0].estimatedDurationMinutes = 300;
+
+    // Approved execution tasks must remain completely unchanged
+    assert.equal(task0.estimatedDurationValue, 10, 'Approved task duration value must remain immutable');
+    assert.equal(task0.estimatedDurationUnit, TaskDurationUnit.DAYS, 'Approved task duration unit must remain immutable');
+    assert.equal(task0.estimatedDurationMinutes, 14400, 'Approved task duration minutes must remain immutable');
+    assert.equal(task1.estimatedDurationValue, 3, 'Approved option task duration value must remain immutable');
+    assert.equal(task1.estimatedDurationMinutes, 180, 'Approved option task duration minutes must remain immutable');
   });
 
   // ==========================================

@@ -297,7 +297,19 @@ document.addEventListener('DOMContentLoaded', () => {
               // 5. Estimated Duration
               const tdDuration = document.createElement('td');
               tdDuration.className = 'text-center font-monospace small';
-              tdDuration.textContent = task.estimatedDurationMinutes ? task.estimatedDurationMinutes + ' دقيقة' : '—';
+              let durText = '—';
+              if (task.estimatedDurationValue != null && task.estimatedDurationUnit) {
+                if (task.estimatedDurationUnit === 'DAYS') {
+                  durText = (task.estimatedDurationValue >= 3 && task.estimatedDurationValue <= 10) ? task.estimatedDurationValue + ' أيام' : task.estimatedDurationValue + ' يوم';
+                } else if (task.estimatedDurationUnit === 'HOURS') {
+                  durText = (task.estimatedDurationValue >= 3 && task.estimatedDurationValue <= 10) ? task.estimatedDurationValue + ' ساعات' : task.estimatedDurationValue + ' ساعة';
+                } else {
+                  durText = task.estimatedDurationValue + ' دقيقة';
+                }
+              } else if (task.estimatedDurationMinutes != null) {
+                durText = task.estimatedDurationMinutes + ' دقيقة';
+              }
+              tdDuration.textContent = durText;
               tr.appendChild(tdDuration);
 
               tbodyElem.appendChild(tr);

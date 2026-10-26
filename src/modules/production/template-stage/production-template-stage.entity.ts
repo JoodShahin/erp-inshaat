@@ -15,6 +15,7 @@ import { ProductionTemplateEntity } from '../template/production-template.entity
 import { ProductionDepartmentEntity } from '../department/production-department.entity.js';
 import { ProductionTemplateStageMaterialEntity } from '../template-stage-material/production-template-stage-material.entity.js';
 import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 @Entity('production_template_stage')
 export class ProductionTemplateStageEntity {
@@ -34,6 +35,12 @@ export class ProductionTemplateStageEntity {
 
   @Column({ type: 'text', nullable: true })
   description!: string | null;
+
+  @Column({ name: 'estimated_duration_value', type: 'int', nullable: true, default: null })
+  estimatedDurationValue!: number | null;
+
+  @Column({ name: 'estimated_duration_unit', type: 'varchar', length: 20, nullable: true, default: null })
+  estimatedDurationUnit!: TaskDurationUnit | null;
 
   @Column({ name: 'estimated_duration_minutes', type: 'int', nullable: true })
   estimatedDurationMinutes!: number | null;

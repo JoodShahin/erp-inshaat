@@ -35,6 +35,7 @@ import {
   ExecutionPlanDto,
   ExecutionPlanSummaryDto,
   ExecutionTaskDto,
+  TaskDurationUnit,
 } from './production-execution-plan.types.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
@@ -236,6 +237,8 @@ export class ProductionExecutionPlanService {
           departmentId: ot.departmentId,
           departmentName: ot.department?.name || null,
           sortOrder: ot.sortOrder,
+          estimatedDurationValue: ot.estimatedDurationValue ?? ot.estimatedDurationMinutes ?? null,
+          estimatedDurationUnit: ot.estimatedDurationUnit ?? (ot.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
           estimatedDurationMinutes: ot.estimatedDurationMinutes,
           estimatedCost: ot.estimatedCost,
           plannedMaterials: optMatMap.get(ot.id) || null,
@@ -487,6 +490,8 @@ export class ProductionExecutionPlanService {
           patternName: null,
           templatePatternOptionId: null,
           optionName: null,
+          estimatedDurationValue: stage.estimatedDurationValue ?? stage.estimatedDurationMinutes ?? null,
+          estimatedDurationUnit: stage.estimatedDurationUnit ?? (stage.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
           estimatedDurationMinutes: stage.estimatedDurationMinutes,
           estimatedCost: stage.estimatedCost,
           plannedMaterials: materialsSnapshot.length > 0 ? materialsSnapshot : null,
@@ -561,6 +566,8 @@ export class ProductionExecutionPlanService {
             patternName: pattern.name,
             templatePatternOptionId: option.id,
             optionName: option.name,
+            estimatedDurationValue: oTask.estimatedDurationValue ?? oTask.estimatedDurationMinutes ?? null,
+            estimatedDurationUnit: oTask.estimatedDurationUnit ?? (oTask.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
             estimatedDurationMinutes: oTask.estimatedDurationMinutes,
             estimatedCost: oTask.estimatedCost,
             plannedMaterials: materialsSnapshot.length > 0 ? materialsSnapshot : null,
@@ -802,6 +809,8 @@ export class ProductionExecutionPlanService {
       patternName: task.patternName,
       templatePatternOptionId: task.templatePatternOptionId,
       optionName: task.optionName,
+      estimatedDurationValue: task.estimatedDurationValue ?? task.estimatedDurationMinutes ?? null,
+      estimatedDurationUnit: task.estimatedDurationUnit ?? (task.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
       estimatedDurationMinutes: task.estimatedDurationMinutes,
       estimatedCost: task.estimatedCost,
       plannedMaterials: task.plannedMaterials,

@@ -23,6 +23,7 @@ import {
 } from './production-template-stage.types.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
+import { resolveTaskDuration } from '../task-duration/task-duration.helper.js';
 
 export class ProductionTemplateStageService {
   private stageRepo: Repository<ProductionTemplateStageEntity>;
@@ -105,12 +106,15 @@ export class ProductionTemplateStageService {
     return await this.dataSource.transaction(async (manager) => {
       await this.guardService.lockMutableTemplate(templateId, manager);
 
+      const duration = resolveTaskDuration(dto);
       const stage = manager.create(ProductionTemplateStageEntity, {
         templateId,
         departmentId: dto.departmentId,
         name: dto.name.trim(),
         description: dto.description ? dto.description.trim() : null,
-        estimatedDurationMinutes: dto.estimatedDurationMinutes !== undefined ? dto.estimatedDurationMinutes : null,
+        estimatedDurationValue: duration.estimatedDurationValue,
+        estimatedDurationUnit: duration.estimatedDurationUnit,
+        estimatedDurationMinutes: duration.estimatedDurationMinutes,
         estimatedCost: dto.estimatedCost ? dto.estimatedCost : null,
       });
 
@@ -166,7 +170,20 @@ export class ProductionTemplateStageService {
 
       if (dto.name !== undefined) stage.name = dto.name.trim();
       if (dto.description !== undefined) stage.description = dto.description ? dto.description.trim() : null;
-      if (dto.estimatedDurationMinutes !== undefined) stage.estimatedDurationMinutes = dto.estimatedDurationMinutes;
+      if (
+        dto.estimatedDurationValue !== undefined ||
+        dto.estimatedDurationUnit !== undefined ||
+        dto.estimatedDurationMinutes !== undefined
+      ) {
+        const duration = resolveTaskDuration(dto, {
+          estimatedDurationValue: stage.estimatedDurationValue,
+          estimatedDurationUnit: stage.estimatedDurationUnit,
+          estimatedDurationMinutes: stage.estimatedDurationMinutes,
+        });
+        stage.estimatedDurationValue = duration.estimatedDurationValue;
+        stage.estimatedDurationUnit = duration.estimatedDurationUnit;
+        stage.estimatedDurationMinutes = duration.estimatedDurationMinutes;
+      }
       if (dto.estimatedCost !== undefined) stage.estimatedCost = dto.estimatedCost;
 
       await manager.save(stage);

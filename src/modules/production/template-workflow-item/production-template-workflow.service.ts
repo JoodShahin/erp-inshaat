@@ -9,6 +9,7 @@ import { ProductionTemplateGuardService, productionTemplateGuardService } from '
 import {
   ProductionTemplateWorkflowItemDto,
   toProductionTemplateWorkflowItemDto,
+  TaskDurationUnit,
 } from './production-template-workflow-item.types.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 
@@ -126,6 +127,8 @@ export class ProductionTemplateWorkflowService {
             departmentId: stage.departmentId,
             departmentName: stage.department?.name,
             departmentCode: stage.department?.code,
+            estimatedDurationValue: stage.estimatedDurationValue ?? stage.estimatedDurationMinutes ?? null,
+            estimatedDurationUnit: stage.estimatedDurationUnit ?? (stage.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
             estimatedDurationMinutes: stage.estimatedDurationMinutes,
             estimatedCost: stage.estimatedCost ? String(stage.estimatedCost) : null,
             plannedMaterialsCount,

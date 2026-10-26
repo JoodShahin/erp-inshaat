@@ -14,6 +14,7 @@ import { ProductionTemplatePatternOptionEntity } from '../template-pattern-optio
 import { ProductionDepartmentEntity } from '../department/production-department.entity.js';
 import { ProductionTemplatePatternOptionTaskMaterialEntity } from '../template-pattern-option-task-material/production-template-pattern-option-task-material.entity.js';
 import { ProductionTemplatePatternOptionTaskAttachmentEntity } from '../template-pattern-option-task-attachment/production-template-pattern-option-task-attachment.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 @Entity('production_template_pattern_option_task')
 export class ProductionTemplatePatternOptionTaskEntity {
@@ -37,6 +38,12 @@ export class ProductionTemplatePatternOptionTaskEntity {
   @Index('IDX_production_template_option_task_sort_order')
   @Column({ name: 'sort_order', type: 'int' })
   sortOrder!: number;
+
+  @Column({ name: 'estimated_duration_value', type: 'int', nullable: true, default: null })
+  estimatedDurationValue!: number | null;
+
+  @Column({ name: 'estimated_duration_unit', type: 'varchar', length: 20, nullable: true, default: null })
+  estimatedDurationUnit!: TaskDurationUnit | null;
 
   @Column({ name: 'estimated_duration_minutes', type: 'int', nullable: true })
   estimatedDurationMinutes!: number | null;

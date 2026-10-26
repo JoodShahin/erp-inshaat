@@ -1,4 +1,7 @@
 import { ProductionTemplateStageEntity } from './production-template-stage.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
+
+export { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export interface ProductionTemplateStageDto {
   id: string;
@@ -7,6 +10,8 @@ export interface ProductionTemplateStageDto {
   name: string;
   description: string | null;
   sortOrder: number;
+  estimatedDurationValue?: number | null;
+  estimatedDurationUnit?: TaskDurationUnit | null;
   estimatedDurationMinutes: number | null;
   estimatedCost: string | null;
   createdAt: Date;
@@ -44,6 +49,8 @@ export function toProductionTemplateStageDto(
     name: stage.name,
     description: stage.description,
     sortOrder: stage.workflowItem?.sortOrder ?? stage.sortOrder ?? 0,
+    estimatedDurationValue: stage.estimatedDurationValue ?? stage.estimatedDurationMinutes ?? null,
+    estimatedDurationUnit: stage.estimatedDurationUnit ?? (stage.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
     estimatedDurationMinutes: stage.estimatedDurationMinutes,
     estimatedCost: stage.estimatedCost ? String(stage.estimatedCost) : null,
     createdAt: stage.createdAt,
@@ -67,6 +74,8 @@ export interface ProductionTemplateStageBrowserDto {
   departmentName: string;
   departmentCode: string;
   sortOrder: number;
+  estimatedDurationValue?: number | null;
+  estimatedDurationUnit?: TaskDurationUnit | null;
   estimatedDurationMinutes: number | null;
   estimatedCost: string | null;
   plannedMaterialsCount: number;
