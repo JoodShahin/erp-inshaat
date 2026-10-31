@@ -271,53 +271,89 @@ describe('Yard–Template Management & Fine-Grained Permissions Test Suite', () 
   // 2. DTO VALIDATION
   // ==========================================
   describe('2. AssignTemplatesToYardDto Validation Contracts', () => {
-    it('accepts single valid UUID in templateId', async () => {
+    const validUuid1 = 'c061212f-4094-4af2-877a-fa0829e53da5';
+    const validUuid2 = 'd061212f-4094-4af2-877a-fa0829e53da6';
+    const validationOptions = { whitelist: true, forbidNonWhitelisted: true };
+
+    it('1. accepts valid templateId only', async () => {
       const dto = plainToInstance(AssignTemplatesToYardDto, {
-        templateId: 'c061212f-4094-4af2-877a-fa0829e53da5',
+        templateId: validUuid1,
       });
-      const errors = await validate(dto);
+      const errors = await validate(dto, validationOptions);
       assert.equal(errors.length, 0);
     });
 
-    it('accepts array of valid UUIDs in templateIds', async () => {
+    it('2. accepts valid templateIds only', async () => {
       const dto = plainToInstance(AssignTemplatesToYardDto, {
-        templateIds: [
-          'c061212f-4094-4af2-877a-fa0829e53da5',
-          'd061212f-4094-4af2-877a-fa0829e53da6',
-        ],
+        templateIds: [validUuid1, validUuid2],
       });
-      const errors = await validate(dto);
+      const errors = await validate(dto, validationOptions);
       assert.equal(errors.length, 0);
     });
 
-    it('rejects empty payload when neither templateId nor templateIds is provided', async () => {
-      const dto = plainToInstance(AssignTemplatesToYardDto, {});
-      const errors = await validate(dto);
+    it('3. rejects invalid templateId', async () => {
+      const dto = plainToInstance(AssignTemplatesToYardDto, {
+        templateId: 'not-a-valid-uuid',
+      });
+      const errors = await validate(dto, validationOptions);
       assert.ok(errors.length > 0);
-    });
-
-    it('rejects invalid UUID in templateId', async () => {
-      const dto = plainToInstance(AssignTemplatesToYardDto, {
-        templateId: 'not-a-uuid',
-      });
-      const errors = await validate(dto);
       assert.ok(errors.some((e) => e.property === 'templateId'));
     });
 
-    it('rejects non-UUID items inside templateIds array', async () => {
+    it('4. rejects templateIds containing invalid UUID', async () => {
       const dto = plainToInstance(AssignTemplatesToYardDto, {
-        templateIds: ['c061212f-4094-4af2-877a-fa0829e53da5', 'invalid-uuid'],
+        templateIds: [validUuid1, 'not-a-valid-uuid'],
       });
-      const errors = await validate(dto);
+      const errors = await validate(dto, validationOptions);
+      assert.ok(errors.length > 0);
       assert.ok(errors.some((e) => e.property === 'templateIds'));
     });
 
-    it('rejects empty array for templateIds', async () => {
+    it('5. rejects empty templateIds array []', async () => {
       const dto = plainToInstance(AssignTemplatesToYardDto, {
         templateIds: [],
       });
-      const errors = await validate(dto);
+      const errors = await validate(dto, validationOptions);
       assert.ok(errors.length > 0);
+      assert.ok(errors.some((e) => e.property === 'templateIds'));
+    });
+
+    it('6. rejects sending both templateId and templateIds together (even if both are valid)', async () => {
+      const dto = plainToInstance(AssignTemplatesToYardDto, {
+        templateId: validUuid1,
+        templateIds: [validUuid2],
+      });
+      const errors = await validate(dto, validationOptions);
+      assert.ok(errors.length > 0);
+      const props = errors.map((e) => e.property);
+      assert.ok(props.includes('templateId') || props.includes('templateIds'));
+    });
+
+    it('7. rejects empty payload when neither field is provided', async () => {
+      const dto = plainToInstance(AssignTemplatesToYardDto, {});
+      const errors = await validate(dto, validationOptions);
+      assert.ok(errors.length > 0);
+    });
+
+    it('8. rejects sending valid templateId with invalid templateIds (no validation bypass)', async () => {
+      const dto = plainToInstance(AssignTemplatesToYardDto, {
+        templateId: validUuid1,
+        templateIds: ['not-a-valid-uuid'],
+      });
+      const errors = await validate(dto, validationOptions);
+      assert.ok(errors.length > 0);
+      // Ensures invalid templateIds was NOT bypassed
+      assert.ok(errors.some((e) => e.property === 'templateIds'));
+    });
+
+    it('9. rejects sending invalid templateId with valid templateIds', async () => {
+      const dto = plainToInstance(AssignTemplatesToYardDto, {
+        templateId: 'not-a-valid-uuid',
+        templateIds: [validUuid1],
+      });
+      const errors = await validate(dto, validationOptions);
+      assert.ok(errors.length > 0);
+      assert.ok(errors.some((e) => e.property === 'templateId'));
     });
   });
 
