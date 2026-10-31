@@ -12,6 +12,10 @@ export interface ProductionOrderUserSummaryDto {
 export interface ProductionOrderSummaryDto {
   lineCount: number;
   totalQuantity: number;
+  totalLinkedQuantity?: number;
+  totalRemainingQuantity?: number;
+  totalExcessQuantity?: number;
+  hasQuantityViolation?: boolean;
 }
 
 export interface ProductionOrderDto {

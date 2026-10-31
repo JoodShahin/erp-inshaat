@@ -25,8 +25,8 @@ export interface ProductionUnitEventDto {
 
 export interface ProductionUnitDto {
   id: string;
-  orderId: string;
-  orderLineId: string;
+  orderId: string | null;
+  orderLineId: string | null;
   planId: string;
   unitSequence: number;
   unitNumber: string;

@@ -55,6 +55,7 @@ import { CreateProductionExecutionPlansAndUnits1710000000017 } from '../database
 import { AddSpecificationsToExecutionPlan1710000000018 } from '../database/migrations/1710000000018-AddSpecificationsToExecutionPlan.js';
 import { AddAvailablePatternOptionsToExecutionPlan1710000000019 } from '../database/migrations/1710000000019-AddAvailablePatternOptionsToExecutionPlan.js';
 import { AddTaskDurationUnitFields1710000000020 } from '../database/migrations/1710000000020-AddTaskDurationUnitFields.js';
+import { MakeProductionUnitOrderNullable1710000000022 } from '../database/migrations/1710000000022-MakeProductionUnitOrderNullable.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -123,6 +124,7 @@ export const databaseConfig: DataSourceOptions = {
     AddAvailablePatternOptionsToExecutionPlan1710000000019,
     AddTaskDurationUnitFields1710000000020,
     CreateProductionYardTemplate1710000000021,
+    MakeProductionUnitOrderNullable1710000000022,
   ],
   subscribers: [],
 };

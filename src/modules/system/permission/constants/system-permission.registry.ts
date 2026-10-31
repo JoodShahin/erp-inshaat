@@ -240,6 +240,11 @@ export const SYSTEM_PERMISSION_DEFINITIONS: Record<SystemPermission, PermissionD
     description: 'تغيير أولوية أمر الإنتاج',
     module: 'production',
   },
+  [SystemPermission.PRODUCTION_ORDER_LINE_ALLOCATE_UNITS]: {
+    name: SystemPermission.PRODUCTION_ORDER_LINE_ALLOCATE_UNITS,
+    description: 'تخصيص وربط غرف الإنتاج ببند مذكرة الإنتاج واستعادتها',
+    module: 'production',
+  },
 };
 
 export const ALL_SYSTEM_PERMISSION_DEFINITIONS: PermissionDefinition[] = Object.values(

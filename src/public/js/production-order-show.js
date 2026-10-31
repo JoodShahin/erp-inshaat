@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     approveBtn.addEventListener('click', () => {
       Swal.fire({
         title: 'اعتماد أمر الإنتاج',
-        text: 'سيتم اعتماد أمر الإنتاج وإيقاف تعديل بنوده حتى تتم إعادته إلى حالة المسودة. هل تريد المتابعة؟',
+        text: 'سيتم اعتماد أمر الإنتاج وتحويله إلى مذكرة إنتاج جاهزة للتصنيع وإيقاف تعديل بنوده. هل تريد المتابعة؟',
         icon: 'question',
         showCancelButton: true,
         confirmButtonColor: '#10AC84',
@@ -70,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
             throw new Error(getErrorMessage(json, 'فشل اعتماد أمر الإنتاج'));
           }
 
-          sessionStorage.setItem('pendingToast', 'تم اعتماد أمر الإنتاج بنجاح');
+          sessionStorage.setItem('pendingToast', 'تم اعتماد أمر الإنتاج وتحويله إلى مذكرة إنتاج جاهزة للتصنيع');
           window.location.reload();
         } catch (err) {
           approveBtn.disabled = false;
@@ -373,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const td = document.createElement('td');
             td.setAttribute('colspan', '6');
             td.className = 'text-center py-4 text-muted';
-            td.textContent = 'لم يتم العثور على غرف لهذا البند';
+            td.textContent = 'لم يتم إنشاء غرف لهذا الأمر بعد';
             tr.appendChild(td);
             tbodyElem.appendChild(tr);
           } else {
