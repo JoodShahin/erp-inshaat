@@ -1,4 +1,7 @@
 import { ProductionTemplatePatternOptionTaskEntity } from './production-template-pattern-option-task.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
+
+export { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export interface ProductionTemplatePatternOptionTaskDto {
   id: string;
@@ -14,6 +17,8 @@ export interface ProductionTemplatePatternOptionTaskDto {
   name: string;
   description: string | null;
   sortOrder: number;
+  estimatedDurationValue?: number | null;
+  estimatedDurationUnit?: TaskDurationUnit | null;
   estimatedDurationMinutes: number | null;
   estimatedCost: string | null;
   plannedMaterialsCount: number;
@@ -55,6 +60,8 @@ export function toProductionTemplatePatternOptionTaskDto(
     name: entity.name,
     description: entity.description,
     sortOrder: entity.sortOrder,
+    estimatedDurationValue: entity.estimatedDurationValue ?? entity.estimatedDurationMinutes ?? null,
+    estimatedDurationUnit: entity.estimatedDurationUnit ?? (entity.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
     estimatedDurationMinutes: entity.estimatedDurationMinutes,
     estimatedCost: entity.estimatedCost ? String(entity.estimatedCost) : null,
     plannedMaterialsCount,

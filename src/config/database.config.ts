@@ -32,6 +32,8 @@ import { ProductionExecutionPlanEntity } from '../modules/production/execution-p
 import { ProductionExecutionTaskEntity } from '../modules/production/execution-plan/production-execution-task.entity.js';
 import { ProductionUnitEntity } from '../modules/production/unit/production-unit.entity.js';
 import { ProductionUnitEventEntity } from '../modules/production/unit/production-unit-event.entity.js';
+import { ProductionYardTemplateEntity } from '../modules/production/yard-template/production-yard-template.entity.js';
+import { CreateProductionYardTemplate1710000000021 } from '../database/migrations/1710000000021-CreateProductionYardTemplate.js';
 import { CreateSystemCoreTables1710000000000 } from '../database/migrations/1710000000000-CreateSystemCoreTables.js';
 import { CreateSystemSessionTable1710000000001 } from '../database/migrations/1710000000001-CreateSystemSessionTable.js';
 import { CreateProductionDepartmentsAndYards1710000000002 } from '../database/migrations/1710000000002-CreateProductionDepartmentsAndYards.js';
@@ -52,6 +54,7 @@ import { AddProductionOrderPriority1710000000016 } from '../database/migrations/
 import { CreateProductionExecutionPlansAndUnits1710000000017 } from '../database/migrations/1710000000017-CreateProductionExecutionPlansAndUnits.js';
 import { AddSpecificationsToExecutionPlan1710000000018 } from '../database/migrations/1710000000018-AddSpecificationsToExecutionPlan.js';
 import { AddAvailablePatternOptionsToExecutionPlan1710000000019 } from '../database/migrations/1710000000019-AddAvailablePatternOptionsToExecutionPlan.js';
+import { AddTaskDurationUnitFields1710000000020 } from '../database/migrations/1710000000020-AddTaskDurationUnitFields.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -95,6 +98,7 @@ export const databaseConfig: DataSourceOptions = {
     ProductionExecutionTaskEntity,
     ProductionUnitEntity,
     ProductionUnitEventEntity,
+    ProductionYardTemplateEntity,
   ],
   migrations: [
     CreateSystemCoreTables1710000000000,
@@ -117,6 +121,8 @@ export const databaseConfig: DataSourceOptions = {
     CreateProductionExecutionPlansAndUnits1710000000017,
     AddSpecificationsToExecutionPlan1710000000018,
     AddAvailablePatternOptionsToExecutionPlan1710000000019,
+    AddTaskDurationUnitFields1710000000020,
+    CreateProductionYardTemplate1710000000021,
   ],
   subscribers: [],
 };

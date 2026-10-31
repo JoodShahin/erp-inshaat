@@ -19,6 +19,7 @@ import {
   toProductionTemplatePatternOptionTaskDto,
 } from './production-template-pattern-option-task.types.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
+import { resolveTaskDuration } from '../task-duration/task-duration.helper.js';
 
 /**
  * Batched reference counts loader for tasks: planned materials and active attachments.
@@ -203,14 +204,17 @@ export class ProductionTemplatePatternOptionTaskService {
           .execute();
       }
 
+      const duration = resolveTaskDuration(dto);
       const task = manager.create(ProductionTemplatePatternOptionTaskEntity, {
         optionId,
         departmentId: dto.departmentId,
         name: dto.name.trim(),
         description: dto.description ? dto.description.trim() : null,
         sortOrder,
-        estimatedDurationMinutes:
-          dto.estimatedDurationMinutes !== undefined ? dto.estimatedDurationMinutes : null,
+        estimatedDurationValue: duration.estimatedDurationValue,
+        estimatedDurationUnit: duration.estimatedDurationUnit,
+
+        estimatedDurationMinutes: duration.estimatedDurationMinutes,
         estimatedCost: dto.estimatedCost ? dto.estimatedCost : null,
       });
 
@@ -252,7 +256,20 @@ export class ProductionTemplatePatternOptionTaskService {
 
       if (dto.name !== undefined) task.name = dto.name.trim();
       if (dto.description !== undefined) task.description = dto.description ? dto.description.trim() : null;
-      if (dto.estimatedDurationMinutes !== undefined) task.estimatedDurationMinutes = dto.estimatedDurationMinutes;
+      if (
+        dto.estimatedDurationValue !== undefined ||
+        dto.estimatedDurationUnit !== undefined ||
+        dto.estimatedDurationMinutes !== undefined
+      ) {
+        const duration = resolveTaskDuration(dto, {
+          estimatedDurationValue: task.estimatedDurationValue,
+          estimatedDurationUnit: task.estimatedDurationUnit,
+          estimatedDurationMinutes: task.estimatedDurationMinutes,
+        });
+        task.estimatedDurationValue = duration.estimatedDurationValue;
+        task.estimatedDurationUnit = duration.estimatedDurationUnit;
+        task.estimatedDurationMinutes = duration.estimatedDurationMinutes;
+      }
       if (dto.estimatedCost !== undefined) task.estimatedCost = dto.estimatedCost;
 
       await manager.save(task);

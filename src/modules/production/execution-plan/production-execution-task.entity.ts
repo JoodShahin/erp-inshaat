@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { ProductionExecutionPlanEntity } from './production-execution-plan.entity.js';
 import { ProductionDepartmentEntity } from '../department/production-department.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export enum ExecutionTaskSource {
   GENERAL = 'GENERAL',
@@ -86,6 +87,12 @@ export class ProductionExecutionTaskEntity {
 
   @Column({ name: 'option_name', type: 'varchar', length: 150, nullable: true, default: null })
   optionName!: string | null;
+
+  @Column({ name: 'estimated_duration_value', type: 'int', nullable: true, default: null })
+  estimatedDurationValue!: number | null;
+
+  @Column({ name: 'estimated_duration_unit', type: 'varchar', length: 20, nullable: true, default: null })
+  estimatedDurationUnit!: TaskDurationUnit | null;
 
   @Column({ name: 'estimated_duration_minutes', type: 'int', nullable: true, default: null })
   estimatedDurationMinutes!: number | null;

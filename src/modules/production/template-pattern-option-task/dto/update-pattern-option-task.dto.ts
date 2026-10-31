@@ -4,11 +4,14 @@ import {
   IsOptional,
   IsUUID,
   IsInt,
+  IsEnum,
   Min,
+  Max,
   MaxLength,
   Matches,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
+import { TaskDurationUnit } from '../../task-duration/task-duration.types.js';
 
 export class UpdateTemplatePatternOptionTaskDto {
   @IsOptional()
@@ -33,6 +36,24 @@ export class UpdateTemplatePatternOptionTaskDto {
     return value ?? null;
   })
   description?: string | null;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === null || value === undefined || value === '') return null;
+    return typeof value === 'string' ? Number(value.trim()) : value;
+  })
+  @IsInt({ message: 'قيمة المدة التقديرية يجب أن تكون عدداً صحيحاً موجباً' })
+  @Min(1, { message: 'قيمة المدة التقديرية يجب ألا تقل عن 1' })
+  @Max(1000000, { message: 'قيمة المدة التقديرية كبيرة جداً' })
+  estimatedDurationValue?: number | null;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === null || value === undefined || value === '') return null;
+    return typeof value === 'string' ? value.trim().toUpperCase() : value;
+  })
+  @IsEnum(TaskDurationUnit, { message: 'وحدة المدة يجب أن تكون إما MINUTES أو HOURS أو DAYS' })
+  estimatedDurationUnit?: TaskDurationUnit | null;
 
   @IsOptional()
   @Type(() => Number)

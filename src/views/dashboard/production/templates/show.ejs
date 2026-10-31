@@ -370,11 +370,18 @@
           </div>
 
           <div class="row g-2 mb-3">
-            <div class="col-6">
-              <label for="drawerStageDuration" class="form-label fw-bold small text-dark">المدة التقديرية (بالدقائق)</label>
-              <input type="number" class="form-control" id="drawerStageDuration" min="0" step="1" placeholder="مثال: 120">
+            <div class="col-7">
+              <label for="drawerStageDuration" class="form-label fw-bold small text-dark">المدة التقديرية</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="drawerStageDuration" min="1" step="1" placeholder="المدة">
+                <select class="form-select" id="drawerStageDurationUnit" style="max-width: 105px;">
+                  <option value="MINUTES" selected>دقائق</option>
+                  <option value="HOURS">ساعات</option>
+                  <option value="DAYS">أيام</option>
+                </select>
+              </div>
             </div>
-            <div class="col-6">
+            <div class="col-5">
               <label for="drawerStageCost" class="form-label fw-bold small text-dark">التكلفة التقديرية (اختياري)</label>
               <input type="number" class="form-control" id="drawerStageCost" min="0" step="0.01" placeholder="0.00">
             </div>
@@ -672,11 +679,18 @@
           </div>
 
           <div class="row g-2 mb-3">
-            <div class="col-6">
-              <label for="newStageDuration" class="form-label fw-bold small text-dark">المدة التقديرية (بالدقائق)</label>
-              <input type="number" class="form-control" id="newStageDuration" min="0" step="1" placeholder="مثال: 120">
+            <div class="col-7">
+              <label for="newStageDuration" class="form-label fw-bold small text-dark">المدة التقديرية</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="newStageDuration" min="1" step="1" placeholder="المدة">
+                <select class="form-select" id="newStageDurationUnit" style="max-width: 105px;">
+                  <option value="MINUTES" selected>دقائق</option>
+                  <option value="HOURS">ساعات</option>
+                  <option value="DAYS">أيام</option>
+                </select>
+              </div>
             </div>
-            <div class="col-6">
+            <div class="col-5">
               <label for="newStageCost" class="form-label fw-bold small text-dark">التكلفة التقديرية (اختياري)</label>
               <input type="number" class="form-control" id="newStageCost" min="0" step="0.01" placeholder="0.00">
             </div>
@@ -832,11 +846,18 @@
           </div>
 
           <div class="row g-2 mb-3">
-            <div class="col-6">
-              <label for="newOptionTaskDuration" class="form-label fw-bold small text-dark">المدة التقديرية (بالدقائق)</label>
-              <input type="number" class="form-control" id="newOptionTaskDuration" min="0" step="1" placeholder="مثال: 60">
+            <div class="col-7">
+              <label for="newOptionTaskDuration" class="form-label fw-bold small text-dark">المدة التقديرية</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="newOptionTaskDuration" min="1" step="1" placeholder="المدة">
+                <select class="form-select" id="newOptionTaskDurationUnit" style="max-width: 105px;">
+                  <option value="MINUTES" selected>دقائق</option>
+                  <option value="HOURS">ساعات</option>
+                  <option value="DAYS">أيام</option>
+                </select>
+              </div>
             </div>
-            <div class="col-6">
+            <div class="col-5">
               <label for="newOptionTaskCost" class="form-label fw-bold small text-dark">التكلفة التقديرية (اختياري)</label>
               <input type="number" class="form-control" id="newOptionTaskCost" min="0" step="0.01" placeholder="0.00">
             </div>
@@ -918,11 +939,18 @@
               </div>
 
               <div class="row g-2 mb-3">
-                <div class="col-6">
-                  <label for="drawerTaskDuration" class="form-label fw-bold small text-dark">المدة التقديرية (بالدقائق)</label>
-                  <input type="number" class="form-control" id="drawerTaskDuration" min="0" step="1" placeholder="مثال: 60">
+                <div class="col-7">
+                  <label for="drawerTaskDuration" class="form-label fw-bold small text-dark">المدة التقديرية</label>
+                  <div class="input-group">
+                    <input type="number" class="form-control" id="drawerTaskDuration" min="1" step="1" placeholder="المدة">
+                    <select class="form-select" id="drawerTaskDurationUnit" style="max-width: 105px;">
+                      <option value="MINUTES" selected>دقائق</option>
+                      <option value="HOURS">ساعات</option>
+                      <option value="DAYS">أيام</option>
+                    </select>
+                  </div>
                 </div>
-                <div class="col-6">
+                <div class="col-5">
                   <label for="drawerTaskCost" class="form-label fw-bold small text-dark">التكلفة التقديرية (اختياري)</label>
                   <input type="number" class="form-control" id="drawerTaskCost" min="0" step="0.01" placeholder="0.00">
                 </div>

@@ -1,6 +1,9 @@
 import { ProductionTemplateEntity } from './production-template.entity.js';
 import { ProductionTemplateWorkflowItemDto } from '../template-workflow-item/production-template-workflow-item.types.js';
 import { ProductionTemplatePatternDto } from '../template-pattern/production-template-pattern.types.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
+
+export { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export interface ProductionTemplateDto {
   id: string;
@@ -85,6 +88,8 @@ export interface ProductionTemplateDetailStageDto {
   departmentName?: string;
   departmentCode?: string;
   sortOrder: number;
+  estimatedDurationValue?: number | null;
+  estimatedDurationUnit?: TaskDurationUnit | null;
   estimatedDurationMinutes: number | null;
   estimatedCost: string | null;
   plannedMaterialsCount: number;

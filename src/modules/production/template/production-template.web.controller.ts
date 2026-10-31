@@ -12,6 +12,7 @@ import {
   deriveMixedWorkflowGroups,
 } from '../template-stage/consecutive-department-grouping.helper.js';
 import { ProductionTemplateStageBrowserDto } from '../template-stage/production-template-stage.types.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 import { safeJsonStringify } from './production-template.types.js';
 
 export class ProductionTemplateWebController {
@@ -109,6 +110,8 @@ export class ProductionTemplateWebController {
         departmentName: stage.departmentName || 'قسم غير محدد',
         departmentCode: stage.departmentCode || 'N/A',
         sortOrder: stage.sortOrder,
+        estimatedDurationValue: stage.estimatedDurationValue ?? stage.estimatedDurationMinutes ?? null,
+        estimatedDurationUnit: stage.estimatedDurationUnit ?? (stage.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
         estimatedDurationMinutes: stage.estimatedDurationMinutes,
         estimatedCost: stage.estimatedCost,
         plannedMaterialsCount: stage.plannedMaterialsCount || 0,

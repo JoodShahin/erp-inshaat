@@ -1,8 +1,10 @@
 import { ExecutionTaskSource } from './production-execution-task.entity.js';
 import { ExecutionPlanPatternOptionSnapshot } from './production-execution-plan.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export { ExecutionTaskSource } from './production-execution-task.entity.js';
 export { ExecutionPlanPatternOptionSnapshot } from './production-execution-plan.entity.js';
+export { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export interface ExecutionTaskDto {
   id: string;
@@ -19,6 +21,8 @@ export interface ExecutionTaskDto {
   patternName: string | null;
   templatePatternOptionId: string | null;
   optionName: string | null;
+  estimatedDurationValue?: number | null;
+  estimatedDurationUnit?: TaskDurationUnit | null;
   estimatedDurationMinutes: number | null;
   estimatedCost: string | null;
   plannedMaterials: Array<{

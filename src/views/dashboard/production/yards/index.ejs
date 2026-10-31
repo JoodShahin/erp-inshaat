@@ -115,6 +115,13 @@
                 </td>
                 <td class="py-3 text-center px-4">
                   <div class="d-inline-flex gap-1">
+                    <a
+                      href="/production/yards/<%= yard.id %>"
+                      class="btn btn-sm btn-outline-info"
+                      title="عرض تفاصيل الساحة والقوالب"
+                    >
+                      <i class="fa-solid fa-eye"></i>
+                    </a>
                     <% if (yard.canUpdate) { %>
                       <a
                         href="/production/yards/<%= yard.id %>/edit"

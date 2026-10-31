@@ -13,6 +13,7 @@ import {
 } from 'typeorm';
 import { ProductionDepartmentEntity } from '../department/production-department.entity.js';
 import { ProductionYardEngineerEntity } from '../team/entities/production-yard-engineer.entity.js';
+import { ProductionYardTemplateEntity } from '../yard-template/production-yard-template.entity.js';
 
 @Entity('production_yard')
 @Check('CHK_production_yard_capacity', '`capacity` >= 1')
@@ -65,4 +66,10 @@ export class ProductionYardEntity {
     cascade: false,
   })
   engineerMappings!: ProductionYardEngineerEntity[];
+
+  @OneToMany(() => ProductionYardTemplateEntity, (yt) => yt.yard, {
+    eager: false,
+    cascade: false,
+  })
+  yardTemplates?: ProductionYardTemplateEntity[];
 }

@@ -4,6 +4,7 @@ import { userApiRouter } from '../modules/system/user/user.route.js';
 import { roleApiRouter } from '../modules/system/role/role.route.js';
 import { departmentApiRouter } from '../modules/production/department/production-department.route.js';
 import { yardApiRouter } from '../modules/production/yard/production-yard.route.js';
+import { yardTemplateApiRouter } from '../modules/production/yard-template/production-yard-template.route.js';
 import { productionTeamApiRouter } from '../modules/production/team/production-team.route.js';
 import { inventoryCategoryApiRouter } from '../modules/inventory/category/inventory-category.route.js';
 import { inventoryProductApiRouter } from '../modules/inventory/product/inventory-product.route.js';
@@ -34,6 +35,7 @@ apiRouter.use('/production/departments', departmentApiRouter);
 apiRouter.use('/production/departments', productionTeamApiRouter);
 
 // Production Yards Routes (/api/production/yards)
+apiRouter.use('/production/yards', yardTemplateApiRouter);
 apiRouter.use('/production/yards', yardApiRouter);
 
 // Inventory Categories Routes (/api/inventory/categories)

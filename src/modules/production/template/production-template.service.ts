@@ -15,6 +15,7 @@ import {
   ProductionTemplateOrderConfigurationDto,
   toProductionTemplateDto,
   toProductionTemplateListItemDto,
+  TaskDurationUnit,
 } from './production-template.types.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
 import { ConflictError } from '../../../common/errors/conflict.error.js';
@@ -152,6 +153,8 @@ export class ProductionTemplateService {
           departmentName: s.departmentName,
           departmentCode: s.departmentCode,
           sortOrder: w.sortOrder,
+          estimatedDurationValue: s.estimatedDurationValue ?? s.estimatedDurationMinutes ?? null,
+          estimatedDurationUnit: s.estimatedDurationUnit ?? (s.estimatedDurationMinutes ? TaskDurationUnit.MINUTES : null),
           estimatedDurationMinutes: s.estimatedDurationMinutes,
           estimatedCost: s.estimatedCost ? String(s.estimatedCost) : null,
           plannedMaterialsCount: s.plannedMaterialsCount,

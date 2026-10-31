@@ -16,6 +16,49 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
+  function extractApiErrorMessage(responseBody, fallback) {
+    if (!responseBody) return fallback || 'حدث خطأ غير متوقع';
+    var errorMessages = [];
+    if (responseBody.errors && typeof responseBody.errors === 'object' && !Array.isArray(responseBody.errors)) {
+      Object.keys(responseBody.errors).forEach(function (key) {
+        var val = responseBody.errors[key];
+        if (Array.isArray(val)) {
+          val.forEach(function (msg) {
+            if (typeof msg === 'string' && msg.trim()) errorMessages.push(msg.trim());
+          });
+        } else if (typeof val === 'string' && val.trim()) {
+          errorMessages.push(val.trim());
+        }
+      });
+    } else if (Array.isArray(responseBody.errors)) {
+      responseBody.errors.forEach(function (msg) {
+        if (typeof msg === 'string' && msg.trim()) errorMessages.push(msg.trim());
+      });
+    }
+    if (errorMessages.length === 0 && responseBody.message && typeof responseBody.message === 'string') {
+      errorMessages.push(responseBody.message);
+    }
+    var uniqueMessages = Array.from(new Set(errorMessages));
+    return uniqueMessages.length > 0 ? uniqueMessages.join('، ') : fallback || 'حدث خطأ أثناء معالجة الطلب';
+  }
+  function formatTaskDurationText(val, unit, minutes) {
+    if (val != null && unit) {
+      if (unit === 'DAYS') {
+        return (val >= 3 && val <= 10) ? `${val} أيام` : `${val} يوم`;
+      }
+      if (unit === 'HOURS') {
+        return (val >= 3 && val <= 10) ? `${val} ساعات` : `${val} ساعة`;
+      }
+      if (unit === 'MINUTES') {
+        return `${val} دقيقة`;
+      }
+    }
+    if (minutes != null && minutes > 0) {
+      return `${minutes} دقيقة`;
+    }
+    return '';
+  }
+
   // 1. Safely parse configuration from script[type="application/json"]
   let config = {};
   const configScript = document.getElementById('productionTemplateConfigData');
@@ -641,13 +684,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const name = document.getElementById('newStageName').value.trim();
       const departmentId = document.getElementById('newStageDepartmentId').value;
       const durationVal = document.getElementById('newStageDuration').value.trim();
+      const durationUnitSelect = document.getElementById('newStageDurationUnit');
+      const durationUnit = durationUnitSelect ? durationUnitSelect.value : 'MINUTES';
       const costVal = document.getElementById('newStageCost').value.trim();
       const description = document.getElementById('newStageDescription').value.trim() || undefined;
 
       const payload = {
         name,
         departmentId,
-        estimatedDurationMinutes: durationVal ? parseInt(durationVal, 10) : undefined,
+        estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
+        estimatedDurationUnit: durationVal ? durationUnit : null,
         estimatedCost: costVal ? costVal : undefined,
         description,
       };
@@ -875,7 +921,8 @@ document.addEventListener('DOMContentLoaded', () => {
             body: JSON.stringify({
               name,
               departmentId,
-              estimatedDurationMinutes: durationVal ? parseInt(durationVal, 10) : undefined,
+              estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
+              estimatedDurationUnit: durationVal ? (document.getElementById('newOptionTaskDurationUnit')?.value || 'MINUTES') : null,
               estimatedCost: costVal ? costVal : undefined,
               description,
             }),
@@ -1092,12 +1139,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const stageMeta = document.createElement('div');
     stageMeta.className = 'stage-meta';
 
-    if (stage.estimatedDurationMinutes) {
+    const stageDurText = formatTaskDurationText(stage.estimatedDurationValue, stage.estimatedDurationUnit, stage.estimatedDurationMinutes);
+    if (stageDurText) {
       const durItem = document.createElement('span');
       durItem.className = 'stage-meta-item';
       const durIcon = document.createElement('i');
       durIcon.className = 'fa-solid fa-clock text-secondary';
-      durItem.append(durIcon, ` ${stage.estimatedDurationMinutes} دقيقة`);
+      durItem.append(durIcon, ` ${stageDurText}`);
       stageMeta.appendChild(durItem);
     }
 
@@ -1634,10 +1682,11 @@ document.addEventListener('DOMContentLoaded', () => {
     deptBadge.textContent = dept ? dept.name : task.departmentName || 'قسم غير محدد';
     metaDiv.appendChild(deptBadge);
 
-    if (task.estimatedDurationMinutes) {
+    const taskDurText = formatTaskDurationText(task.estimatedDurationValue, task.estimatedDurationUnit, task.estimatedDurationMinutes);
+    if (taskDurText) {
       const durSpan = document.createElement('span');
       durSpan.append(
-        document.createTextNode(`• ${task.estimatedDurationMinutes} دقيقة`)
+        document.createTextNode(`• ${taskDurText}`)
       );
       metaDiv.appendChild(durSpan);
     }
@@ -2119,6 +2168,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const drawerStageName = document.getElementById('drawerStageName');
   const drawerStageDepartmentId = document.getElementById('drawerStageDepartmentId');
   const drawerStageDuration = document.getElementById('drawerStageDuration');
+  const drawerStageDurationUnit = document.getElementById('drawerStageDurationUnit');
   const drawerStageCost = document.getElementById('drawerStageCost');
   const drawerStageDescription = document.getElementById('drawerStageDescription');
   const btnDrawerArchiveStage = document.getElementById('btnDrawerArchiveStage');
@@ -2139,7 +2189,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Fill Tab 1 Form
     if (drawerStageName) drawerStageName.value = stage.name;
     if (drawerStageDepartmentId) drawerStageDepartmentId.value = stage.departmentId;
-    if (drawerStageDuration) drawerStageDuration.value = stage.estimatedDurationMinutes ?? '';
+    if (drawerStageDuration) drawerStageDuration.value = stage.estimatedDurationValue ?? stage.estimatedDurationMinutes ?? '';
+    if (drawerStageDurationUnit) drawerStageDurationUnit.value = stage.estimatedDurationUnit ?? 'MINUTES';
     if (drawerStageCost) drawerStageCost.value = stage.estimatedCost ?? '';
     if (drawerStageDescription) drawerStageDescription.value = stage.description || '';
 
@@ -2171,15 +2222,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const name = drawerStageName.value.trim();
       const departmentId = drawerStageDepartmentId.value;
       const durationVal = drawerStageDuration.value.trim();
+      const durationUnit = drawerStageDurationUnit ? drawerStageDurationUnit.value : 'MINUTES';
       const costVal = drawerStageCost.value.trim();
       const description = drawerStageDescription.value.trim() || undefined;
 
       const payload = {
         name,
         departmentId,
-        estimatedDurationMinutes: durationVal ? parseInt(durationVal, 10) : undefined,
-        estimatedCost: costVal ? costVal : undefined,
-        description,
+        estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
+        estimatedDurationUnit: durationVal ? durationUnit : null,
+        estimatedCost: costVal ? costVal : null,
+        description: description ? description : null,
       };
 
       try {
@@ -2195,9 +2248,25 @@ document.addEventListener('DOMContentLoaded', () => {
           const dept = departmentsMap.get(departmentId);
           activeDrawerStage.departmentName = dept ? dept.name : 'قسم غير محدد';
           activeDrawerStage.departmentCode = dept ? dept.code : 'N/A';
-          activeDrawerStage.estimatedDurationMinutes = durationVal ? parseInt(durationVal, 10) : null;
+          activeDrawerStage.estimatedDurationValue = durationVal ? parseInt(durationVal, 10) : null;
+          activeDrawerStage.estimatedDurationUnit = durationVal ? durationUnit : null;
+          activeDrawerStage.estimatedDurationMinutes = durationVal ? (durationUnit === 'DAYS' ? parseInt(durationVal, 10) * 1440 : durationUnit === 'HOURS' ? parseInt(durationVal, 10) * 60 : parseInt(durationVal, 10)) : null;
           activeDrawerStage.estimatedCost = costVal ? costVal : null;
           activeDrawerStage.description = description || null;
+
+          // Sync currentWorkflowItems so renderWorkflow() reflects updated stage data
+          const wfItem = currentWorkflowItems.find((w) => w.stage && w.stage.id === activeDrawerStage.id);
+          if (wfItem && wfItem.stage) {
+            Object.assign(wfItem.stage, data.data, {
+              departmentName: activeDrawerStage.departmentName,
+              departmentCode: activeDrawerStage.departmentCode,
+              estimatedDurationValue: activeDrawerStage.estimatedDurationValue,
+              estimatedDurationUnit: activeDrawerStage.estimatedDurationUnit,
+              estimatedDurationMinutes: activeDrawerStage.estimatedDurationMinutes,
+              estimatedCost: activeDrawerStage.estimatedCost,
+              description: activeDrawerStage.description,
+            });
+          }
 
           if (stageDrawerTitle) stageDrawerTitle.textContent = name;
           if (stageDrawerDeptBadge) stageDrawerDeptBadge.textContent = activeDrawerStage.departmentName;
@@ -2205,7 +2274,7 @@ document.addEventListener('DOMContentLoaded', () => {
           renderWorkflow();
           showToast('تم حفظ تعديلات المرحلة بنجاح');
         } else {
-          Swal.fire('خطأ', data.message || 'تعذر تعديل المرحلة', 'error');
+          Swal.fire('خطأ', extractApiErrorMessage(data, 'تعذر تعديل المرحلة'), 'error');
         }
       } catch {
         Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
@@ -2910,6 +2979,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const drawerTaskName = document.getElementById('drawerTaskName');
   const drawerTaskDeptId = document.getElementById('drawerTaskDeptId');
   const drawerTaskDuration = document.getElementById('drawerTaskDuration');
+  const drawerTaskDurationUnit = document.getElementById('drawerTaskDurationUnit');
   const drawerTaskCost = document.getElementById('drawerTaskCost');
   const drawerTaskDescription = document.getElementById('drawerTaskDescription');
   const btnArchiveTaskModal = document.getElementById('btnArchiveTaskModal');
@@ -2957,7 +3027,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (drawerTaskName) drawerTaskName.value = task.name;
     if (drawerTaskDeptId) drawerTaskDeptId.value = task.departmentId;
-    if (drawerTaskDuration) drawerTaskDuration.value = task.estimatedDurationMinutes ?? '';
+    if (drawerTaskDuration) drawerTaskDuration.value = task.estimatedDurationValue ?? task.estimatedDurationMinutes ?? '';
+    if (drawerTaskDurationUnit) drawerTaskDurationUnit.value = task.estimatedDurationUnit ?? 'MINUTES';
     if (drawerTaskCost) drawerTaskCost.value = task.estimatedCost ?? '';
     if (drawerTaskDescription) drawerTaskDescription.value = task.description || '';
 
@@ -2992,15 +3063,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const name = drawerTaskName.value.trim();
       const departmentId = drawerTaskDeptId.value;
       const durationVal = drawerTaskDuration.value.trim();
+      const durationUnit = drawerTaskDurationUnit ? drawerTaskDurationUnit.value : 'MINUTES';
       const costVal = drawerTaskCost.value.trim();
       const description = drawerTaskDescription.value.trim() || undefined;
 
       const payload = {
         name,
         departmentId,
-        estimatedDurationMinutes: durationVal ? parseInt(durationVal, 10) : undefined,
-        estimatedCost: costVal ? costVal : undefined,
-        description,
+        estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
+        estimatedDurationUnit: durationVal ? durationUnit : null,
+        estimatedCost: costVal ? costVal : null,
+        description: description ? description : null,
       };
 
       try {
@@ -3020,13 +3093,28 @@ document.addEventListener('DOMContentLoaded', () => {
           task.departmentName = dept ? dept.name : 'قسم غير محدد';
           task.departmentCode = dept ? dept.code : 'N/A';
 
+          // Sync task in currentPatterns so renderWorkflow() reflects updated task data
+          const targetPattern = currentPatterns.find((p) => p.id === patternId);
+          if (targetPattern && Array.isArray(targetPattern.options)) {
+            const targetOption = targetPattern.options.find((o) => o.id === optionId);
+            if (targetOption && Array.isArray(targetOption.tasks)) {
+              const targetTask = targetOption.tasks.find((t) => t.id === task.id);
+              if (targetTask) {
+                Object.assign(targetTask, data.data, {
+                  departmentName: task.departmentName,
+                  departmentCode: task.departmentCode,
+                });
+              }
+            }
+          }
+
           if (taskModalTitle) taskModalTitle.textContent = task.name;
           if (taskModalDeptBadge) taskModalDeptBadge.textContent = task.departmentName;
 
           renderWorkflow();
           showToast('تم حفظ تعديلات المهمة بنجاح');
         } else {
-          Swal.fire('خطأ', data.message || 'تعذر تعديل المهمة', 'error');
+          Swal.fire('خطأ', extractApiErrorMessage(data, 'تعذر تعديل المهمة'), 'error');
         }
       } catch {
         Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');

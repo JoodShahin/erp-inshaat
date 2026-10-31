@@ -10,10 +10,16 @@
           تحديث بيانات ساحة الإنتاج: <strong class="text-dark"><%= yard.name %></strong>
         </p>
       </div>
-      <a href="/production/yards" class="btn btn-outline-secondary d-inline-flex align-items-center gap-2">
-        <i class="fa-solid fa-arrow-right"></i>
+      <div class="d-flex gap-2">
+        <a href="/production/yards/<%= yard.id %>" class="btn btn-outline-info d-inline-flex align-items-center gap-2">
+          <i class="fa-solid fa-eye"></i>
+          <span>عرض التفاصيل والقوالب</span>
+        </a>
+        <a href="/production/yards" class="btn btn-outline-secondary d-inline-flex align-items-center gap-2">
+          <i class="fa-solid fa-arrow-right"></i>
         <span>العودة للساحات</span>
-      </a>
+        </a>
+      </div>
     </div>
 
     <div class="card border-0 shadow-sm" style="border-radius: 12px;">

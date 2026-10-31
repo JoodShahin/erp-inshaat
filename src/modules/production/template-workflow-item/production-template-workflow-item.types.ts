@@ -1,4 +1,7 @@
 import { ProductionTemplateWorkflowItemEntity, ProductionTemplateWorkflowItemType } from './production-template-workflow-item.entity.js';
+import { TaskDurationUnit } from '../task-duration/task-duration.types.js';
+
+export { TaskDurationUnit } from '../task-duration/task-duration.types.js';
 
 export interface ProductionTemplateWorkflowItemStageSummaryDto {
   id: string;
@@ -7,6 +10,8 @@ export interface ProductionTemplateWorkflowItemStageSummaryDto {
   departmentId: string;
   departmentName?: string;
   departmentCode?: string;
+  estimatedDurationValue?: number | null;
+  estimatedDurationUnit?: TaskDurationUnit | null;
   estimatedDurationMinutes: number | null;
   estimatedCost: string | null;
   plannedMaterialsCount: number;
