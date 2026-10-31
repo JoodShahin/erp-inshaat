@@ -45,6 +45,7 @@ import { ReorderProductionOrderLinesDto } from '../order-line/dto/reorder-produc
 import { CommitProductionOrderDraftLinesDto } from '../order-line/dto/commit-production-order-draft-lines.dto.js';
 import { UpdatePatternSelectionDto } from '../order-line-pattern-selection/dto/update-pattern-selection.dto.js';
 import { hashLineConfiguration } from '../order-line/production-order-line-configuration.helper.js';
+import { calculateLineQuantities } from '../order-line/production-order-line-quantity.helper.js';
 import {
   ProductionOrderGuardService,
   productionOrderGuardService,
@@ -1907,7 +1908,7 @@ export class ProductionOrderService {
               fullName: order.createdByUser.fullName,
             }
           : undefined,
-        summary: { lineCount: 0, totalQuantity: 0, totalLinkedQuantity: 0, totalRemainingQuantity: 0 },
+        summary: { lineCount: 0, totalQuantity: 0, totalLinkedQuantity: 0, totalRemainingQuantity: 0, totalExcessQuantity: 0, hasQuantityViolation: false },
         lines: [],
         hasExecutionPlans: false,
         unitsSummary: null,
@@ -2080,14 +2081,20 @@ export class ProductionOrderService {
     let totalQuantity = 0;
     let totalLinkedQuantity = 0;
     let totalRemainingQuantity = 0;
+    let totalExcessQuantity = 0;
+    let hasOrderQuantityViolation = false;
     const lineDtos: ProductionOrderLineDto[] = lines.map((line) => {
       totalQuantity += line.quantity;
       const requestedQuantity = line.quantity;
       const linkedQuantity = linkedNonCancelledUnitCountByLineId.get(line.id) || 0;
-      const remainingQuantity = Math.max(0, requestedQuantity - linkedQuantity);
+      const lineQuantities = calculateLineQuantities(requestedQuantity, linkedQuantity);
 
-      totalLinkedQuantity += linkedQuantity;
-      totalRemainingQuantity += remainingQuantity;
+      totalLinkedQuantity += lineQuantities.linkedQuantity;
+      totalRemainingQuantity += lineQuantities.remainingQuantity;
+      totalExcessQuantity += lineQuantities.excessQuantity;
+      if (lineQuantities.hasQuantityViolation) {
+        hasOrderQuantityViolation = true;
+      }
       const tmpl = templateMap.get(line.templateId);
       const lineSelections = selectionsByLineId.get(line.id) || [];
 
@@ -2132,7 +2139,9 @@ export class ProductionOrderService {
         quantity: line.quantity,
         requestedQuantity,
         linkedQuantity,
-        remainingQuantity,
+        remainingQuantity: lineQuantities.remainingQuantity,
+        excessQuantity: lineQuantities.excessQuantity,
+        hasQuantityViolation: lineQuantities.hasQuantityViolation,
         sortOrder: line.sortOrder,
         createdAt: line.createdAt,
         updatedAt: line.updatedAt,
@@ -2194,6 +2203,8 @@ export class ProductionOrderService {
         totalQuantity,
         totalLinkedQuantity,
         totalRemainingQuantity,
+        totalExcessQuantity,
+        hasQuantityViolation: hasOrderQuantityViolation,
       },
       lines: lineDtos,
       hasExecutionPlans: activePlans.length > 0,

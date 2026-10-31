@@ -21,6 +21,8 @@ export enum ProductionUnitEventType {
   TASK_NOTE_ADDED = 'TASK_NOTE_ADDED',
   TASK_ATTACHMENT_ADDED = 'TASK_ATTACHMENT_ADDED',
   UNIT_CANCELLED = 'UNIT_CANCELLED',
+  UNIT_LINKED = 'UNIT_LINKED',
+  UNIT_RESTORED = 'UNIT_RESTORED',
 }
 
 @Entity('production_unit_event')

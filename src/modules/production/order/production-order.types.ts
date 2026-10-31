@@ -14,6 +14,8 @@ export interface ProductionOrderSummaryDto {
   totalQuantity: number;
   totalLinkedQuantity?: number;
   totalRemainingQuantity?: number;
+  totalExcessQuantity?: number;
+  hasQuantityViolation?: boolean;
 }
 
 export interface ProductionOrderDto {
