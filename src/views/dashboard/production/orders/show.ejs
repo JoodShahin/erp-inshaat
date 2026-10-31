@@ -194,16 +194,38 @@
           </div>
         </div>
 
-        <% if (order.status === 'APPROVED' && typeof order.unitsSummary !== 'undefined' && order.unitsSummary) { %>
-          <div class="production-kpi-card" style="border: 1px solid #e2e8f0; border-right: 5px solid #10AC84 !important;">
-            <div class="production-kpi-icon" style="background-color: rgba(16, 172, 132, 0.1);">
-              <i class="fa-solid fa-door-open" style="color: #10AC84;"></i>
+        <% if (order.status === 'APPROVED') { %>
+          <% if ((order.summary.totalLinkedQuantity || 0) > 0 || (typeof order.unitsSummary !== 'undefined' && order.unitsSummary && order.unitsSummary.totalUnits > 0)) { %>
+            <div class="production-kpi-card" style="border: 1px solid #e2e8f0; border-right: 5px solid #10AC84 !important;">
+              <div class="production-kpi-icon" style="background-color: rgba(16, 172, 132, 0.1);">
+                <i class="fa-solid fa-door-open" style="color: #10AC84;"></i>
+              </div>
+              <div>
+                <div class="text-muted small fw-semibold">إجمالي الغرف المرتبطة</div>
+                <div class="fs-4 fw-bold font-monospace" style="color: #10AC84;"><%= typeof order.summary.totalLinkedQuantity !== 'undefined' ? order.summary.totalLinkedQuantity : order.unitsSummary.totalUnits %> <span class="fs-6 text-muted fw-normal">غرفة مستقلة</span></div>
+              </div>
             </div>
-            <div>
-              <div class="text-muted small fw-semibold">إجمالي الغرف المولدة</div>
-              <div class="fs-4 fw-bold font-monospace" style="color: #10AC84;"><%= order.unitsSummary.totalUnits %> <span class="fs-6 text-muted fw-normal">غرفة مستقلة</span></div>
+            <div class="production-kpi-card" style="border: 1px solid #e2e8f0; border-right: 5px solid #0984E3 !important;">
+              <div class="production-kpi-icon" style="background-color: rgba(9, 132, 227, 0.1);">
+                <i class="fa-solid fa-hourglass-half" style="color: #0984E3;"></i>
+              </div>
+              <div>
+                <div class="text-muted small fw-semibold">الكمية المتبقية للتصنيع</div>
+                <div class="fs-4 fw-bold text-primary font-monospace"><%= typeof order.summary.totalRemainingQuantity !== 'undefined' ? order.summary.totalRemainingQuantity : 0 %> <span class="fs-6 text-muted fw-normal">وحدة</span></div>
+              </div>
             </div>
-          </div>
+          <% } else { %>
+            <div class="production-kpi-card" style="border: 1px solid #e2e8f0; border-right: 5px solid #0984E3 !important;">
+              <div class="production-kpi-icon" style="background-color: rgba(9, 132, 227, 0.1);">
+                <i class="fa-solid fa-file-signature" style="color: #0984E3;"></i>
+              </div>
+              <div>
+                <div class="text-muted small fw-semibold">حالة مذكرة الإنتاج</div>
+                <div class="fs-5 fw-bold text-dark">معتمدة وجاهزة للتصنيع</div>
+                <div class="small text-muted">لم يتم إنشاء غرف لهذا الأمر بعد</div>
+              </div>
+            </div>
+          <% } %>
         <% } %>
       </div>
     </div>
@@ -263,12 +285,14 @@
         <table class="table table-hover align-middle mb-0" id="orderLinesTable">
           <thead class="table-light">
             <tr class="text-muted small">
-              <th class="py-3 px-3 text-center" style="width: 60px;">#</th>
+              <th class="py-3 px-3 text-center" style="width: 50px;">#</th>
               <th class="py-3 px-3">القالب</th>
-              <th class="py-3 px-3" style="width: 120px;">الكود</th>
-              <th class="py-3 px-3 text-center" style="width: 90px;">الكمية</th>
+              <th class="py-3 px-3" style="width: 110px;">الكود</th>
+              <th class="py-3 px-3 text-center" style="width: 90px;">المطلوبة</th>
+              <th class="py-3 px-3 text-center" style="width: 90px;">المرتبطة</th>
+              <th class="py-3 px-3 text-center" style="width: 90px;">المتبقية</th>
               <th class="py-3 px-3">الأنماط وخيارات التخصيص</th>
-              <th class="py-3 px-3 text-center" style="width: 160px;">المرجع التنفيذي</th>
+              <th class="py-3 px-3 text-center" style="width: 140px;">المرجع التنفيذي</th>
               <th class="py-3 px-3 text-center" style="width: 120px;">الغرف المولدة</th>
             </tr>
           </thead>
@@ -286,7 +310,13 @@
                   <span class="badge bg-light text-secondary font-monospace border"><%= line.template ? line.template.code : '—' %></span>
                 </td>
                 <td data-label="الكمية" class="text-center">
-                  <span class="fw-bold text-primary font-monospace fs-6"><%= line.quantity %></span>
+                  <span class="fw-bold text-dark font-monospace fs-6"><%= typeof line.requestedQuantity !== 'undefined' ? line.requestedQuantity : line.quantity %></span>
+                </td>
+                <td data-label="الغرف المرتبطة" class="text-center">
+                  <span class="fw-bold font-monospace fs-6 <%= (line.linkedQuantity || 0) > 0 ? 'text-success' : 'text-muted' %>"><%= typeof line.linkedQuantity !== 'undefined' ? line.linkedQuantity : (line.unitCount || 0) %></span>
+                </td>
+                <td data-label="الكمية المتبقية" class="text-center">
+                  <span class="fw-bold font-monospace fs-6 <%= (typeof line.remainingQuantity !== 'undefined' ? line.remainingQuantity : line.quantity) > 0 ? 'text-primary' : 'text-secondary' %>"><%= typeof line.remainingQuantity !== 'undefined' ? line.remainingQuantity : line.quantity %></span>
                 </td>
                 <td data-label="الأنماط">
                   <% if (!line.patternSelections || line.patternSelections.length === 0) { %>
@@ -320,15 +350,15 @@
                       </button>
                     </div>
                   <% } else if (order.status === 'APPROVED') { %>
-                    <span class="badge bg-secondary-subtle text-secondary px-2 py-1 rounded-pill small">سجل تاريخي (غير متوفرة)</span>
+                    <span class="badge bg-secondary-subtle text-secondary px-2 py-1 rounded-pill small">قيد الانتظار للتصنيع</span>
                   <% } else { %>
-                    <span class="badge bg-light text-muted border px-2 py-1 rounded-pill small">تنشأ عند الاعتماد</span>
+                    <span class="badge bg-light text-muted border px-2 py-1 rounded-pill small">تنشأ عند التنفيذ</span>
                   <% } %>
                 </td>
                 <td data-label="الغرف المولدة" class="text-center">
-                  <% if (order.status === 'APPROVED' && (typeof line.unitCount !== 'undefined' && line.unitCount > 0)) { %>
+                  <% if (order.status === 'APPROVED' && ((typeof line.linkedQuantity !== 'undefined' && line.linkedQuantity > 0) || (typeof line.unitCount !== 'undefined' && line.unitCount > 0))) { %>
                     <div class="d-flex flex-column align-items-center gap-1">
-                      <span class="fw-bold text-primary font-monospace"><%= line.unitCount %> غرفة</span>
+                      <span class="fw-bold text-primary font-monospace"><%= typeof line.linkedQuantity !== 'undefined' ? line.linkedQuantity : line.unitCount %> غرفة</span>
                       <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 d-inline-flex align-items-center gap-1 view-units-btn"
                               data-line-id="<%= line.id %>"
                               data-line-order="<%= line.sortOrder %>"
@@ -338,9 +368,9 @@
                       </button>
                     </div>
                   <% } else if (order.status === 'APPROVED') { %>
-                    <span class="text-muted small">سجل تاريخي</span>
+                    <span class="text-muted small">لم يتم إنشاء غرف لهذا الأمر بعد</span>
                   <% } else { %>
-                    <span class="text-muted small">تولّد عند الاعتماد</span>
+                    <span class="text-muted small">تولّد عند التصنيع</span>
                   <% } %>
                 </td>
               </tr>
@@ -349,11 +379,17 @@
           <tfoot>
             <tr>
               <td colspan="3" class="py-3 px-3 fw-bold text-dark">الإجمالي الكلي</td>
-              <td class="py-3 px-3 text-center font-monospace fw-bold text-primary fs-6"><%= order.summary.totalQuantity %></td>
+              <td class="py-3 px-3 text-center font-monospace fw-bold text-dark fs-6"><%= order.summary.totalQuantity %></td>
+              <td class="py-3 px-3 text-center font-monospace fw-bold text-success fs-6"><%= typeof order.summary.totalLinkedQuantity !== 'undefined' ? order.summary.totalLinkedQuantity : (order.unitsSummary ? order.unitsSummary.totalUnits : 0) %></td>
+              <td class="py-3 px-3 text-center font-monospace fw-bold text-primary fs-6"><%= typeof order.summary.totalRemainingQuantity !== 'undefined' ? order.summary.totalRemainingQuantity : order.summary.totalQuantity %></td>
               <td class="py-3 px-3 text-muted small"><%= order.summary.lineCount %> بنود مسجلة</td>
               <td colspan="2" class="py-3 px-3 text-end text-muted small">
-                <% if (order.status === 'APPROVED' && order.unitsSummary) { %>
-                  <strong class="text-success font-monospace"><%= order.unitsSummary.totalUnits %></strong> غرفة جاهزة في النظام
+                <% if (order.status === 'APPROVED') { %>
+                  <% if ((order.summary.totalLinkedQuantity || 0) > 0) { %>
+                    <strong class="text-success font-monospace"><%= order.summary.totalLinkedQuantity %></strong> غرفة مرتبطة في النظام
+                  <% } else { %>
+                    <span class="text-muted">لم يتم إنشاء غرف لهذا الأمر بعد</span>
+                  <% } %>
                 <% } %>
               </td>
             </tr>

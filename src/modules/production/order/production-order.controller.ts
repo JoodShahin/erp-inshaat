@@ -275,7 +275,7 @@ export class ProductionOrderController {
         );
       }
       const order = await this.orderService.approveOrder(orderId as string, currentUser);
-      res.status(200).json(ApiResponse.success(order, 'تم اعتماد أمر الإنتاج بنجاح'));
+      res.status(200).json(ApiResponse.success(order, 'تم اعتماد أمر الإنتاج وتحويله إلى مذكرة إنتاج جاهزة للتصنيع'));
     } catch (error) {
       next(error);
     }

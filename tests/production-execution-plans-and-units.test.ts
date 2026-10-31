@@ -549,11 +549,23 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     );
     const orderService = new ProductionOrderService(mockDataSource, guardService, planService, unitService);
 
+    const generatePlansAndUnitsForOrder = async (orderId: string, userId: string = 'user-eng-10') => {
+      const order = store.orders.find((o) => o.id === orderId);
+      const lines = store.lines.filter((l) => l.orderId === orderId && !l.deletedAt);
+      const batchCorrelationId = randomUUID();
+      for (const line of lines) {
+        const { plan } = await planService.createPlanForLine(line, mockManager);
+        await unitService.generateUnitsForPlan(order, line, plan, batchCorrelationId, userId, mockManager);
+      }
+    };
+
     return {
       store,
       orderService,
       planService,
       unitService,
+      mockManager,
+      generatePlansAndUnitsForOrder,
     };
   }
 
@@ -561,7 +573,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 1: Comprehensive Approval Workflow
   // ==========================================
   it('1. approveOrder creates isolated Execution Plan, Execution Tasks, Units, and Events', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, store } = createTestContext();
 
     // Add line with 3 units and explicit pattern selection (opt-steel-door)
     await orderService.addLine('order-100', {
@@ -574,11 +586,18 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
 
     const approvedOrder = await orderService.approveOrder('order-100', 'user-eng-10');
 
-    // 1. Order status
+    // 1. Order status as memorandum
     assert.equal(approvedOrder.status, ProductionOrderStatus.APPROVED);
     assert.equal(approvedOrder.approvedByUserId, 'user-eng-10');
     assert.ok(approvedOrder.approvedAt);
-    assert.equal(approvedOrder.hasExecutionPlans, true);
+    assert.equal(approvedOrder.hasExecutionPlans, false);
+    assert.equal(store.plans.length, 0, 'No plans created automatically upon memorandum approval');
+    assert.equal(store.tasks.length, 0, 'No tasks created automatically upon memorandum approval');
+    assert.equal(store.units.length, 0, 'No units created automatically upon memorandum approval');
+    assert.equal(store.events.length, 0, 'No events created automatically upon memorandum approval');
+
+    // Trigger generator explicitly to test execution plan, task, and unit creation
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     // 2. Execution Plan created
     assert.equal(store.plans.length, 1);
@@ -622,7 +641,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 2: Zero Unit Task Execution Records
   // ==========================================
   it('2. Invariant: 0 empty unit task execution records are created', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, store } = createTestContext();
 
     await orderService.addLine('order-100', {
       templateId: 'tmpl-room-a',
@@ -630,6 +649,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     });
 
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     assert.equal(store.units.length, 5);
     // Verified: No unit_task_execution table or rows are created anywhere in the system
@@ -640,7 +660,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 3: Pattern Option Isolation
   // ==========================================
   it('3. Isolates tasks: selected option tasks included, unselected option tasks strictly excluded', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, store } = createTestContext();
 
     // Select opt-wood-door (which has ot-wood-1: "تثبيت إطار الخشب")
     await orderService.addLine('order-100', {
@@ -652,6 +672,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     });
 
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     // Expected tasks: Stage 1 (general), Wood Door (pattern option), Stage 2 (general)
     assert.equal(store.tasks.length, 3);
@@ -664,7 +685,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 3b: Task Duration Snapshotting & Immutability Invariant
   // ==========================================
   it('3b. Task Duration Invariant: approveOrder snapshots duration value, unit, and minutes, and remains immutable upon template mutation', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, store } = createTestContext();
 
     // Configure stage-1 with 10 DAYS (14400 minutes)
     store.stages[0].estimatedDurationValue = 10;
@@ -691,6 +712,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     });
 
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     // 1. Verify Task 0 (General Stage 1: 10 DAYS = 14400 minutes)
     const task0 = store.tasks[0];
@@ -741,7 +763,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 4: Decoupling from Future Template Changes
   // ==========================================
   it('4. Total Template Decoupling: Future template mutations or archival do NOT affect approved plan', async () => {
-    const { orderService, planService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, planService, store } = createTestContext();
 
     await orderService.addLine('order-100', {
       templateId: 'tmpl-room-a',
@@ -749,6 +771,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     });
 
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
     const planId = store.plans[0].id;
 
     // Mutate live template: change name, delete stages, and soft-delete the template itself
@@ -769,7 +792,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 5: reopenOrder Protection
   // ==========================================
   it('5. reopenOrder blocked with PRODUCTION_ORDER_HAS_EXECUTION_PLANS when plans/units exist', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, store } = createTestContext();
 
     await orderService.addLine('order-100', {
       templateId: 'tmpl-room-a',
@@ -778,6 +801,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
 
     await orderService.approveOrder('order-100', 'user-eng-10');
     assert.equal(store.orders[0].status, ProductionOrderStatus.APPROVED);
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     await assert.rejects(
       async () => {
@@ -821,7 +845,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 7: Unit Sequence & Naming Format
   // ==========================================
   it('7. Units sequence 1..N and deterministic unit numbers per line', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, store } = createTestContext();
 
     await orderService.addLine('order-100', {
       templateId: 'tmpl-room-a',
@@ -829,6 +853,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     });
 
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     assert.equal(store.units.length, 12);
     for (let seq = 1; seq <= 12; seq++) {
@@ -1065,7 +1090,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 15: Multiple Lines within Order
   // ==========================================
   it('15. Order with multiple lines creates distinct plans and properly sequenced units for each line', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, store } = createTestContext();
 
     // Line 1: qty 2
     await orderService.addLine('order-100', {
@@ -1100,6 +1125,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
     });
 
     const approvedOrder = await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     // 2 execution plans created
     assert.equal(store.plans.length, 2);
@@ -1127,7 +1153,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 16: IDOR Protection on Plans & Units
   // ==========================================
   it('16. IDOR Protection: Accessing plan or unit belonging to different order fails closed with 404', async () => {
-    const { orderService, planService, unitService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, planService, unitService, store } = createTestContext();
 
     // Setup Order 1
     await orderService.addLine('order-100', {
@@ -1135,6 +1161,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       quantity: 2,
     });
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     // Setup Order 2
     store.orders.push({
@@ -1152,6 +1179,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       quantity: 1,
     });
     await orderService.approveOrder('order-200', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-200', 'user-eng-10');
 
     const order1Plan = store.plans.find((p) => p.orderId === 'order-100')!;
     const order2Plan = store.plans.find((p) => p.orderId === 'order-200')!;
@@ -1185,13 +1213,14 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 17: Soft-Deleted Orders Protection
   // ==========================================
   it('17. Soft-deleted orders cannot have plans or units queried (404 NotFoundError)', async () => {
-    const { orderService, planService, unitService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, planService, unitService, store } = createTestContext();
 
     await orderService.addLine('order-100', {
       templateId: 'tmpl-room-a',
       quantity: 2,
     });
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     const plan = store.plans[0];
     const unit = store.units[0];
@@ -1252,7 +1281,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 18: Specifications Snapshotting
   // ==========================================
   it('18. Snapshots template technical specifications and remains immutable after live template changes', async () => {
-    const { orderService, planService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, planService, store } = createTestContext();
 
     // Add technical specifications to template
     store.specifications.push(
@@ -1265,6 +1294,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       quantity: 1,
     });
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     const plan = store.plans[0];
     assert.ok(plan.specifications);
@@ -1289,7 +1319,7 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 19: Fail-Closed Workflow Data Consistency
   // ==========================================
   it('19. Fails closed with BusinessRuleError when workflow stage or pattern is corrupt/missing', async () => {
-    const { orderService, store } = createTestContext();
+    const { orderService, planService, store, mockManager } = createTestContext();
 
     // Corrupt workflow: reference nonexistent stage
     store.workflowItems.push({
@@ -1307,9 +1337,10 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
       quantity: 1,
     });
 
+    const line = store.lines[0];
     await assert.rejects(
       async () => {
-        await orderService.approveOrder('order-100', 'user-eng-10');
+        await planService.createPlanForLine(line, mockManager);
       },
       (err: any) => {
         assert.equal(err.name, 'BusinessRuleError');
@@ -1485,13 +1516,14 @@ describe('Phase 1 — Execution Plans & Production Units Architecture', () => {
   // SCENARIO 21: Database Pagination for Units and Events
   // ==========================================
   it('21. Pagination contract conforms to PROJECT_RULES.md (items, total, page, limit, totalPages)', async () => {
-    const { orderService, unitService, store } = createTestContext();
+    const { orderService, generatePlansAndUnitsForOrder, unitService, store } = createTestContext();
 
     await orderService.addLine('order-100', {
       templateId: 'tmpl-room-a',
       quantity: 5,
     });
     await orderService.approveOrder('order-100', 'user-eng-10');
+    await generatePlansAndUnitsForOrder('order-100', 'user-eng-10');
 
     // Page 1, limit 2
     const page1 = await unitService.getUnitsByOrderId('order-100', { page: 1, limit: 2 });

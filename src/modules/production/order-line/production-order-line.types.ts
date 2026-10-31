@@ -14,6 +14,9 @@ export interface ProductionOrderLineDto {
   orderId: string;
   templateId: string;
   quantity: number;
+  requestedQuantity: number;
+  linkedQuantity: number;
+  remainingQuantity: number;
   sortOrder: number;
   createdAt: Date;
   updatedAt: Date;

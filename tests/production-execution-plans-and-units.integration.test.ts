@@ -232,10 +232,10 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
     const line = await orderService.addLine(orderId, { templateId: testTemplateId, quantity: 3 });
     const lineId = line.id;
 
-    // Mock unitService.generateUnitsForPlan to simulate an unexpected error midway
-    const originalGenerateUnits = unitService.generateUnitsForPlan.bind(unitService);
-    unitService.generateUnitsForPlan = async () => {
-      throw new Error('SIMULATED_FAILURE_DURING_UNIT_GENERATION');
+    // Mock internal validation to simulate an unexpected error midway during approval transaction
+    const originalValidateReadiness = (orderService as any).validateOrderReadinessInternal.bind(orderService);
+    (orderService as any).validateOrderReadinessInternal = async () => {
+      throw new Error('SIMULATED_FAILURE_DURING_APPROVAL');
     };
 
     try {
@@ -243,7 +243,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
         async () => {
           await orderService.approveOrder(orderId, testUser1Id);
         },
-        /SIMULATED_FAILURE_DURING_UNIT_GENERATION/
+        /SIMULATED_FAILURE_DURING_APPROVAL/
       );
 
       // Verify that after rollback, NO records remain in MySQL
@@ -262,7 +262,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
       assert.equal(freshOrder?.approvedAt, null);
       assert.equal(freshOrder?.approvedByUserId, null);
     } finally {
-      unitService.generateUnitsForPlan = originalGenerateUnits;
+      (orderService as any).validateOrderReadinessInternal = originalValidateReadiness;
     }
   });
 
@@ -292,12 +292,12 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
     assert.equal(successes.length, 1, 'Exactly one approval call must succeed');
     assert.equal(failures.length, 1, 'Exactly one approval call must fail due to lock & status guard');
 
-    // Verify exactly 1 plan and 2 units exist
+    // Verify exactly 0 plans and 0 units exist (memorandum approval)
     const planCount = await planRepo.count({ where: { orderId } });
-    assert.equal(planCount, 1);
+    assert.equal(planCount, 0, 'No execution plans must be generated upon memorandum approval');
 
     const unitCount = await unitRepo.count({ where: { orderId } });
-    assert.equal(unitCount, 2);
+    assert.equal(unitCount, 0, 'No units must be generated upon memorandum approval');
 
     const freshOrder = await orderRepo.findOne({ where: { id: orderId } });
     assert.equal(freshOrder?.status, ProductionOrderStatus.APPROVED);

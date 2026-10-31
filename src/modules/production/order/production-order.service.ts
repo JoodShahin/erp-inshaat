@@ -1563,23 +1563,8 @@ export class ProductionOrderService {
         );
       }
 
-      // 4. Batch correlation ID for all unit creation events
-      const batchCorrelationId = randomUUID();
-
-      // 5. Generate Execution Plan, Tasks, and Units for each line
-      for (const line of lines) {
-        const { plan } = await this.executionPlanService.createPlanForLine(line, manager);
-        await this.unitService.generateUnitsForPlan(
-          order,
-          line,
-          plan,
-          batchCorrelationId,
-          userId,
-          manager
-        );
-      }
-
-      // 6. Set APPROVED
+      // 4. Set APPROVED (Production Order Approval = Approved Production Memorandum)
+      // Note: No execution plans, execution tasks, units, or events are generated automatically.
       order.status = ProductionOrderStatus.APPROVED;
       order.approvedAt = new Date();
       order.approvedByUserId = userId;
@@ -1922,7 +1907,7 @@ export class ProductionOrderService {
               fullName: order.createdByUser.fullName,
             }
           : undefined,
-        summary: { lineCount: 0, totalQuantity: 0 },
+        summary: { lineCount: 0, totalQuantity: 0, totalLinkedQuantity: 0, totalRemainingQuantity: 0 },
         lines: [],
         hasExecutionPlans: false,
         unitsSummary: null,
@@ -2063,6 +2048,7 @@ export class ProductionOrderService {
       : [];
 
     const unitCountByLineId = new Map<string, number>();
+    const linkedNonCancelledUnitCountByLineId = new Map<string, number>();
     const unitsSummary = {
       totalUnits: activeUnits.length,
       createdUnits: 0,
@@ -2075,19 +2061,33 @@ export class ProductionOrderService {
       unitCountByLineId.set(u.orderLineId, (unitCountByLineId.get(u.orderLineId) || 0) + 1);
       if (u.isCancelled || u.status === ProductionUnitStatus.CANCELLED) {
         unitsSummary.cancelledUnits++;
-      } else if (u.status === ProductionUnitStatus.COMPLETED) {
-        unitsSummary.completedUnits++;
-      } else if (u.status === ProductionUnitStatus.IN_PROGRESS) {
-        unitsSummary.inProgressUnits++;
       } else {
-        unitsSummary.createdUnits++;
+        linkedNonCancelledUnitCountByLineId.set(
+          u.orderLineId,
+          (linkedNonCancelledUnitCountByLineId.get(u.orderLineId) || 0) + 1
+        );
+        if (u.status === ProductionUnitStatus.COMPLETED) {
+          unitsSummary.completedUnits++;
+        } else if (u.status === ProductionUnitStatus.IN_PROGRESS) {
+          unitsSummary.inProgressUnits++;
+        } else {
+          unitsSummary.createdUnits++;
+        }
       }
     }
 
     // 6. Map Line DTOs
     let totalQuantity = 0;
+    let totalLinkedQuantity = 0;
+    let totalRemainingQuantity = 0;
     const lineDtos: ProductionOrderLineDto[] = lines.map((line) => {
       totalQuantity += line.quantity;
+      const requestedQuantity = line.quantity;
+      const linkedQuantity = linkedNonCancelledUnitCountByLineId.get(line.id) || 0;
+      const remainingQuantity = Math.max(0, requestedQuantity - linkedQuantity);
+
+      totalLinkedQuantity += linkedQuantity;
+      totalRemainingQuantity += remainingQuantity;
       const tmpl = templateMap.get(line.templateId);
       const lineSelections = selectionsByLineId.get(line.id) || [];
 
@@ -2130,6 +2130,9 @@ export class ProductionOrderService {
         orderId: line.orderId,
         templateId: line.templateId,
         quantity: line.quantity,
+        requestedQuantity,
+        linkedQuantity,
+        remainingQuantity,
         sortOrder: line.sortOrder,
         createdAt: line.createdAt,
         updatedAt: line.updatedAt,
@@ -2155,7 +2158,7 @@ export class ProductionOrderService {
                 lineQuantity: plan.lineQuantity,
                 configurationHash: plan.configurationHash,
                 tasksCount: taskCountByPlanId.get(plan.id) || 0,
-                unitsCount: plan.lineQuantity,
+                unitsCount: linkedQuantity,
               }
             : null;
         })(),
@@ -2189,6 +2192,8 @@ export class ProductionOrderService {
       summary: {
         lineCount: lines.length,
         totalQuantity,
+        totalLinkedQuantity,
+        totalRemainingQuantity,
       },
       lines: lineDtos,
       hasExecutionPlans: activePlans.length > 0,
