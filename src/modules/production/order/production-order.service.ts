@@ -2059,6 +2059,7 @@ export class ProductionOrderService {
     };
 
     for (const u of activeUnits) {
+      if (!u.orderLineId) continue;
       unitCountByLineId.set(u.orderLineId, (unitCountByLineId.get(u.orderLineId) || 0) + 1);
       if (u.isCancelled || u.status === ProductionUnitStatus.CANCELLED) {
         unitsSummary.cancelledUnits++;

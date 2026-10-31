@@ -11,9 +11,13 @@ import { ProductionExecutionPlanEntity } from '../src/modules/production/executi
 import { ProductionUnitEntity, ProductionUnitStatus } from '../src/modules/production/unit/production-unit.entity.js';
 import { ProductionUnitEventEntity } from '../src/modules/production/unit/production-unit-event.entity.js';
 import { UserEntity } from '../src/modules/system/user/user.entity.js';
-import { ProductionOrderLineAllocationService } from '../src/modules/production/order-line/production-order-line-allocation.service.js';
+import {
+  ProductionOrderLineAllocationService,
+  InternalTrustedContext,
+} from '../src/modules/production/order-line/production-order-line-allocation.service.js';
 import { hashLineConfiguration } from '../src/modules/production/order-line/production-order-line-configuration.helper.js';
 import { BusinessRuleError } from '../src/common/errors/business-rule.error.js';
+import { ForbiddenError } from '../src/common/errors/forbidden.error.js';
 import { In, Not } from 'typeorm';
 
 describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Concurrency Lock', () => {
@@ -24,6 +28,7 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
   let testOptWoodId: string;
   let testStandardConfigHash: string;
   let testWoodConfigHash: string;
+  let testInternalContext: InternalTrustedContext;
 
   let allocationService: ProductionOrderLineAllocationService;
 
@@ -45,6 +50,11 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
       throw new Error('No system users found in database for integration test');
     }
     testUserId = users[0].id;
+    testInternalContext = {
+      isInternalTrusted: true,
+      operatorUserId: testUserId,
+      reason: 'MySQL Integration Test',
+    };
 
     // Create persistent test template & patterns
     testTemplateId = randomUUID();
@@ -115,11 +125,19 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
 
         if (createdOrderIds.length > 0) {
           const units = await unitRepo.find({ where: { orderId: In(createdOrderIds) } });
-          if (units.length > 0) {
-            const allUnitIds = units.map((u) => u.id);
-            await eventRepo.delete({ unitId: In(allUnitIds) });
-            await unitRepo.delete({ id: In(allUnitIds) });
+          for (const u of units) {
+            if (!createdUnitIds.includes(u.id)) {
+              createdUnitIds.push(u.id);
+            }
           }
+        }
+
+        if (createdUnitIds.length > 0) {
+          await eventRepo.delete({ unitId: In(createdUnitIds) });
+          await unitRepo.delete({ id: In(createdUnitIds) });
+        }
+
+        if (createdOrderIds.length > 0) {
           await planRepo.delete({ orderId: In(createdOrderIds) });
           await lineRepo.delete({ orderId: In(createdOrderIds) });
           await orderRepo.delete({ id: In(createdOrderIds) });
@@ -205,23 +223,45 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
       );
     }
 
+    // 3. Create 4 unallocated candidate units in MySQL (2 for Request A, 2 for Request B)
+    const candA1 = randomUUID();
+    const candA2 = randomUUID();
+    const candB1 = randomUUID();
+    const candB2 = randomUUID();
+    createdUnitIds.push(candA1, candA2, candB1, candB2);
+
+    for (const [idx, cid] of [candA1, candA2, candB1, candB2].entries()) {
+      await unitRepo.save(
+        unitRepo.create({
+          id: cid,
+          orderId: null,
+          orderLineId: null,
+          planId,
+          unitSequence: 100 + idx + 1,
+          unitNumber: `U-CAND-${idx + 1}`,
+          status: ProductionUnitStatus.CREATED,
+          isCancelled: false,
+        })
+      );
+    }
+
     // Verify initial status: 10 requested, 8 linked, 2 remaining
     const initialStatus = await allocationService.getLineAllocationStatus(lineId);
     assert.equal(initialStatus.quantities.requestedQuantity, 10);
     assert.equal(initialStatus.quantities.linkedQuantity, 8);
     assert.equal(initialStatus.quantities.remainingQuantity, 2);
 
-    // 3. Fire two concurrent requests simultaneously, each attempting to allocate 2 units!
+    // 4. Fire two concurrent requests simultaneously, each attempting to allocate 2 candidate units!
     const [resultA, resultB] = await Promise.allSettled([
       allocationService.allocateAndLinkUnits({
         orderLineId: lineId,
-        unitsToCreateCount: 2,
-        userId: testUserId,
+        candidateUnitIds: [candA1, candA2],
+        currentUser: testInternalContext,
       }),
       allocationService.allocateAndLinkUnits({
         orderLineId: lineId,
-        unitsToCreateCount: 2,
-        userId: testUserId,
+        candidateUnitIds: [candB1, candB2],
+        currentUser: testInternalContext,
       }),
     ]);
 
@@ -235,13 +275,7 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
     assert.ok(rejectedReason instanceof BusinessRuleError);
     assert.equal(rejectedReason.code, 'PRODUCTION_ORDER_LINE_QUANTITY_EXCEEDED');
 
-    // Track created units for cleanup
-    const successResult = (successes[0] as PromiseFulfilledResult<any>).value;
-    if (successResult.linkedUnitIds?.length > 0) {
-      createdUnitIds.push(...successResult.linkedUnitIds);
-    }
-
-    // 4. Verify final MySQL state: exactly 10 active units exist for this line (never 12!)
+    // 5. Verify final MySQL state: exactly 10 active units exist for this line (never 12!)
     const finalLinkedCount = await unitRepo.count({
       where: {
         orderLineId: lineId,
@@ -335,23 +369,24 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
     const unit2Id = randomUUID();
     createdUnitIds.push(unit1Id, unit2Id);
 
+    // Candidate units created unallocated (orderLineId: null)
     await unitRepo.save([
       unitRepo.create({
         id: unit1Id,
-        orderId,
-        orderLineId: targetLineId, // temporarily on targetLineId so double-booking does not trigger, to specifically test pattern mismatch
+        orderId: null,
+        orderLineId: null,
         planId: matchingPlanId,
-        unitSequence: 101,
+        unitSequence: 201,
         unitNumber: 'U-MATCH',
         status: ProductionUnitStatus.CREATED,
         isCancelled: false,
       }),
       unitRepo.create({
         id: unit2Id,
-        orderId,
-        orderLineId: targetLineId,
+        orderId: null,
+        orderLineId: null,
         planId: mismatchPlanId,
-        unitSequence: 102,
+        unitSequence: 202,
         unitNumber: 'U-MISMATCH',
         status: ProductionUnitStatus.CREATED,
         isCancelled: false,
@@ -364,7 +399,7 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
         await allocationService.allocateAndLinkUnits({
           orderLineId: targetLineId,
           candidateUnitIds: [unit1Id, unit2Id],
-          userId: testUserId,
+          currentUser: testInternalContext,
         });
       },
       (err: any) => {
@@ -374,10 +409,15 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
       }
     );
 
-    // Verify atomic rollback in MySQL: 0 events created for this batch
+    // Verify atomic rollback in MySQL: 0 events created for this batch, units remain unallocated
     const eventRepo = AppDataSource.getRepository(ProductionUnitEventEntity);
     const eventCount = await eventRepo.count({ where: { unitId: In([unit1Id, unit2Id]) } });
     assert.equal(eventCount, 0, 'No events must be persisted after rollback');
+
+    const freshUnit1 = await unitRepo.findOne({ where: { id: unit1Id } });
+    const freshUnit2 = await unitRepo.findOne({ where: { id: unit2Id } });
+    assert.equal(freshUnit1?.orderLineId, null, 'Unit 1 link must have rolled back to null');
+    assert.equal(freshUnit2?.orderLineId, null, 'Unit 2 link must have rolled back to null');
   });
 
   // ==========================================
@@ -474,7 +514,7 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
         await allocationService.restoreCancelledUnit({
           orderLineId: lineId,
           unitId: cancelledUnitId,
-          userId: testUserId,
+          currentUser: testInternalContext,
           reason: 'Repair attempted',
         });
       },
@@ -489,5 +529,29 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
     const freshCancelled = await unitRepo.findOne({ where: { id: cancelledUnitId } });
     assert.equal(freshCancelled?.isCancelled, true);
     assert.equal(freshCancelled?.status, ProductionUnitStatus.CANCELLED);
+  });
+
+  // ==========================================
+  // TEST 4: Authorization Fail-Closed in MySQL Integration
+  // ==========================================
+  it('4. Authorization in MySQL: Rejects unauthenticated request with AUTHENTICATION_REQUIRED', async () => {
+    const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
+    const lines = await lineRepo.find({ take: 1 });
+    if (lines.length === 0) return;
+
+    await assert.rejects(
+      async () => {
+        await allocationService.allocateAndLinkUnits({
+          orderLineId: lines[0].id,
+          candidateUnitIds: [randomUUID()],
+          currentUser: null as any,
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof ForbiddenError);
+        assert.equal(err.code, 'AUTHENTICATION_REQUIRED');
+        return true;
+      }
+    );
   });
 });

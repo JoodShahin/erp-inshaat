@@ -30,12 +30,12 @@ export class ProductionUnitEntity {
   id!: string;
 
   @Index('IDX_prod_unit_order_id')
-  @Column({ name: 'order_id', type: 'varchar', length: 36 })
-  orderId!: string;
+  @Column({ name: 'order_id', type: 'varchar', length: 36, nullable: true, default: null })
+  orderId!: string | null;
 
   @Index('IDX_prod_unit_order_line_id')
-  @Column({ name: 'order_line_id', type: 'varchar', length: 36 })
-  orderLineId!: string;
+  @Column({ name: 'order_line_id', type: 'varchar', length: 36, nullable: true, default: null })
+  orderLineId!: string | null;
 
   @Index('IDX_prod_unit_plan_id')
   @Column({ name: 'plan_id', type: 'varchar', length: 36 })

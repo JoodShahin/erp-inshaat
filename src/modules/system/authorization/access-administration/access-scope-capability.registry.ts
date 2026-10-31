@@ -118,6 +118,13 @@ export const PERMISSION_SCOPE_CAPABILITIES: Record<string, AccessScopePresetType
   'production.order.update_priority': [
     AccessScopePreset.ALL,
   ],
+  'production.order-line.allocate-units': [
+    AccessScopePreset.ALL,
+    AccessScopePreset.CURRENT_PRODUCTION_DEPARTMENT,
+    AccessScopePreset.CURRENT_PRODUCTION_YARDS,
+    AccessScopePreset.SPECIFIC_PRODUCTION_DEPARTMENTS,
+    AccessScopePreset.SPECIFIC_PRODUCTION_YARDS,
+  ],
 };
 
 export class AccessScopeCapabilityRegistry {
