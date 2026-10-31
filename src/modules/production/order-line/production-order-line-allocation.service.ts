@@ -4,12 +4,14 @@ import { AppDataSource } from '../../../database/data-source.js';
 import { ProductionOrderEntity, ProductionOrderStatus } from '../order/production-order.entity.js';
 import { ProductionOrderLineEntity } from './production-order-line.entity.js';
 import { ProductionTemplateEntity } from '../template/production-template.entity.js';
+import { ProductionYardEntity } from '../yard/production-yard.entity.js';
+import {
+  ProductionExecutionPlanEntity,
+  ExecutionPlanSpecificationSnapshot,
+} from '../execution-plan/production-execution-plan.entity.js';
 import { ProductionUnitEntity, ProductionUnitStatus } from '../unit/production-unit.entity.js';
 import { ProductionUnitEventEntity, ProductionUnitEventType } from '../unit/production-unit-event.entity.js';
 import { ProductionTemplateSpecificationEntity } from '../template-specification/production-template-specification.entity.js';
-import {
-  ExecutionPlanSpecificationSnapshot,
-} from '../execution-plan/production-execution-plan.entity.js';
 import {
   calculateLineQuantities,
   ProductionLineQuantities,
@@ -65,16 +67,56 @@ export interface CandidateUnitLike {
   } | null;
 }
 
-export interface InternalTrustedContext {
-  isInternalTrusted: true;
-  operatorUserId?: string | null;
-  reason?: string;
+/**
+ * Unforgeable internal capability token for non-interactive system operations.
+ * Protected by an unexported Symbol and private constructor.
+ * Cannot be instantiated from client-supplied JSON, request bodies, queries, or headers.
+ */
+const INTERNAL_SYSTEM_CAPABILITY = Symbol('INTERNAL_SYSTEM_CAPABILITY');
+
+export class InternalSystemContext {
+  private readonly [INTERNAL_SYSTEM_CAPABILITY] = true;
+
+  private constructor(
+    public readonly reason: string,
+    public readonly operatorUserId: string | null = null
+  ) {}
+
+  public static create(reason: string, operatorUserId: string | null = null): InternalSystemContext {
+    if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+      throw new BusinessRuleError(
+        'يجب تحديد سبب صريح وموثق لتنفيذ العملية النظامية الداخلية',
+        'INTERNAL_REASON_REQUIRED'
+      );
+    }
+    return new InternalSystemContext(reason.trim(), operatorUserId ? operatorUserId.trim() : null);
+  }
+
+  public static isInternalSystemContext(ctx: unknown): ctx is InternalSystemContext {
+    return ctx instanceof InternalSystemContext && (ctx as any)[INTERNAL_SYSTEM_CAPABILITY] === true;
+  }
+}
+
+/**
+ * Validates whether an object represents a legitimate AuthPrincipal.
+ * Explicitly rejects objects that attempt to pass boolean isInternalTrusted or lack valid IDs.
+ */
+export function isValidAuthPrincipal(principal: unknown): principal is AuthPrincipal {
+  if (!principal || typeof principal !== 'object') return false;
+  const p = principal as Record<string, unknown>;
+  if (p.isInternalTrusted !== undefined) return false;
+  return (
+    typeof p.id === 'string' &&
+    p.id.trim().length > 0 &&
+    typeof p.roleId === 'string' &&
+    p.roleId.trim().length > 0
+  );
 }
 
 export interface AllocateAndLinkUnitsParams {
   orderLineId: string;
   candidateUnitIds: string[];
-  currentUser: AuthPrincipal | InternalTrustedContext;
+  currentUser: AuthPrincipal | InternalSystemContext;
   correlationId?: string;
   // Unsupported/Phantom parameter guards:
   candidateUnits?: CandidateUnitLike[];
@@ -96,7 +138,7 @@ export interface AllocateAndLinkUnitsResult {
 export interface RestoreCancelledUnitParams {
   orderLineId: string;
   unitId: string;
-  currentUser: AuthPrincipal | InternalTrustedContext;
+  currentUser: AuthPrincipal | InternalSystemContext;
   reason?: string;
 }
 
@@ -107,6 +149,19 @@ export interface RestoreCancelledUnitResult {
   isCancelled: boolean;
   newLinkedQuantity: number;
   remainingQuantity: number;
+}
+
+const MAX_DEADLOCK_RETRIES = 3;
+
+function isDeadlockOrTimeout(err: any): boolean {
+  const code = err?.code || err?.driverError?.code || err?.driverError?.errno;
+  return (
+    code === 'ER_LOCK_DEADLOCK' ||
+    code === 1213 ||
+    code === '40001' ||
+    code === 'ER_LOCK_WAIT_TIMEOUT' ||
+    code === 1205
+  );
 }
 
 export class ProductionOrderLineAllocationService {
@@ -138,16 +193,28 @@ export class ProductionOrderLineAllocationService {
     const unitRepo = manager
       ? manager.getRepository(ProductionUnitEntity)
       : this.dataSource.getRepository(ProductionUnitEntity);
+    const orderRepo = manager
+      ? manager.getRepository(ProductionOrderEntity)
+      : this.dataSource.getRepository(ProductionOrderEntity);
 
     const line = await lineRepo.findOne({
       where: { id: orderLineId, deletedAt: IsNull() },
-      relations: { order: true },
     });
 
     if (!line) {
-      throw new NotFoundError('بند أمر الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_ORDER_LINE_NOT_FOUND');
+      throw new NotFoundError(
+        'بند أمر الإنتاج غير موجود أو تم أرشفته',
+        'PRODUCTION_ORDER_LINE_NOT_FOUND'
+      );
     }
 
+    const order = await orderRepo.findOne({
+      where: { id: line.orderId, deletedAt: IsNull() },
+    });
+
+    const isOrderApproved = order?.status === ProductionOrderStatus.APPROVED;
+
+    // Source of Truth: Count active non-cancelled units linked to this line in MySQL
     const linkedCount = await unitRepo.count({
       where: {
         orderLineId: line.id,
@@ -157,14 +224,13 @@ export class ProductionOrderLineAllocationService {
       },
     });
 
-    const isOrderApproved = line.order?.status === ProductionOrderStatus.APPROVED;
     const quantities = calculateLineQuantities(line.quantity, linkedCount);
 
     return {
       lineId: line.id,
       orderId: line.orderId,
       templateId: line.templateId,
-      orderStatus: line.order?.status || 'UNKNOWN',
+      orderStatus: order?.status || 'UNKNOWN',
       isOrderApproved,
       quantities,
     };
@@ -293,25 +359,46 @@ export class ProductionOrderLineAllocationService {
   }
 
   /**
+   * Helper that executes an operation with bounded retry on MySQL deadlocks.
+   */
+  private async executeWithDeadlockRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await operation();
+      } catch (err: any) {
+        attempt++;
+        if (attempt < MAX_DEADLOCK_RETRIES && isDeadlockOrTimeout(err)) {
+          const jitter = Math.random() * 25;
+          const delayMs = 30 * Math.pow(2, attempt) + jitter;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  /**
    * Atomic Quantity Enforcement & Real Database Unit Linking.
    *
    * Invariants:
-   * 1. Requires valid authentication context (fails closed otherwise).
+   * 1. Requires valid authentication context (fails closed otherwise). Rejects forged internal flags.
    * 2. Evaluates PRODUCTION_ORDER_LINE_ALLOCATE_UNITS permission and row-level access scoping.
    * 3. Database is the single source of truth: strictly links real rows from production_unit.
-   * 4. Single-table pessimistic write lock on target line to serialize allocations without deadlocks.
-   * 5. Checks line quota: currentLinked + toLink <= line.quantity.
+   * 4. Strict lock hierarchy: line row locked first via pessimistic_write, then candidate units sorted ascending without join locks.
+   * 5. Checks line quota: currentLinked + toLink <= line.quantity under lock.
    * 6. Verifies candidate units compatibility & yard scoping before any mutation.
-   * 7. Transactional atomic commit/rollback.
+   * 7. Transactional atomic commit/rollback with deadlock retry.
    * 8. Re-queries and verifies actual count directly from MySQL before return.
    */
   async allocateAndLinkUnits(params: AllocateAndLinkUnitsParams): Promise<AllocateAndLinkUnitsResult> {
     const { orderLineId, candidateUnitIds, currentUser, correlationId } = params;
 
-    // Reject phantom / unsupported parameters
+    // Reject phantom and unsupported parameters
     if (params.quantityToReserveOnly !== undefined) {
       throw new BusinessRuleError(
-        'حجز الكميات بدون ربط غرف فعلية غير مدعوم في هذه المرحلة',
+        'حجز الكميات غير مدعوم في هذه المرحلة؛ قاعدة البيانات هي المصدر الوحيد للكميات الفعلية',
         'RESERVATION_NOT_SUPPORTED'
       );
     }
@@ -339,18 +426,19 @@ export class ProductionOrderLineAllocationService {
     // 2. Authorization check
     let policy: any = null;
     let operatorUserId: string | null = null;
+    let internalReason: string | null = null;
 
-    if ('isInternalTrusted' in currentUser && currentUser.isInternalTrusted) {
+    if (InternalSystemContext.isInternalSystemContext(currentUser)) {
       operatorUserId = currentUser.operatorUserId || null;
-    } else {
-      const principal = currentUser as AuthPrincipal;
-      operatorUserId = principal.id;
+      internalReason = currentUser.reason;
+    } else if (isValidAuthPrincipal(currentUser)) {
+      operatorUserId = currentUser.id;
 
       const rules = await this.authzService.getApplicableAccessRules(
-        principal,
+        currentUser,
         SystemPermission.PRODUCTION_ORDER_LINE_ALLOCATE_UNITS
       );
-      const responsibility = await this.respResolver.resolve(principal);
+      const responsibility = await this.respResolver.resolve(currentUser);
       policy = this.policyService.resolvePolicy(
         rules,
         responsibility,
@@ -363,6 +451,12 @@ export class ProductionOrderLineAllocationService {
           'AUTHORIZATION_DENIED'
         );
       }
+    } else {
+      // Rejects forged objects with isInternalTrusted: true or arbitrary malformed context
+      throw new ForbiddenError(
+        'سياق المصادقة غير صالح أو غير معتمد، ويُحظر استخدام سياق داخلي غير موثق',
+        'AUTHENTICATION_INVALID'
+      );
     }
 
     // Validate candidate unit IDs in request
@@ -381,173 +475,206 @@ export class ProductionOrderLineAllocationService {
       );
     }
 
-    // Execute in transaction with clean single-row locking
-    return await this.dataSource.transaction(async (manager: EntityManager) => {
-      const lineRepo = manager.getRepository(ProductionOrderLineEntity);
-      const unitRepo = manager.getRepository(ProductionUnitEntity);
-      const eventRepo = manager.getRepository(ProductionUnitEventEntity);
+    // Execute with deadlock retry and clean hierarchical locking
+    return await this.executeWithDeadlockRetry(async () => {
+      return await this.dataSource.transaction(async (manager: EntityManager) => {
+        const lineRepo = manager.getRepository(ProductionOrderLineEntity);
+        const unitRepo = manager.getRepository(ProductionUnitEntity);
+        const eventRepo = manager.getRepository(ProductionUnitEventEntity);
 
-      // 3. Lock ONLY the target line row (pessimistic write without joins to prevent MySQL table-level lock escalation)
-      const line = await lineRepo.findOne({
-        where: { id: orderLineId, deletedAt: IsNull() },
-        lock: { mode: 'pessimistic_write' },
-      });
+        // 3. Lock ONLY the target line row (pessimistic write without joins)
+        const line = await lineRepo.findOne({
+          where: { id: orderLineId, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
 
-      if (!line) {
-        throw new NotFoundError(
-          'بند أمر الإنتاج غير موجود أو تم أرشفته',
-          'PRODUCTION_ORDER_LINE_NOT_FOUND'
-        );
-      }
-
-      // Fetch order and template details without lock
-      const order = await manager.getRepository(ProductionOrderEntity).findOne({
-        where: { id: line.orderId, deletedAt: IsNull() },
-      });
-
-      if (!order || order.status !== ProductionOrderStatus.APPROVED) {
-        throw new BusinessRuleError(
-          'لا يمكن تخصيص أو ربط غرف ببند أمر إنتاج غير معتمد (يجب أن يكون في حالة مذكرة معتمدة)',
-          'PRODUCTION_ORDER_NOT_APPROVED'
-        );
-      }
-
-      const template = await manager.getRepository(ProductionTemplateEntity).findOne({
-        where: { id: line.templateId, deletedAt: IsNull() },
-        relations: { specifications: true },
-      });
-      const templateSpecifications = template?.specifications || [];
-
-      // 4. Query current active non-cancelled linked units count from MySQL under lock
-      const currentLinkedCount = await unitRepo.count({
-        where: {
-          orderLineId: line.id,
-          isCancelled: false,
-          status: Not(ProductionUnitStatus.CANCELLED),
-          deletedAt: IsNull(),
-        },
-      });
-
-      const requestedQuantity = line.quantity;
-      const remainingCapacity = Math.max(0, requestedQuantity - currentLinkedCount);
-
-      if (candidateUnitIds.length > remainingCapacity) {
-        throw new BusinessRuleError(
-          `لا يمكن تخصيص أو ربط ${candidateUnitIds.length} غرفة للبند. الكمية المتبقية المتاحة هي ${remainingCapacity} فقط من أصل ${requestedQuantity}`,
-          'PRODUCTION_ORDER_LINE_QUANTITY_EXCEEDED'
-        );
-      }
-
-      // 5. Lock and load candidate units from database
-      const candidateUnits = await unitRepo
-        .createQueryBuilder('unit')
-        .setLock('pessimistic_write')
-        .leftJoinAndSelect('unit.plan', 'plan')
-        .leftJoinAndSelect('unit.currentYard', 'currentYard')
-        .where('unit.id IN (:...candidateUnitIds)', { candidateUnitIds })
-        .andWhere('unit.deletedAt IS NULL')
-        .getMany();
-
-      if (candidateUnits.length !== candidateUnitIds.length) {
-        throw new NotFoundError(
-          'إحدى الغرف المطلوبة غير موجودة في النظام أو تم حذفها',
-          'PRODUCTION_UNIT_NOT_FOUND'
-        );
-      }
-
-      // 6. Verify each unit's authorization scope and compatibility
-      const eventsToSave: ProductionUnitEventEntity[] = [];
-      const now = new Date();
-      const batchCorrelationId = correlationId || randomUUID();
-
-      for (const unit of candidateUnits) {
-        // Yard-level row authorization check
-        if (policy && !canAccessUnit(policy, unit)) {
-          throw new ForbiddenError(
-            'ليس لديك صلاحية للوصول إلى الغرفة في ساحتها',
-            'AUTHORIZATION_DENIED'
+        if (!line) {
+          throw new NotFoundError(
+            'بند أمر الإنتاج غير موجود أو تم أرشفته',
+            'PRODUCTION_ORDER_LINE_NOT_FOUND'
           );
         }
 
-        // Strict compatibility check
-        this.verifyCandidateUnitCompatibility(line, unit, templateSpecifications);
-
-        const previousOrderLineId = unit.orderLineId;
-        const previousOrderId = unit.orderId;
-
-        // Mutate link
-        unit.orderLineId = line.id;
-        unit.orderId = line.orderId;
-        unit.updatedAt = now;
-
-        const event = eventRepo.create({
-          id: randomUUID(),
-          unitId: unit.id,
-          eventType: ProductionUnitEventType.UNIT_LINKED,
-          createdByUserId: operatorUserId,
-          occurredAt: now,
-          departmentId: null,
-          executionTaskId: null,
-          previousData: {
-            orderId: previousOrderId,
-            orderLineId: previousOrderLineId,
-          },
-          newData: {
-            orderId: line.orderId,
-            orderLineId: line.id,
-            lineSortOrder: line.sortOrder,
-          },
-          correlationId: batchCorrelationId,
-          metadata: {
-            orderNumber: order.orderNumber,
-            lineSortOrder: line.sortOrder,
-            templateId: line.templateId,
-          },
-          createdAt: now,
+        // Fetch order details without lock
+        const order = await manager.getRepository(ProductionOrderEntity).findOne({
+          where: { id: line.orderId, deletedAt: IsNull() },
         });
 
-        eventsToSave.push(event);
-      }
+        if (!order || order.status !== ProductionOrderStatus.APPROVED) {
+          throw new BusinessRuleError(
+            'لا يمكن تخصيص أو ربط غرف ببند أمر إنتاج غير معتمد (يجب أن يكون في حالة مذكرة معتمدة)',
+            'PRODUCTION_ORDER_NOT_APPROVED'
+          );
+        }
 
-      // Persist mutations atomically
-      await unitRepo.save(candidateUnits);
-      await eventRepo.save(eventsToSave);
+        // 4. Query current active non-cancelled linked units count from MySQL under lock
+        const currentLinkedCount = await unitRepo.count({
+          where: {
+            orderLineId: line.id,
+            isCancelled: false,
+            status: Not(ProductionUnitStatus.CANCELLED),
+            deletedAt: IsNull(),
+          },
+        });
 
-      // 7. Re-query actual count from MySQL database to guarantee truth
-      const actualLinkedCountAfter = await unitRepo.count({
-        where: {
+        const requestedQuantity = line.quantity;
+        const remainingCapacity = Math.max(0, requestedQuantity - currentLinkedCount);
+
+        if (candidateUnitIds.length > remainingCapacity) {
+          throw new BusinessRuleError(
+            `لا يمكن تخصيص أو ربط ${candidateUnitIds.length} غرفة للبند. الكمية المتبقية المتاحة هي ${remainingCapacity} فقط من أصل ${requestedQuantity}`,
+            'PRODUCTION_ORDER_LINE_QUANTITY_EXCEEDED'
+          );
+        }
+
+        // 5. Deterministic lock ordering: sort candidate unit IDs ascending to prevent circular deadlocks
+        const sortedCandidateUnitIds = [...candidateUnitIds].sort();
+
+        // 6. Lock candidate unit rows strictly on production_unit ONLY (no joins in locking query)
+        const lockedUnits = await unitRepo.find({
+          where: { id: In(sortedCandidateUnitIds), deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (lockedUnits.length !== sortedCandidateUnitIds.length) {
+          throw new NotFoundError(
+            'إحدى الغرف المطلوبة غير موجودة في النظام أو تم حذفها',
+            'PRODUCTION_UNIT_NOT_FOUND'
+          );
+        }
+
+        // 7. Load related entities (plans, yards, template specifications) cleanly without join locks
+        const planIds = [...new Set(lockedUnits.map((u) => u.planId).filter(Boolean))];
+        const yardIds = [...new Set(lockedUnits.map((u) => u.currentYardId).filter(Boolean))];
+
+        const [plans, yards, template] = await Promise.all([
+          planIds.length > 0
+            ? manager.getRepository(ProductionExecutionPlanEntity).find({
+                where: { id: In(planIds), deletedAt: IsNull() },
+              })
+            : Promise.resolve([]),
+          yardIds.length > 0
+            ? manager.getRepository(ProductionYardEntity).find({
+                where: { id: In(yardIds), deletedAt: IsNull() },
+              })
+            : Promise.resolve([]),
+          manager.getRepository(ProductionTemplateEntity).findOne({
+            where: { id: line.templateId, deletedAt: IsNull() },
+            relations: { specifications: true },
+          }),
+        ]);
+
+        const planMap = new Map(plans.map((p) => [p.id, p]));
+        const yardMap = new Map(yards.map((y) => [y.id, y]));
+        const templateSpecifications = template?.specifications || [];
+
+        for (const unit of lockedUnits) {
+          if (unit.planId && planMap.has(unit.planId)) { unit.plan = planMap.get(unit.planId) as any; }
+          if (unit.currentYardId && yardMap.has(unit.currentYardId)) { unit.currentYard = yardMap.get(unit.currentYardId) as any; }
+        }
+
+        // 8. Verify each unit's authorization scope and compatibility
+        const eventsToSave: ProductionUnitEventEntity[] = [];
+        const now = new Date();
+        const batchCorrelationId = correlationId || randomUUID();
+
+        for (const unit of lockedUnits) {
+          // Yard-level row authorization check
+          if (policy && !canAccessUnit(policy, unit)) {
+            throw new ForbiddenError(
+              'ليس لديك صلاحية للوصول إلى الغرفة في ساحتها',
+              'AUTHORIZATION_DENIED'
+            );
+          }
+
+          // Strict compatibility check
+          this.verifyCandidateUnitCompatibility(line, unit, templateSpecifications);
+
+          const previousOrderLineId = unit.orderLineId;
+          const previousOrderId = unit.orderId;
+
+          // Mutate link
+          unit.orderLineId = line.id;
+          unit.orderId = line.orderId;
+          unit.updatedAt = now;
+
+          const event = eventRepo.create({
+            id: randomUUID(),
+            unitId: unit.id,
+            eventType: ProductionUnitEventType.UNIT_LINKED,
+            createdByUserId: operatorUserId,
+            occurredAt: now,
+            departmentId: null,
+            executionTaskId: null,
+            previousData: {
+              orderId: previousOrderId,
+              orderLineId: previousOrderLineId,
+            },
+            newData: {
+              orderId: line.orderId,
+              orderLineId: line.id,
+              lineSortOrder: line.sortOrder,
+            },
+            correlationId: batchCorrelationId,
+            metadata: {
+              orderNumber: order.orderNumber,
+              lineSortOrder: line.sortOrder,
+              templateId: line.templateId,
+              internalReason: internalReason || null,
+            },
+            createdAt: now,
+          });
+
+          eventsToSave.push(event);
+        }
+
+        // Persist mutations atomically
+        await unitRepo.save(lockedUnits);
+        await eventRepo.save(eventsToSave);
+
+        // 9. Re-query actual count from MySQL database to guarantee truth
+        const actualLinkedCountAfter = await unitRepo.count({
+          where: {
+            orderLineId: line.id,
+            isCancelled: false,
+            status: Not(ProductionUnitStatus.CANCELLED),
+            deletedAt: IsNull(),
+          },
+        });
+
+        if (actualLinkedCountAfter > requestedQuantity) {
+          throw new BusinessRuleError(
+            `تم تجاوز الكمية المعتمدة للبند (#${line.sortOrder}): المرتبط الفعلي أصبح ${actualLinkedCountAfter} من أصل ${requestedQuantity}`,
+            'PRODUCTION_ORDER_LINE_QUANTITY_EXCEEDED'
+          );
+        }
+
+        const updatedQuantities = calculateLineQuantities(requestedQuantity, actualLinkedCountAfter);
+
+        return {
           orderLineId: line.id,
-          isCancelled: false,
-          status: Not(ProductionUnitStatus.CANCELLED),
-          deletedAt: IsNull(),
-        },
+          orderId: line.orderId,
+          previousLinkedQuantity: currentLinkedCount,
+          newLinkedQuantity: actualLinkedCountAfter,
+          remainingQuantity: updatedQuantities.remainingQuantity,
+          excessQuantity: updatedQuantities.excessQuantity,
+          hasQuantityViolation: updatedQuantities.hasQuantityViolation,
+          linkedUnitIds: lockedUnits.map((u) => u.id),
+        };
       });
-
-      if (actualLinkedCountAfter > requestedQuantity) {
-        throw new BusinessRuleError(
-          `تم تجاوز الكمية المعتمدة للبند (#${line.sortOrder}): المرتبط الفعلي أصبح ${actualLinkedCountAfter} من أصل ${requestedQuantity}`,
-          'PRODUCTION_ORDER_LINE_QUANTITY_EXCEEDED'
-        );
-      }
-
-      const updatedQuantities = calculateLineQuantities(requestedQuantity, actualLinkedCountAfter);
-
-      return {
-        orderLineId: line.id,
-        orderId: line.orderId,
-        previousLinkedQuantity: currentLinkedCount,
-        newLinkedQuantity: actualLinkedCountAfter,
-        remainingQuantity: updatedQuantities.remainingQuantity,
-        excessQuantity: updatedQuantities.excessQuantity,
-        hasQuantityViolation: updatedQuantities.hasQuantityViolation,
-        linkedUnitIds: candidateUnits.map((u) => u.id),
-      };
     });
   }
 
   /**
-   * Restores a previously cancelled unit to active status under the line row lock.
-   * Strictly enforces that restoring the unit does not cause linked units to exceed requestedQuantity.
+   * Restores a cancelled production unit to active status within its original order line.
+   *
+   * Invariants:
+   * 1. Requires valid authentication context.
+   * 2. Evaluates PRODUCTION_ORDER_LINE_ALLOCATE_UNITS and yard access.
+   * 3. Order line must be APPROVED.
+   * 4. Deterministic lock order: order line first, then unit row (both pessimistic_write).
+   * 5. Unit must be in CANCELLED status.
+   * 6. Strictly enforces that restoring the unit does not cause linked units to exceed requestedQuantity.
    */
   async restoreCancelledUnit(params: RestoreCancelledUnitParams): Promise<RestoreCancelledUnitResult> {
     const { orderLineId, unitId, currentUser, reason } = params;
@@ -563,18 +690,19 @@ export class ProductionOrderLineAllocationService {
     // 2. Authorization check
     let policy: any = null;
     let operatorUserId: string | null = null;
+    let internalReason: string | null = null;
 
-    if ('isInternalTrusted' in currentUser && currentUser.isInternalTrusted) {
+    if (InternalSystemContext.isInternalSystemContext(currentUser)) {
       operatorUserId = currentUser.operatorUserId || null;
-    } else {
-      const principal = currentUser as AuthPrincipal;
-      operatorUserId = principal.id;
+      internalReason = currentUser.reason;
+    } else if (isValidAuthPrincipal(currentUser)) {
+      operatorUserId = currentUser.id;
 
       const rules = await this.authzService.getApplicableAccessRules(
-        principal,
+        currentUser,
         SystemPermission.PRODUCTION_ORDER_LINE_ALLOCATE_UNITS
       );
-      const responsibility = await this.respResolver.resolve(principal);
+      const responsibility = await this.respResolver.resolve(currentUser);
       policy = this.policyService.resolvePolicy(
         rules,
         responsibility,
@@ -587,148 +715,159 @@ export class ProductionOrderLineAllocationService {
           'AUTHORIZATION_DENIED'
         );
       }
+    } else {
+      throw new ForbiddenError(
+        'سياق المصادقة غير صالح أو غير معتمد، ويُحظر استخدام سياق داخلي غير موثق',
+        'AUTHENTICATION_INVALID'
+      );
     }
 
-    return await this.dataSource.transaction(async (manager: EntityManager) => {
-      const lineRepo = manager.getRepository(ProductionOrderLineEntity);
-      const unitRepo = manager.getRepository(ProductionUnitEntity);
-      const eventRepo = manager.getRepository(ProductionUnitEventEntity);
+    return await this.executeWithDeadlockRetry(async () => {
+      return await this.dataSource.transaction(async (manager: EntityManager) => {
+        const lineRepo = manager.getRepository(ProductionOrderLineEntity);
+        const unitRepo = manager.getRepository(ProductionUnitEntity);
+        const eventRepo = manager.getRepository(ProductionUnitEventEntity);
 
-      // Lock order line row (single row lock)
-      const line = await lineRepo.findOne({
-        where: { id: orderLineId, deletedAt: IsNull() },
-        lock: { mode: 'pessimistic_write' },
-      });
+        // Lock order line row (single row lock)
+        const line = await lineRepo.findOne({
+          where: { id: orderLineId, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
 
-      if (!line) {
-        throw new NotFoundError(
-          'بند أمر الإنتاج غير موجود أو تم أرشفته',
-          'PRODUCTION_ORDER_LINE_NOT_FOUND'
-        );
-      }
+        if (!line) {
+          throw new NotFoundError(
+            'بند أمر الإنتاج غير موجود أو تم أرشفته',
+            'PRODUCTION_ORDER_LINE_NOT_FOUND'
+          );
+        }
 
-      // Check order status
-      const order = await manager.getRepository(ProductionOrderEntity).findOne({
-        where: { id: line.orderId, deletedAt: IsNull() },
-      });
+        // Check order status
+        const order = await manager.getRepository(ProductionOrderEntity).findOne({
+          where: { id: line.orderId, deletedAt: IsNull() },
+        });
 
-      if (!order || order.status !== ProductionOrderStatus.APPROVED) {
-        throw new BusinessRuleError(
-          'لا يمكن استعادة غرفة لبند أمر إنتاج غير معتمد',
-          'PRODUCTION_ORDER_NOT_APPROVED'
-        );
-      }
+        if (!order || order.status !== ProductionOrderStatus.APPROVED) {
+          throw new BusinessRuleError(
+            'لا يمكن استعادة غرفة لبند أمر إنتاج غير معتمد',
+            'PRODUCTION_ORDER_NOT_APPROVED'
+          );
+        }
 
-      // Lock unit row
-      const unit = await unitRepo.findOne({
-        where: { id: unitId, orderLineId: line.id, deletedAt: IsNull() },
-        lock: { mode: 'pessimistic_write' },
-        relations: { currentYard: true },
-      });
+        // Lock unit row (single row lock, no joins)
+        const unit = await unitRepo.findOne({
+          where: { id: unitId, orderLineId: line.id, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
 
-      if (!unit) {
-        throw new NotFoundError(
-          'الغرفة غير موجودة في هذا البند',
-          'PRODUCTION_UNIT_NOT_FOUND'
-        );
-      }
+        if (!unit) {
+          throw new NotFoundError(
+            'الغرفة غير موجودة في هذا البند',
+            'PRODUCTION_UNIT_NOT_FOUND'
+          );
+        }
 
-      if (!unit.isCancelled && unit.status !== ProductionUnitStatus.CANCELLED) {
-        throw new BusinessRuleError(
-          'الغرفة ليست في حالة إلغاء ولا تحتاج استعادة',
-          'PRODUCTION_UNIT_NOT_CANCELLED'
-        );
-      }
+        if (!unit.isCancelled && unit.status !== ProductionUnitStatus.CANCELLED) {
+          throw new BusinessRuleError(
+            'الغرفة ليست في حالة إلغاء ولا تحتاج استعادة',
+            'PRODUCTION_UNIT_NOT_CANCELLED'
+          );
+        }
 
-      // Yard authorization check
-      if (policy && !canAccessUnit(policy, unit)) {
-        throw new ForbiddenError(
-          'ليس لديك صلاحية للوصول إلى الغرفة في ساحتها',
-          'AUTHORIZATION_DENIED'
-        );
-      }
+        // Fetch yard details for authorization without join lock
+        if (unit.currentYardId) {
+          unit.currentYard = (await manager.getRepository(ProductionYardEntity).findOne({
+            where: { id: unit.currentYardId, deletedAt: IsNull() },
+          })) as any;
+        }
 
-      // Count currently active units under lock
-      const activeLinkedCount = await unitRepo.count({
-        where: {
+        // Yard authorization check
+        if (policy && !canAccessUnit(policy, unit)) {
+          throw new ForbiddenError(
+            'ليس لديك صلاحية للوصول إلى الغرفة في ساحتها',
+            'AUTHORIZATION_DENIED'
+          );
+        }
+
+        // Count currently active units under lock
+        const activeLinkedCount = await unitRepo.count({
+          where: {
+            orderLineId: line.id,
+            isCancelled: false,
+            status: Not(ProductionUnitStatus.CANCELLED),
+            deletedAt: IsNull(),
+          },
+        });
+
+        // Capacity check: activeLinkedCount + 1 <= line.quantity
+        if (activeLinkedCount + 1 > line.quantity) {
+          throw new BusinessRuleError(
+            `لا يمكن استعادة الغرفة الملغاة لتجاوز الكمية المعتمدة للبند (المطلوب: ${line.quantity}, النشط حالياً: ${activeLinkedCount})`,
+            'PRODUCTION_UNIT_RESTORE_QUANTITY_EXCEEDED'
+          );
+        }
+
+        // Mutate unit state back to active
+        const previousStatus = unit.status;
+        const now = new Date();
+
+        unit.isCancelled = false;
+        unit.status = ProductionUnitStatus.CREATED;
+        unit.cancelledAt = null;
+        unit.cancellationReason = null;
+        unit.updatedAt = now;
+
+        await unitRepo.save(unit);
+
+        // Record audit event
+        const event = eventRepo.create({
+          id: randomUUID(),
+          unitId: unit.id,
+          eventType: ProductionUnitEventType.UNIT_RESTORED,
+          createdByUserId: operatorUserId,
+          occurredAt: now,
+          departmentId: null,
+          executionTaskId: null,
+          previousData: {
+            status: previousStatus,
+            isCancelled: true,
+          },
+          newData: {
+            status: ProductionUnitStatus.CREATED,
+            isCancelled: false,
+            reason: reason || null,
+          },
+          correlationId: randomUUID(),
+          metadata: {
+            orderLineId: line.id,
+            orderNumber: order.orderNumber,
+            internalReason: internalReason || null,
+          },
+          createdAt: now,
+        });
+
+        await eventRepo.save(event);
+
+        // Re-query actual count from DB
+        const newLinkedQuantity = await unitRepo.count({
+          where: {
+            orderLineId: line.id,
+            isCancelled: false,
+            status: Not(ProductionUnitStatus.CANCELLED),
+            deletedAt: IsNull(),
+          },
+        });
+
+        const updatedQuantities = calculateLineQuantities(line.quantity, newLinkedQuantity);
+
+        return {
+          unitId: unit.id,
           orderLineId: line.id,
-          isCancelled: false,
-          status: Not(ProductionUnitStatus.CANCELLED),
-          deletedAt: IsNull(),
-        },
+          status: unit.status,
+          isCancelled: unit.isCancelled,
+          newLinkedQuantity,
+          remainingQuantity: updatedQuantities.remainingQuantity,
+        };
       });
-
-      // Capacity check: activeLinkedCount + 1 <= line.quantity
-      if (activeLinkedCount + 1 > line.quantity) {
-        throw new BusinessRuleError(
-          `لا يمكن استعادة الغرفة الملغاة لتجاوز الكمية المعتمدة للبند (المطلوب: ${line.quantity}, النشط حالياً: ${activeLinkedCount})`,
-          'PRODUCTION_UNIT_RESTORE_QUANTITY_EXCEEDED'
-        );
-      }
-
-      const now = new Date();
-      const previousStatus = unit.status;
-      const previousReason = unit.cancellationReason;
-
-      unit.isCancelled = false;
-      unit.cancelledAt = null;
-      unit.cancellationReason = null;
-      unit.status = ProductionUnitStatus.CREATED;
-      unit.updatedAt = now;
-
-      await unitRepo.save(unit);
-
-      // Audit event
-      const event = eventRepo.create({
-        id: randomUUID(),
-        unitId: unit.id,
-        eventType: ProductionUnitEventType.UNIT_RESTORED,
-        createdByUserId: operatorUserId,
-        occurredAt: now,
-        departmentId: null,
-        executionTaskId: null,
-        previousData: {
-          isCancelled: true,
-          status: previousStatus,
-          cancellationReason: previousReason,
-        },
-        newData: {
-          isCancelled: false,
-          status: ProductionUnitStatus.CREATED,
-          restoreReason: reason || null,
-        },
-        correlationId: randomUUID(),
-        metadata: {
-          orderLineId: line.id,
-          orderNumber: order.orderNumber,
-        },
-        createdAt: now,
-      });
-
-      await eventRepo.save(event);
-
-      // Re-query actual count from DB
-      const newLinkedQuantity = await unitRepo.count({
-        where: {
-          orderLineId: line.id,
-          isCancelled: false,
-          status: Not(ProductionUnitStatus.CANCELLED),
-          deletedAt: IsNull(),
-        },
-      });
-
-      const updatedQuantities = calculateLineQuantities(line.quantity, newLinkedQuantity);
-
-      return {
-        unitId: unit.id,
-        orderLineId: line.id,
-        status: unit.status,
-        isCancelled: unit.isCancelled,
-        newLinkedQuantity,
-        remainingQuantity: updatedQuantities.remainingQuantity,
-      };
     });
   }
 }
-
-export const productionOrderLineAllocationService = new ProductionOrderLineAllocationService();

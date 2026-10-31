@@ -13,7 +13,7 @@ import { ProductionUnitEventEntity } from '../src/modules/production/unit/produc
 import { UserEntity } from '../src/modules/system/user/user.entity.js';
 import {
   ProductionOrderLineAllocationService,
-  InternalTrustedContext,
+  InternalSystemContext,
 } from '../src/modules/production/order-line/production-order-line-allocation.service.js';
 import { hashLineConfiguration } from '../src/modules/production/order-line/production-order-line-configuration.helper.js';
 import { BusinessRuleError } from '../src/common/errors/business-rule.error.js';
@@ -28,7 +28,7 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
   let testOptWoodId: string;
   let testStandardConfigHash: string;
   let testWoodConfigHash: string;
-  let testInternalContext: InternalTrustedContext;
+  let testInternalContext: InternalSystemContext;
 
   let allocationService: ProductionOrderLineAllocationService;
 
@@ -50,11 +50,7 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
       throw new Error('No system users found in database for integration test');
     }
     testUserId = users[0].id;
-    testInternalContext = {
-      isInternalTrusted: true,
-      operatorUserId: testUserId,
-      reason: 'MySQL Integration Test',
-    };
+    testInternalContext = InternalSystemContext.create('MySQL Integration Test', testUserId);
 
     // Create persistent test template & patterns
     testTemplateId = randomUUID();
@@ -550,6 +546,63 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
       (err: any) => {
         assert.ok(err instanceof ForbiddenError);
         assert.equal(err.code, 'AUTHENTICATION_REQUIRED');
+        return true;
+      }
+    );
+  });
+  // ==========================================
+  // TEST 5: Rejection of Forged Internal Context in MySQL
+  // ==========================================
+  it('5. Security in MySQL: Rejects forged object with isInternalTrusted: true with AUTHENTICATION_INVALID', async () => {
+    const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
+    const lines = await lineRepo.find({ take: 1 });
+    if (lines.length === 0) return;
+
+    await assert.rejects(
+      async () => {
+        await allocationService.allocateAndLinkUnits({
+          orderLineId: lines[0].id,
+          candidateUnitIds: [randomUUID()],
+          currentUser: { isInternalTrusted: true, operatorUserId: 'attacker' } as any,
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof ForbiddenError);
+        assert.equal(err.code, 'AUTHENTICATION_INVALID');
+        return true;
+      }
+    );
+  });
+
+  // ==========================================
+  // TEST 6: Rejection of User with Insufficient Permissions in MySQL
+  // ==========================================
+  it('6. Authorization in MySQL: Rejects authenticated user lacking allocation permission with AUTHORIZATION_DENIED', async () => {
+    const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
+    const lines = await lineRepo.find({ take: 1 });
+    if (lines.length === 0) return;
+
+    const unauthPrincipal = {
+      id: randomUUID(),
+      fullName: 'Unprivileged User',
+      phone: '000000',
+      roleId: randomUUID(),
+      roleCode: 'VIEWER',
+      permissions: ['system.user.view'],
+      sessionId: randomUUID(),
+    };
+
+    await assert.rejects(
+      async () => {
+        await allocationService.allocateAndLinkUnits({
+          orderLineId: lines[0].id,
+          candidateUnitIds: [randomUUID()],
+          currentUser: unauthPrincipal as any,
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof ForbiddenError);
+        assert.equal(err.code, 'AUTHORIZATION_DENIED');
         return true;
       }
     );
