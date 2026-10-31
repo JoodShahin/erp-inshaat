@@ -1,6 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { ProductionYardService, productionYardService } from './production-yard.service.js';
 import { ProductionDepartmentService, productionDepartmentService } from '../department/production-department.service.js';
+import {
+  ProductionYardTemplateService,
+  productionYardTemplateService,
+} from '../yard-template/production-yard-template.service.js';
 import { ListProductionYardsQueryDto } from './dto/list-production-yards-query.dto.js';
 import { SystemPermission } from '../../system/permission/constants/system-permission.enum.js';
 import { AuthPrincipal } from '../../system/auth/auth.types.js';
@@ -10,13 +14,16 @@ import { canAccessYard } from '../authorization/production-access-query.helper.j
 export class ProductionYardWebController {
   private readonly yardService: ProductionYardService;
   private readonly departmentService: ProductionDepartmentService;
+  private readonly yardTemplateService: ProductionYardTemplateService;
 
   constructor(
     yardService: ProductionYardService = productionYardService,
-    deptService: ProductionDepartmentService = productionDepartmentService
+    deptService: ProductionDepartmentService = productionDepartmentService,
+    yardTemplateService: ProductionYardTemplateService = productionYardTemplateService
   ) {
     this.yardService = yardService;
     this.departmentService = deptService;
+    this.yardTemplateService = yardTemplateService;
   }
 
   renderYardsList = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -144,6 +151,68 @@ export class ProductionYardWebController {
         activeTab: 'yards',
         yard,
         departments: permittedDepartments,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  renderYardShow = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user as AuthPrincipal;
+
+      const yardViewPolicy = await getProductionAccessPolicy(
+        req,
+        currentUser,
+        SystemPermission.PRODUCTION_YARD_VIEW
+      );
+      const yardUpdatePolicy = await getProductionAccessPolicy(
+        req,
+        currentUser,
+        SystemPermission.PRODUCTION_YARD_UPDATE
+      );
+      const templatesViewPolicy = await getProductionAccessPolicy(
+        req,
+        currentUser,
+        SystemPermission.PRODUCTION_YARD_TEMPLATE_VIEW
+      );
+      const templatesAddPolicy = await getProductionAccessPolicy(
+        req,
+        currentUser,
+        SystemPermission.PRODUCTION_YARD_TEMPLATE_ADD
+      );
+      const templatesRemovePolicy = await getProductionAccessPolicy(
+        req,
+        currentUser,
+        SystemPermission.PRODUCTION_YARD_TEMPLATE_REMOVE
+      );
+
+      const yard = await this.yardService.getYardById(id as string, yardViewPolicy);
+
+      const canUpdate = canAccessYard(yardUpdatePolicy, yard);
+      const canViewTemplates = canAccessYard(templatesViewPolicy, yard);
+      const canAddTemplates = canAccessYard(templatesAddPolicy, yard);
+      const canRemoveTemplates = canAccessYard(templatesRemovePolicy, yard);
+
+      const assignedTemplates = canViewTemplates
+        ? await this.yardTemplateService.listYardTemplates(yard.id, templatesViewPolicy)
+        : [];
+
+      res.render('dashboard/production/yards/show', {
+        layout: 'dashboard/production/layout',
+        title: `تفاصيل ساحة الإنتاج: ${yard.name}`,
+        appName: 'إدارة الإنتاج',
+        themeColor: '#0984E3',
+        hasSidebar: true,
+        sidebarPath: 'production/partials/sidebar',
+        activeTab: 'yards',
+        yard,
+        canUpdate,
+        canViewTemplates,
+        canAddTemplates,
+        canRemoveTemplates,
+        assignedTemplates,
       });
     } catch (error) {
       next(error);

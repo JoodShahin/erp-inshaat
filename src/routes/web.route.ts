@@ -243,6 +243,15 @@ webRouter.get(
   productionYardWebController.renderEditYardForm
 );
 
+// GET /production/yards/:id - Show Production Yard & Assigned Templates (Protected)
+webRouter.get(
+  '/production/yards/:id',
+  requireWebAuth,
+  requireProductionAccess(SystemPermission.PRODUCTION_YARD_VIEW),
+  validateUuidParam('id'),
+  productionYardWebController.renderYardShow
+);
+
 // ==========================================
 // INVENTORY MODULE WEB ROUTES (/inventory)
 // ==========================================

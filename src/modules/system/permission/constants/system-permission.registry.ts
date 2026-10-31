@@ -110,6 +110,26 @@ export const SYSTEM_PERMISSION_DEFINITIONS: Record<SystemPermission, PermissionD
     description: 'أرشفة ساحة إنتاج',
     module: 'production',
   },
+  [SystemPermission.PRODUCTION_YARD_TEMPLATE_VIEW]: {
+    name: SystemPermission.PRODUCTION_YARD_TEMPLATE_VIEW,
+    description: 'استعراض القوالب المرتبطة بساحات الإنتاج',
+    module: 'production',
+  },
+  [SystemPermission.PRODUCTION_YARD_TEMPLATE_ADD]: {
+    name: SystemPermission.PRODUCTION_YARD_TEMPLATE_ADD,
+    description: 'ربط قوالب التصنيع بساحات الإنتاج',
+    module: 'production',
+  },
+  [SystemPermission.PRODUCTION_YARD_TEMPLATE_UPDATE]: {
+    name: SystemPermission.PRODUCTION_YARD_TEMPLATE_UPDATE,
+    description: 'تعديل إعدادات ارتباط القوالب بساحات الإنتاج',
+    module: 'production',
+  },
+  [SystemPermission.PRODUCTION_YARD_TEMPLATE_REMOVE]: {
+    name: SystemPermission.PRODUCTION_YARD_TEMPLATE_REMOVE,
+    description: 'إزالة ارتباط قوالب التصنيع من ساحات الإنتاج',
+    module: 'production',
+  },
 
   // Production Team Assignment Permissions
   [SystemPermission.PRODUCTION_ASSIGNMENT_VIEW]: {

@@ -1,0 +1,327 @@
+<div class="container-fluid">
+  <!-- Header -->
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
+    <div>
+      <h3 class="fw-bold mb-1" style="color: #1F2937;">
+        تفاصيل ساحة الإنتاج: <%= yard.name %>
+        <i class="fa-solid fa-square-parking text-muted fs-5 ms-2"></i>
+      </h3>
+      <p class="text-muted mb-0 small">
+        استعراض بيانات الساحة وإدارة القوالب التشغيلية المرتبطة بها
+      </p>
+    </div>
+    <div class="d-flex gap-2">
+      <% if (canUpdate) { %>
+        <a href="/production/yards/<%= yard.id %>/edit" class="btn btn-outline-primary d-inline-flex align-items-center gap-2">
+          <i class="fa-solid fa-pen-to-square"></i>
+          <span>تعديل الساحة</span>
+        </a>
+      <% } %>
+      <a href="/production/yards" class="btn btn-outline-secondary d-inline-flex align-items-center gap-2">
+        <i class="fa-solid fa-arrow-right"></i>
+        <span>العودة للساحات</span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Yard Overview KPI Cards -->
+  <div class="row g-3 mb-4">
+    <!-- Yard Code & Department -->
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 12px; border-right: 5px solid #0984E3 !important;">
+        <div class="card-body d-flex align-items-center justify-content-between p-3">
+          <div>
+            <div class="text-muted small mb-1">الرمز التقني والقسم</div>
+            <div class="fw-bold fs-6 text-dark"><code class="bg-light px-2 py-0.5 rounded border"><%= yard.code %></code></div>
+            <div class="small text-muted mt-1">
+              <i class="fa-solid fa-building-user text-primary me-1"></i> <%= yard.departmentName || 'غير محدد' %>
+            </div>
+          </div>
+          <div class="rounded-circle d-flex justify-content-center align-items-center" style="width: 50px; height: 50px; background-color: rgba(9, 132, 227, 0.1);">
+            <i class="fa-solid fa-square-parking fs-4" style="color: #0984E3;"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Capacity -->
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 12px; border-right: 5px solid #00CEC9 !important;">
+        <div class="card-body d-flex align-items-center justify-content-between p-3">
+          <div>
+            <div class="text-muted small mb-1">السعة الاستيعابية</div>
+            <div class="fw-bold fs-5 text-dark"><%= yard.capacity %> <small class="text-muted fs-6">غرفة</small></div>
+            <div class="small text-muted mt-1">سعة الغرف المتاحة</div>
+          </div>
+          <div class="rounded-circle d-flex justify-content-center align-items-center" style="width: 50px; height: 50px; background-color: rgba(0, 206, 201, 0.1);">
+            <i class="fa-solid fa-cubes-stacked fs-4" style="color: #00CEC9;"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 12px; border-right: 5px solid <%= yard.isActive ? '#10AC84' : '#EE5253' %> !important;">
+        <div class="card-body d-flex align-items-center justify-content-between p-3">
+          <div>
+            <div class="text-muted small mb-1">الحالة التشغيلية</div>
+            <div class="fw-bold fs-6 mt-1">
+              <% if (yard.isActive) { %>
+                <span class="badge bg-success-subtle text-success px-3 py-1 rounded-pill">
+                  <i class="fa-solid fa-circle-check me-1"></i> نشط
+                </span>
+              <% } else { %>
+                <span class="badge bg-danger-subtle text-danger px-3 py-1 rounded-pill">
+                  <i class="fa-solid fa-circle-xmark me-1"></i> معطل
+                </span>
+              <% } %>
+            </div>
+            <div class="small text-muted mt-1">
+              تاريخ: <%= new Date(yard.createdAt).toLocaleDateString('ar-SA') %>
+            </div>
+          </div>
+          <div class="rounded-circle d-flex justify-content-center align-items-center" style="width: 50px; height: 50px; background-color: <%= yard.isActive ? 'rgba(16, 172, 132, 0.1)' : 'rgba(238, 82, 83, 0.1)' %>;">
+            <i class="fa-solid <%= yard.isActive ? 'fa-check' : 'fa-ban' %> fs-4" style="color: <%= yard.isActive ? '#10AC84' : '#EE5253' %>;"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Linked Templates Count -->
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm h-100" style="border-radius: 12px; border-right: 5px solid #6C5CE7 !important;">
+        <div class="card-body d-flex align-items-center justify-content-between p-3">
+          <div>
+            <div class="text-muted small mb-1">القوالب المرتبطة</div>
+            <div class="fw-bold fs-5 text-dark" id="assignedTemplatesCount"><%= assignedTemplates.length %></div>
+            <div class="small text-muted mt-1">قالب إنتاجي معتمد</div>
+          </div>
+          <div class="rounded-circle d-flex justify-content-center align-items-center" style="width: 50px; height: 50px; background-color: rgba(108, 92, 231, 0.1);">
+            <i class="fa-solid fa-layer-group fs-4" style="color: #6C5CE7;"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <% if (yard.description) { %>
+    <div class="alert alert-light border shadow-sm mb-4" style="border-radius: 10px;">
+      <i class="fa-solid fa-circle-info text-info me-2"></i>
+      <strong>الوصف:</strong> <%= yard.description %>
+    </div>
+  <% } %>
+
+  <!-- Linked Templates Section -->
+  <div class="card border-0 shadow-sm mb-4" style="border-radius: 12px; overflow: hidden;">
+    <div class="card-header bg-white py-3 px-4 border-bottom d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div class="d-flex align-items-center gap-2">
+        <h5 class="fw-bold mb-0" style="color: #1F2937;">
+          <i class="fa-solid fa-layer-group text-primary me-2"></i>
+          القوالب المرتبطة بهذه الساحة
+        </h5>
+        <span class="badge bg-secondary-subtle text-secondary-emphasis rounded-pill px-3 py-1" id="templatesCountBadge">
+          <%= assignedTemplates.length %> قالب
+        </span>
+      </div>
+
+      <% if (canAddTemplates) { %>
+        <button
+          type="button"
+          class="btn btn-primary d-inline-flex align-items-center gap-2 shadow-sm px-3 py-2"
+          id="openAddTemplatesModalBtn"
+          style="background-color: #0984E3; border-color: #0984E3; border-radius: 8px;"
+          data-bs-toggle="modal"
+          data-bs-target="#assignTemplatesModal"
+        >
+          <i class="fa-solid fa-plus"></i>
+          <span>إضافة قوالب للساحة</span>
+        </button>
+      <% } %>
+    </div>
+
+    <% if (!canViewTemplates) { %>
+      <div class="card-body p-5 text-center text-muted">
+        <i class="fa-solid fa-shield-halved fs-1 text-secondary mb-3 d-block"></i>
+        <h6 class="fw-bold text-dark mb-1">غير مصرح لك باستعراض قوالب هذه الساحة</h6>
+        <p class="small text-muted mb-0">يتطلب صلاحية استعراض قوالب الساحات ونطاق وصول يشمل هذه الساحة.</p>
+      </div>
+    <% } else { %>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0" id="assignedTemplatesTable">
+          <thead class="bg-light text-muted" style="font-size: 0.85rem;">
+            <tr>
+              <th class="ps-4 py-3">اسم القالب</th>
+              <th class="py-3">الرمز التقني</th>
+              <th class="py-3">الوصف</th>
+              <th class="py-3 text-center">حالة القالب</th>
+              <th class="py-3">تاريخ الربط</th>
+              <% if (canRemoveTemplates) { %>
+                <th class="py-3 text-center px-4">إجراءات</th>
+              <% } %>
+            </tr>
+          </thead>
+          <tbody id="assignedTemplatesTbody">
+            <% if (assignedTemplates && assignedTemplates.length > 0) { %>
+              <% assignedTemplates.forEach(function(tmpl) { %>
+                <tr id="row-template-<%= tmpl.templateId %>">
+                  <td class="ps-4">
+                    <div class="d-flex align-items-center gap-2">
+                      <div class="rounded-circle d-flex justify-content-center align-items-center text-white fw-bold" style="width: 34px; height: 34px; background-color: #0984E3; font-size: 0.85rem;">
+                        <%= tmpl.templateName ? tmpl.templateName.charAt(0) : 'T' %>
+                      </div>
+                      <div class="fw-bold text-dark"><%= tmpl.templateName %></div>
+                    </div>
+                  </td>
+                  <td>
+                    <code class="bg-light text-dark px-2 py-1 rounded border"><%= tmpl.templateCode %></code>
+                  </td>
+                  <td class="text-muted small">
+                    <%= tmpl.templateDescription || '—' %>
+                  </td>
+                  <td class="text-center">
+                    <% if (tmpl.templateIsActive) { %>
+                      <span class="badge bg-success-subtle text-success px-3 py-1 rounded-pill">
+                        <i class="fa-solid fa-circle-check me-1"></i> نشط
+                      </span>
+                    <% } else { %>
+                      <span class="badge bg-danger-subtle text-danger px-3 py-1 rounded-pill">
+                        <i class="fa-solid fa-circle-xmark me-1"></i> معطل
+                      </span>
+                    <% } %>
+                  </td>
+                  <td class="text-muted small">
+                    <%= new Date(tmpl.createdAt).toLocaleDateString('ar-SA', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) %>
+                  </td>
+                  <% if (canRemoveTemplates) { %>
+                    <td class="py-3 text-center px-4">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-outline-danger d-inline-flex align-items-center gap-1 remove-template-btn"
+                        data-template-id="<%= tmpl.templateId %>"
+                        data-template-name="<%= tmpl.templateName %>"
+                        title="فك ارتباط القالب"
+                      >
+                        <i class="fa-solid fa-unlink"></i>
+                        <span>فك الارتباط</span>
+                      </button>
+                    </td>
+                  <% } %>
+                </tr>
+              <% }); %>
+            <% } else { %>
+              <tr id="emptyTemplatesRow">
+                <td colspan="<%= canRemoveTemplates ? 6 : 5 %>" class="text-center py-5 text-muted">
+                  <div class="py-3">
+                    <i class="fa-solid fa-layer-group fs-1 text-secondary mb-3 d-block"></i>
+                    <p class="mb-1 fw-bold">لا توجد قوالب مرتبطة بهذه الساحة حالياً</p>
+                    <% if (canAddTemplates) { %>
+                      <p class="small text-muted">يمكنك ربط القوالب الإنتاجية المعتمدة بالساحة باستخدام زر "إضافة قوالب للساحة" أعلاه.</p>
+                    <% } %>
+                  </div>
+                </td>
+              </tr>
+            <% } %>
+          </tbody>
+        </table>
+      </div>
+    <% } %>
+  </div>
+</div>
+
+<!-- Modal: Assign Templates to Yard -->
+<% if (canAddTemplates) { %>
+  <div class="modal fade" id="assignTemplatesModal" tabindex="-1" aria-labelledby="assignTemplatesModalLabel" aria-hidden="true" dir="rtl">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content border-0 shadow" style="border-radius: 12px; overflow: hidden;">
+        <div class="modal-header bg-light py-3 px-4 border-bottom">
+          <h5 class="modal-title fw-bold" id="assignTemplatesModalLabel" style="color: #1F2937;">
+            <i class="fa-solid fa-link text-primary me-2"></i>
+            ربط قوالب إنتاجية بالساحة
+          </h5>
+          <button type="button" class="btn-close ms-0 me-auto" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+        </div>
+
+        <div class="modal-body p-4">
+          <!-- Search box & Select all bar -->
+          <div class="row g-2 align-items-center mb-3">
+            <div class="col-md-7">
+              <div class="input-group">
+                <span class="input-group-text bg-white border-end-0 text-muted">
+                  <i class="fa-solid fa-magnifying-glass"></i>
+                </span>
+                <input
+                  type="text"
+                  id="templateSearchInput"
+                  class="form-control border-start-0 ps-0"
+                  placeholder="بحث باسم القالب أو الرمز..."
+                  autocomplete="off"
+                >
+              </div>
+            </div>
+            <div class="col-md-5 d-flex justify-content-md-end align-items-center gap-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="selectAllBtn">
+                تحديد الكل المتاح
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="deselectAllBtn">
+                إلغاء التحديد
+              </button>
+            </div>
+          </div>
+
+          <!-- Alert area for modal -->
+          <div id="modalAlert" class="alert alert-danger d-none py-2 px-3 small mb-3" role="alert"></div>
+
+          <!-- Selection counter -->
+          <div class="d-flex justify-content-between align-items-center py-2 px-3 bg-light rounded mb-3">
+            <span class="small text-muted">القوالب المتاحة للاختيار:</span>
+            <span class="badge bg-primary px-3 py-1.5 rounded-pill" id="selectedCountBadge">
+              0 قالب محدد
+            </span>
+          </div>
+
+          <!-- Templates list container -->
+          <div id="modalTemplatesLoading" class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">جاري التحميل...</span>
+            </div>
+            <div class="small text-muted mt-2">جاري تحميل قائمة القوالب...</div>
+          </div>
+
+          <div id="modalTemplatesList" class="d-none" style="max-height: 380px; overflow-y: auto;">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
+
+        <div class="modal-footer bg-light py-2.5 px-4 border-top d-flex justify-content-between">
+          <button type="button" class="btn btn-light px-4" data-bs-dismiss="modal" style="border-radius: 8px;">
+            إلغاء
+          </button>
+          <button
+            type="button"
+            id="submitAssignTemplatesBtn"
+            class="btn btn-primary d-inline-flex align-items-center gap-2 px-4"
+            style="background-color: #0984E3; border-color: #0984E3; border-radius: 8px;"
+            disabled
+          >
+            <span class="spinner-border spinner-border-sm d-none" id="submitSpinner" role="status" aria-hidden="true"></span>
+            <i class="fa-solid fa-check" id="submitIcon"></i>
+            <span id="submitBtnText">ربط القوالب المحددة</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+<% } %>
+
+<!-- Hidden context for client scripts -->
+<div
+  id="yardContext"
+  data-yard-id="<%= yard.id %>"
+  data-yard-name="<%= yard.name %>"
+  data-can-add="<%= canAddTemplates %>"
+  data-can-remove="<%= canRemoveTemplates %>"
+  class="d-none"
+></div>
+
+<script src="/js/production-yard-show.js"></script>

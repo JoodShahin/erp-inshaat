@@ -12,6 +12,7 @@ import { ProductionTemplateSpecificationEntity } from '../template-specification
 import { ProductionTemplateStageEntity } from '../template-stage/production-template-stage.entity.js';
 import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
 import { ProductionTemplatePatternEntity } from '../template-pattern/production-template-pattern.entity.js';
+import { ProductionYardTemplateEntity } from '../yard-template/production-yard-template.entity.js';
 
 @Entity('production_template')
 export class ProductionTemplateEntity {
@@ -68,4 +69,10 @@ export class ProductionTemplateEntity {
     eager: false,
   })
   patterns?: ProductionTemplatePatternEntity[];
+
+  @OneToMany(() => ProductionYardTemplateEntity, (yt) => yt.template, {
+    cascade: false,
+    eager: false,
+  })
+  yardTemplates?: ProductionYardTemplateEntity[];
 }
