@@ -527,20 +527,24 @@ export class ProductionOrderLineAllocationService {
           );
         }
 
-        // 5. Deterministic lock ordering: sort candidate unit IDs ascending to prevent circular deadlocks
-        const sortedCandidateUnitIds = [...candidateUnitIds].sort();
+        // 5. Deterministic lock ordering: sort candidate unit IDs ascending to guarantee consistent global acquisition order
+        const sortedCandidateUnitIds = [...new Set(candidateUnitIds)].sort();
 
-        // 6. Lock candidate unit rows strictly on production_unit ONLY (no joins in locking query)
-        const lockedUnits = await unitRepo.find({
-          where: { id: In(sortedCandidateUnitIds), deletedAt: IsNull() },
-          lock: { mode: 'pessimistic_write' },
-        });
+        // 6. Lock candidate unit rows sequentially strictly on production_unit ONLY (no joins in locking query)
+        const lockedUnits: ProductionUnitEntity[] = [];
+        for (const unitId of sortedCandidateUnitIds) {
+          const lockedUnit = await unitRepo.findOne({
+            where: { id: unitId, deletedAt: IsNull() },
+            lock: { mode: 'pessimistic_write' },
+          });
 
-        if (lockedUnits.length !== sortedCandidateUnitIds.length) {
-          throw new NotFoundError(
-            'إحدى الغرف المطلوبة غير موجودة في النظام أو تم حذفها',
-            'PRODUCTION_UNIT_NOT_FOUND'
-          );
+          if (!lockedUnit) {
+            throw new NotFoundError(
+              'إحدى الغرف المطلوبة غير موجودة في النظام أو تم حذفها',
+              'PRODUCTION_UNIT_NOT_FOUND'
+            );
+          }
+          lockedUnits.push(lockedUnit);
         }
 
         // 7. Load related entities (plans, yards, template specifications) cleanly without join locks

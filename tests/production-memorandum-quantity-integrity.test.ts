@@ -444,6 +444,9 @@ describe('Production Memorandum Quantity Integrity & Allocation Protection Test 
                   if (opts?.where?.id === orderId) return mockLine.order;
                   if (opts?.where?.id === tmplId) return { id: tmplId, specifications: [] };
                   if (opts?.where?.id === 'unit-cancel-1') return mockCancelledUnit;
+                  const all = [mockUnit, mockUnitDeniedYard, mockCancelledUnit];
+                  const found = all.find((u: any) => u.id === opts?.where?.id);
+                  if (found) return found;
                   return null;
                 },
                 count: async () => 0,
@@ -731,6 +734,8 @@ describe('Production Memorandum Quantity Integrity & Allocation Protection Test 
                 if (opts?.where?.id === lineId) return lineRow;
                 if (opts?.where?.id === orderId) return orderRow;
                 if (opts?.where?.id === tmplId) return { id: tmplId, specifications: [] };
+                const foundUnit = unitsInDb.find((u) => u.id === opts?.where?.id);
+                if (foundUnit) return foundUnit;
                 return null;
               },
               count: async () => unitsInDb.filter((u) => u.orderLineId === lineId && !u.isCancelled && !u.deletedAt).length,

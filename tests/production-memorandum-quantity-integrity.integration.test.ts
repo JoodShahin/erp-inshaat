@@ -9,7 +9,7 @@ import { ProductionTemplatePatternEntity } from '../src/modules/production/templ
 import { ProductionTemplatePatternOptionEntity } from '../src/modules/production/template-pattern-option/production-template-pattern-option.entity.js';
 import { ProductionExecutionPlanEntity } from '../src/modules/production/execution-plan/production-execution-plan.entity.js';
 import { ProductionUnitEntity, ProductionUnitStatus } from '../src/modules/production/unit/production-unit.entity.js';
-import { ProductionUnitEventEntity } from '../src/modules/production/unit/production-unit-event.entity.js';
+import { ProductionUnitEventEntity, ProductionUnitEventType } from '../src/modules/production/unit/production-unit-event.entity.js';
 import { UserEntity } from '../src/modules/system/user/user.entity.js';
 import {
   ProductionOrderLineAllocationService,
@@ -33,6 +33,7 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
   let allocationService: ProductionOrderLineAllocationService;
 
   const createdOrderIds: string[] = [];
+  const createdLineIds: string[] = [];
   const createdUnitIds: string[] = [];
 
   before(async () => {
@@ -606,5 +607,319 @@ describe('Real MySQL Integration Tests: Memorandum Line Quantity Integrity & Con
         return true;
       }
     );
+  });
+
+  // =========================================================================
+  // TEST 7: Mandatory Cross-Line Concurrency Scenario 1 ([X, Y] vs [Y, X])
+  // =========================================================================
+  it('7. Concurrency Verification 1: Cross-line competition for [X, Y] vs [Y, X] — exactly one wins, zero partial state, no deadlock', async () => {
+    const orderRepo = AppDataSource.getRepository(ProductionOrderEntity);
+    const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
+    const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
+    const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
+    const eventRepo = AppDataSource.getRepository(ProductionUnitEventEntity);
+
+    // Setup 2 separate approved orders and lines
+    const orderAId = randomUUID();
+    const orderBId = randomUUID();
+    createdOrderIds.push(orderAId, orderBId);
+
+    const lineAId = randomUUID();
+    const lineBId = randomUUID();
+    createdLineIds.push(lineAId, lineBId);
+
+    await orderRepo.save([
+      orderRepo.create({
+        id: orderAId,
+        orderNumber: `ORD-CONCUR-A-${Date.now().toString().slice(-4)}`,
+        status: ProductionOrderStatus.APPROVED,
+        approvedAt: new Date(),
+        approvedByUserId: testUserId,
+        createdByUserId: testUserId,
+      }),
+      orderRepo.create({
+        id: orderBId,
+        orderNumber: `ORD-CONCUR-B-${Date.now().toString().slice(-4)}`,
+        status: ProductionOrderStatus.APPROVED,
+        approvedAt: new Date(),
+        approvedByUserId: testUserId,
+        createdByUserId: testUserId,
+      }),
+    ]);
+
+    await lineRepo.save([
+      lineRepo.create({
+        id: lineAId,
+        orderId: orderAId,
+        templateId: testTemplateId,
+        quantity: 5,
+        sortOrder: 1,
+        activeConfigurationHash: null,
+      }),
+      lineRepo.create({
+        id: lineBId,
+        orderId: orderBId,
+        templateId: testTemplateId,
+        quantity: 5,
+        sortOrder: 1,
+        activeConfigurationHash: null,
+      }),
+    ]);
+
+    const planId = randomUUID();
+    await planRepo.save(
+      planRepo.create({
+        id: planId,
+        orderId: orderAId,
+        orderLineId: lineAId,
+        templateId: testTemplateId,
+        templateName: 'Concurrency Test Template',
+        templateCode: 'TMPL-CONCUR',
+        lineQuantity: 5,
+      })
+    );
+
+    // Create 2 candidate units X and Y
+    const unitXId = randomUUID();
+    const unitYId = randomUUID();
+    createdUnitIds.push(unitXId, unitYId);
+
+    await unitRepo.save([
+      unitRepo.create({
+        id: unitXId,
+        orderId: null,
+        orderLineId: null,
+        planId,
+        unitSequence: 501,
+        unitNumber: 'U-CONCUR-X',
+        status: ProductionUnitStatus.CREATED,
+        isCancelled: false,
+      }),
+      unitRepo.create({
+        id: unitYId,
+        orderId: null,
+        orderLineId: null,
+        planId,
+        unitSequence: 502,
+        unitNumber: 'U-CONCUR-Y',
+        status: ProductionUnitStatus.CREATED,
+        isCancelled: false,
+      }),
+    ]);
+
+    // Fire two concurrent requests with opposite candidate arrays: Line A -> [X, Y], Line B -> [Y, X]
+    const [resultA, resultB] = await Promise.allSettled([
+      allocationService.allocateAndLinkUnits({
+        orderLineId: lineAId,
+        candidateUnitIds: [unitXId, unitYId],
+        currentUser: testInternalContext,
+      }),
+      allocationService.allocateAndLinkUnits({
+        orderLineId: lineBId,
+        candidateUnitIds: [unitYId, unitXId],
+        currentUser: testInternalContext,
+      }),
+    ]);
+
+    const successes = [resultA, resultB].filter((r) => r.status === 'fulfilled');
+    const failures = [resultA, resultB].filter((r) => r.status === 'rejected');
+
+    assert.equal(successes.length, 1, 'Exactly one transaction must succeed');
+    assert.equal(failures.length, 1, 'Exactly one transaction must fail');
+
+    const failedReason: any = (failures[0] as PromiseRejectedResult).reason;
+    assert.ok(failedReason instanceof BusinessRuleError);
+    assert.equal(failedReason.code, 'PRODUCTION_UNIT_ALREADY_LINKED');
+
+    // Verify DB integrity: both X and Y must belong to the winning line only
+    const winningResult = (successes[0] as PromiseFulfilledResult<any>).value;
+    const winningLineId = winningResult.orderLineId;
+    const losingLineId = winningLineId === lineAId ? lineBId : lineAId;
+
+    const dbUnits = await unitRepo.find({
+      where: { id: In([unitXId, unitYId]) },
+    });
+    assert.equal(dbUnits.length, 2);
+    for (const u of dbUnits) {
+      assert.equal(u.orderLineId, winningLineId, `Unit ${u.id} must be linked to winning line ${winningLineId}`);
+    }
+
+    // Losing line must have 0 units linked (no partial allocation!)
+    const losingLineUnitCount = await unitRepo.count({
+      where: { orderLineId: losingLineId },
+    });
+    assert.equal(losingLineUnitCount, 0, 'Losing line must have 0 units allocated');
+
+    // Exactly 2 allocation events in MySQL
+    const events = await eventRepo.find({
+      where: { unitId: In([unitXId, unitYId]) },
+    });
+    assert.equal(events.length, 2, 'Exactly 2 allocation events created for the winning line');
+    for (const ev of events) {
+      assert.equal(ev.eventType, ProductionUnitEventType.UNIT_LINKED);
+      assert.equal((ev.newData as any)?.orderLineId, winningLineId);
+    }
+  });
+
+  // =========================================================================
+  // TEST 8: Mandatory Cross-Line Concurrency Scenario 2 ([X, Y] vs [Y, Z])
+  // =========================================================================
+  it('8. Concurrency Verification 2: Partially overlapping sets [X, Y] vs [Y, Z] — shared unit not double-booked, losing tx rolls back completely', async () => {
+    const orderRepo = AppDataSource.getRepository(ProductionOrderEntity);
+    const lineRepo = AppDataSource.getRepository(ProductionOrderLineEntity);
+    const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
+    const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
+
+    const orderAId = randomUUID();
+    const orderBId = randomUUID();
+    createdOrderIds.push(orderAId, orderBId);
+
+    const lineAId = randomUUID();
+    const lineBId = randomUUID();
+    createdLineIds.push(lineAId, lineBId);
+
+    await orderRepo.save([
+      orderRepo.create({
+        id: orderAId,
+        orderNumber: `ORD-CONCUR-O1-${Date.now().toString().slice(-4)}`,
+        status: ProductionOrderStatus.APPROVED,
+        approvedAt: new Date(),
+        approvedByUserId: testUserId,
+        createdByUserId: testUserId,
+      }),
+      orderRepo.create({
+        id: orderBId,
+        orderNumber: `ORD-CONCUR-O2-${Date.now().toString().slice(-4)}`,
+        status: ProductionOrderStatus.APPROVED,
+        approvedAt: new Date(),
+        approvedByUserId: testUserId,
+        createdByUserId: testUserId,
+      }),
+    ]);
+
+    await lineRepo.save([
+      lineRepo.create({
+        id: lineAId,
+        orderId: orderAId,
+        templateId: testTemplateId,
+        quantity: 5,
+        sortOrder: 1,
+        activeConfigurationHash: null,
+      }),
+      lineRepo.create({
+        id: lineBId,
+        orderId: orderBId,
+        templateId: testTemplateId,
+        quantity: 5,
+        sortOrder: 1,
+        activeConfigurationHash: null,
+      }),
+    ]);
+
+    const planId = randomUUID();
+    await planRepo.save(
+      planRepo.create({
+        id: planId,
+        orderId: orderAId,
+        orderLineId: lineAId,
+        templateId: testTemplateId,
+        templateName: 'Overlap Concurrency Template',
+        templateCode: 'TMPL-OVERLAP',
+        lineQuantity: 5,
+      })
+    );
+
+    // Create 3 candidate units: X, Y, Z
+    const unitXId = randomUUID();
+    const unitYId = randomUUID();
+    const unitZId = randomUUID();
+    createdUnitIds.push(unitXId, unitYId, unitZId);
+
+    await unitRepo.save([
+      unitRepo.create({
+        id: unitXId,
+        orderId: null,
+        orderLineId: null,
+        planId,
+        unitSequence: 601,
+        unitNumber: 'U-OVERLAP-X',
+        status: ProductionUnitStatus.CREATED,
+        isCancelled: false,
+      }),
+      unitRepo.create({
+        id: unitYId,
+        orderId: null,
+        orderLineId: null,
+        planId,
+        unitSequence: 602,
+        unitNumber: 'U-OVERLAP-Y',
+        status: ProductionUnitStatus.CREATED,
+        isCancelled: false,
+      }),
+      unitRepo.create({
+        id: unitZId,
+        orderId: null,
+        orderLineId: null,
+        planId,
+        unitSequence: 603,
+        unitNumber: 'U-OVERLAP-Z',
+        status: ProductionUnitStatus.CREATED,
+        isCancelled: false,
+      }),
+    ]);
+
+    // Tx 1: Line A requests [X, Y]
+    // Tx 2: Line B requests [Y, Z]
+    const [resultA, resultB] = await Promise.allSettled([
+      allocationService.allocateAndLinkUnits({
+        orderLineId: lineAId,
+        candidateUnitIds: [unitXId, unitYId],
+        currentUser: testInternalContext,
+      }),
+      allocationService.allocateAndLinkUnits({
+        orderLineId: lineBId,
+        candidateUnitIds: [unitYId, unitZId],
+        currentUser: testInternalContext,
+      }),
+    ]);
+
+    const successes = [resultA, resultB].filter((r) => r.status === 'fulfilled');
+    const failures = [resultA, resultB].filter((r) => r.status === 'rejected');
+
+    assert.equal(successes.length, 1, 'Exactly one transaction must succeed');
+    assert.equal(failures.length, 1, 'The competing transaction must fail due to shared unit Y');
+
+    const failedReason: any = (failures[0] as PromiseRejectedResult).reason;
+    assert.ok(failedReason instanceof BusinessRuleError);
+    assert.equal(failedReason.code, 'PRODUCTION_UNIT_ALREADY_LINKED');
+
+    const winningResult = (successes[0] as PromiseFulfilledResult<any>).value;
+    const winningLineId = winningResult.orderLineId;
+
+    if (winningLineId === lineAId) {
+      // Line A won: X and Y are linked to Line A. Z remains completely unlinked!
+      const unitX = await unitRepo.findOne({ where: { id: unitXId } });
+      const unitY = await unitRepo.findOne({ where: { id: unitYId } });
+      const unitZ = await unitRepo.findOne({ where: { id: unitZId } });
+
+      assert.equal(unitX?.orderLineId, lineAId);
+      assert.equal(unitY?.orderLineId, lineAId);
+      assert.equal(unitZ?.orderLineId, null, 'Unshared unit Z of losing transaction must remain unallocated due to atomic rollback');
+
+      const lineBCount = await unitRepo.count({ where: { orderLineId: lineBId } });
+      assert.equal(lineBCount, 0, 'Losing line B must have 0 units allocated');
+    } else {
+      // Line B won: Y and Z are linked to Line B. X remains completely unlinked!
+      const unitX = await unitRepo.findOne({ where: { id: unitXId } });
+      const unitY = await unitRepo.findOne({ where: { id: unitYId } });
+      const unitZ = await unitRepo.findOne({ where: { id: unitZId } });
+
+      assert.equal(unitY?.orderLineId, lineBId);
+      assert.equal(unitZ?.orderLineId, lineBId);
+      assert.equal(unitX?.orderLineId, null, 'Unshared unit X of losing transaction must remain unallocated due to atomic rollback');
+
+      const lineACount = await unitRepo.count({ where: { orderLineId: lineAId } });
+      assert.equal(lineACount, 0, 'Losing line A must have 0 units allocated');
+    }
   });
 });
