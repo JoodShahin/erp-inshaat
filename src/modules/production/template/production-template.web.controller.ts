@@ -86,7 +86,8 @@ export class ProductionTemplateWebController {
       const currentUser = req.user as AuthPrincipal;
       const { id } = req.params;
 
-      const template = await this.templateService.getTemplateById(id as string);
+      const versionId = typeof req.query.versionId === 'string' ? req.query.versionId : undefined;
+      const template = await this.templateService.getTemplateById(id as string, versionId);
 
       const canUpdateTemplate = await authorizationService.hasPermission(
         currentUser,

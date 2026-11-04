@@ -3,6 +3,17 @@
 <!-- 1. Template Master Header -->
 <div class="card border-0 shadow-sm mb-3" style="border-radius: 12px; border-right: 5px solid #0984E3 !important;">
   <div class="card-body p-4">
+        <!-- Historical Version Warning Banner -->
+        <div id="historicalVersionBanner" class="alert alert-warning border-0 shadow-sm <%= (template.currentVersion && !template.currentVersion.isLatest) ? '' : 'd-none' %> d-flex align-items-center justify-content-between p-3 mb-4" style="border-radius: 10px;">
+          <div class="d-flex align-items-center gap-3">
+            <i class="fa-solid fa-clock-rotate-left fs-3 text-warning"></i>
+            <div>
+              <strong class="d-block text-dark">أنت تستعرض إصداراً تاريخياً قديماً (v<%= template.currentVersion ? template.currentVersion.version : '1.0' %>) للقالب</strong>
+              <span class="small text-muted">هذا الإصدار للقراءة فقط ومقفل ضد التعديل للحفاظ على سلامة البيانات التاريخية لأوامر الإنتاج. لإجراء تعديلات، انتقل إلى أحدث إصدار.</span>
+            </div>
+          </div>
+          <button type="button" class="btn btn-warning btn-sm fw-semibold text-dark shadow-sm" id="btnSwitchToLatestVersion">الانتقال إلى أحدث إصدار</button>
+        </div>
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
       <div>
         <div class="d-flex align-items-center gap-3 mb-1">
@@ -1097,6 +1108,62 @@
   </div>
 </div>
 
+
+<!-- ======================================================== -->
+<!-- SAVE SESSION MODAL (Atomic Commit Decision Dialog)       -->
+<!-- ======================================================== -->
+<div class="modal fade" id="saveSessionModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-0 shadow-lg" style="border-radius: 12px;">
+      <div class="modal-header py-3 px-4 bg-white border-bottom">
+        <h5 class="modal-title fw-bold text-dark"><i class="fa-solid fa-floppy-disk text-primary me-2"></i>حفظ تعديلات القالب</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+      </div>
+      <div class="modal-body p-4">
+        <div id="sessionClassificationNotice" class="p-3 mb-3 rounded-3 bg-light border">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="badge bg-primary" id="modalChangeTypeBadge">تعديلات معلقة</span>
+            <strong class="small text-dark" id="modalChangeCountText">عدد التعديلات: 0</strong>
+          </div>
+          <ul class="mb-0 small text-muted ps-3" id="modalChangeReasonsList"></ul>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-bold text-dark">قرار الحفظ والإصدار:</label>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="commitDecisionRadio" id="radioDecisionAuto" value="AUTO" checked>
+            <label class="form-check-label" for="radioDecisionAuto">
+              <strong>تلقائي (موصى به)</strong>
+              <div class="small text-muted">إنشاء إصدار جديد تلقائياً في حال وجود تعديلات هيكلية، أو التحديث المباشر للتعديلات الطفيفة.</div>
+            </label>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="commitDecisionRadio" id="radioDecisionNewVersion" value="NEW_VERSION">
+            <label class="form-check-label" for="radioDecisionNewVersion">
+              <strong>إنشاء إصدار جديد دائماً</strong>
+              <div class="small text-muted">تجميد الإصدار الحالي وتطبيق كافة التعديلات في إصدار جديد تماماً.</div>
+            </label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="commitDecisionRadio" id="radioDecisionOverwrite" value="OVERWRITE_CURRENT">
+            <label class="form-check-label" for="radioDecisionOverwrite">
+              <strong>تحديث الإصدار الحالي مباشرة</strong>
+              <div class="small text-muted">تحديث السجلات الحالية في هذا الإصدار بدون إنشاء نسخة جديدة.</div>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer bg-light border-top py-2 px-4">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">تراجع ومواصلة التحرير</button>
+        <button type="button" class="btn btn-primary d-inline-flex align-items-center gap-2" id="btnConfirmCommitSession">
+          <span class="spinner-border spinner-border-sm d-none" id="commitSessionSpinner" role="status"></span>
+          <i class="fa-solid fa-cloud-arrow-up"></i>
+          <span>تأكيد الحفظ النهائي</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Safe JSON Configuration for Client Script (XSS Protected) -->
 <script type="application/json" id="productionTemplateConfigData">
   <%- safeJsonStringify({
@@ -1108,6 +1175,8 @@
     templateIsActive: Boolean(template.isActive),
     canUpdateTemplate: typeof canUpdateTemplate !== 'undefined' ? canUpdateTemplate : false,
     canDeleteTemplate: typeof canDeleteTemplate !== 'undefined' ? canDeleteTemplate : false,
+    currentVersion: template.currentVersion || null,
+    versions: template.versions || [],
     departments: typeof departments !== 'undefined' && departments ? departments : [],
     initialStages: typeof initialStages !== 'undefined' && initialStages ? initialStages : [],
     initialSpecifications: template.specifications || [],

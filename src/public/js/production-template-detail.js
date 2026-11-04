@@ -3819,6 +3819,218 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ========================================================
+  // 8.5. VERSION SELECTOR & EDITING SESSION MANAGER
+  // ========================================================
+  const currentVersion = config.currentVersion;
+  const isLatestVersion = !currentVersion || Boolean(currentVersion.isLatest);
+
+  // 1. Version Switcher
+  const versionSelect = document.getElementById('templateVersionSelect');
+  if (versionSelect) {
+    versionSelect.addEventListener('change', (e) => {
+      const selectedVerId = e.target.value;
+      window.location.href = '/production/templates/' + templateId + '?versionId=' + selectedVerId;
+    });
+  }
+
+  const btnSwitchToLatest = document.getElementById('btnSwitchToLatestVersion');
+  if (btnSwitchToLatest) {
+    btnSwitchToLatest.addEventListener('click', () => {
+      window.location.href = '/production/templates/' + templateId;
+    });
+  }
+
+  // 2. Editing Session Manager
+  const editingSession = {
+    isActive: false,
+    operations: [],
+    tempCounter: 1,
+
+    getPendingCount() {
+      return this.operations.length;
+    },
+
+    updateCounterUI() {
+      const cnt = this.getPendingCount();
+      const countEl = document.getElementById('unsavedCount');
+      if (countEl) countEl.textContent = cnt;
+      const badge = document.getElementById('unsavedChangesBadge');
+      if (badge) {
+        if (cnt > 0) {
+          badge.classList.remove('bg-secondary');
+          badge.classList.add('bg-warning', 'text-dark');
+        } else {
+          badge.classList.remove('bg-warning', 'text-dark');
+          badge.classList.add('bg-secondary');
+        }
+      }
+    },
+
+    addOperation(op) {
+      this.operations.push(op);
+      this.updateCounterUI();
+    },
+
+    start() {
+      if (!isLatestVersion) return;
+      this.isActive = true;
+      const toolbar = document.getElementById('editingSessionToolbar');
+      if (toolbar) toolbar.classList.remove('d-none');
+      const startBtn = document.getElementById('btnStartEditingSession');
+      if (startBtn) startBtn.classList.add('d-none');
+      document.querySelectorAll('.editing-mode-control').forEach((el) => el.classList.remove('d-none'));
+      this.updateCounterUI();
+    },
+
+    cancel() {
+      if (this.operations.length > 0) {
+        Swal.fire({
+          title: 'إلغاء التعديلات',
+          text: 'هل أنت متأكد من رغبتك في إلغاء كافة التعديلات غير المحفوظة؟ سيتم استعادة بيانات القالب الأصلية.',
+          icon: 'warning',
+          showCancelButton: true,
+          confirmButtonColor: '#EE5253',
+          cancelButtonColor: '#6B7280',
+          confirmButtonText: 'نعم، إلغاء التعديلات',
+          cancelButtonText: 'متابعة التحرير',
+        }).then((res) => {
+          if (res.isConfirmed) {
+            this.operations = [];
+            window.location.reload();
+          }
+        });
+      } else {
+        this.isActive = false;
+        const toolbar = document.getElementById('editingSessionToolbar');
+        if (toolbar) toolbar.classList.add('d-none');
+        const startBtn = document.getElementById('btnStartEditingSession');
+        if (startBtn) startBtn.classList.remove('d-none');
+        document.querySelectorAll('.editing-mode-control').forEach((el) => el.classList.add('d-none'));
+      }
+    },
+
+    async commit(decision) {
+      if (!currentVersion) return;
+      const spinner = document.getElementById('commitSessionSpinner');
+      const confirmBtn = document.getElementById('btnConfirmCommitSession');
+      if (spinner) spinner.classList.remove('d-none');
+      if (confirmBtn) confirmBtn.disabled = true;
+
+      try {
+        const payload = {
+          baseVersionId: currentVersion.id,
+          commitDecision: decision || 'AUTO',
+          operations: this.operations,
+        };
+
+        const res = await window.erpFetch('/api/production/templates/' + templateId + '/editing/commit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const json = await res.json();
+        if (res.ok && json.success) {
+          this.operations = []; // Clear unsaved
+          const modalEl = document.getElementById('saveSessionModal');
+          if (modalEl) {
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+          }
+          const toastMsg = json.data?.createdNewVersion
+            ? 'تم حفظ التعديلات بنجاح في إصدار جديد (' + json.data.targetVersionNumber + ')'
+            : 'تم حفظ كافة تعديلات القالب بنجاح';
+          sessionStorage.setItem('pendingToast', toastMsg);
+          window.location.href = '/production/templates/' + templateId + '?versionId=' + json.data.targetVersionId;
+        } else {
+          const errMsg = extractApiErrorMessage(json, 'فشل في حفظ التعديلات');
+          Swal.fire({
+            icon: 'error',
+            title: 'تعذر حفظ جلسة التحرير',
+            text: errMsg,
+            confirmButtonText: 'حسناً',
+          });
+        }
+      } catch (err) {
+        Swal.fire({
+          icon: 'error',
+          title: 'خطأ في الاتصال',
+          text: 'تعذر الاتصال بالخادم، يرجى التحقق من الشبكة والمحاولة لاحقاً.',
+          confirmButtonText: 'حسناً',
+        });
+      } finally {
+        if (spinner) spinner.classList.add('d-none');
+        if (confirmBtn) confirmBtn.disabled = false;
+      }
+    }
+  };
+
+  // Bind Toolbar Buttons
+  const btnStartSession = document.getElementById('btnStartEditingSession');
+  if (btnStartSession) {
+    btnStartSession.addEventListener('click', () => editingSession.start());
+  }
+
+  const btnCancelSession = document.getElementById('btnCancelEditingSession');
+  if (btnCancelSession) {
+    btnCancelSession.addEventListener('click', () => editingSession.cancel());
+  }
+
+  const btnReviewSave = document.getElementById('btnReviewAndSaveSession');
+  if (btnReviewSave) {
+    btnReviewSave.addEventListener('click', () => {
+      const modalEl = document.getElementById('saveSessionModal');
+      if (!modalEl) return;
+      const count = editingSession.getPendingCount();
+      const countEl = document.getElementById('modalChangeCountText');
+      if (countEl) countEl.textContent = 'عدد التعديلات المعلقة: ' + count;
+
+      // Populate reasons list
+      const reasonsList = document.getElementById('modalChangeReasonsList');
+      if (reasonsList) {
+        reasonsList.innerHTML = '';
+        if (count === 0) {
+          const li = document.createElement('li');
+          li.textContent = 'لا توجد أي تعديلات معلقة حالياً.';
+          reasonsList.appendChild(li);
+        } else {
+          editingSession.operations.slice(0, 5).forEach((op) => {
+            const li = document.createElement('li');
+            li.textContent = op.type + (op.payload?.name ? ': ' + op.payload.name : '');
+            reasonsList.appendChild(li);
+          });
+          if (editingSession.operations.length > 5) {
+            const li = document.createElement('li');
+            li.textContent = '... بالإضافة إلى ' + (editingSession.operations.length - 5) + ' تعديلات أخرى';
+            reasonsList.appendChild(li);
+          }
+        }
+      }
+
+      const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+      modal.show();
+    });
+  }
+
+  const btnConfirmCommit = document.getElementById('btnConfirmCommitSession');
+  if (btnConfirmCommit) {
+    btnConfirmCommit.addEventListener('click', () => {
+      const selectedRadio = document.querySelector('input[name="commitDecisionRadio"]:checked');
+      const decision = selectedRadio ? selectedRadio.value : 'AUTO';
+      editingSession.commit(decision);
+    });
+  }
+
+  // Warn on beforeunload if modifications exist
+  window.addEventListener('beforeunload', (e) => {
+    if (editingSession.getPendingCount() > 0) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
+
+  // ========================================================
   // 9. INITIAL RENDERING
   // ========================================================
   renderSpecifications();
