@@ -1,4 +1,4 @@
-import { DataSource, EntityManager, Repository, IsNull } from 'typeorm';
+import { DataSource, EntityManager, Repository, IsNull, In } from 'typeorm';
 import crypto from 'node:crypto';
 import { AppDataSource } from '../../../database/data-source.js';
 import {
@@ -103,13 +103,25 @@ export class ProductionTemplateEditingService {
 
       // 4. Determine if we must fork a new version
       let shouldCreateNewVersion = false;
-      if (dto.commitDecision === 'NEW_VERSION') {
+      if (classification.classification === 'STRUCTURAL') {
+        if (dto.commitDecision === 'OVERWRITE_CURRENT') {
+          throw new BusinessRuleError(
+            'التغييرات الهيكلية في بنية القالب تتطلب إنشاء إصدار جديد حتماً ولا يمكن التعديل المباشر على الإصدار الحالي',
+            'PRODUCTION_TEMPLATE_STRUCTURAL_CHANGE_REQUIRES_NEW_VERSION'
+          );
+        }
+        // 'AUTO' or 'NEW_VERSION' both fork a new version for STRUCTURAL
         shouldCreateNewVersion = true;
-      } else if (dto.commitDecision === 'OVERWRITE_CURRENT') {
-        shouldCreateNewVersion = false;
+      } else if (classification.classification === 'MINOR') {
+        if (dto.commitDecision === 'NEW_VERSION') {
+          shouldCreateNewVersion = true;
+        } else {
+          // 'OVERWRITE_CURRENT' or 'AUTO' updates current version in place
+          shouldCreateNewVersion = false;
+        }
       } else {
-        // 'AUTO' mode
-        shouldCreateNewVersion = classification.classification === 'STRUCTURAL';
+        // 'NONE'
+        shouldCreateNewVersion = false;
       }
 
       let targetVersionId = baseVersion.id;
@@ -277,6 +289,12 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_STAGE': {
         const stageId = resolveId(op.targetId);
+        const stage = await stageRepo.findOne({
+          where: { id: stageId, templateId, versionId, deletedAt: IsNull() },
+        });
+        if (!stage) {
+          throw new BusinessRuleError(`المرحلة المستهدفة للحذف غير موجودة أو لا تنتمي لهذا الإصدار: ${stageId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+        }
         await stageRepo.softDelete({ id: stageId, templateId, versionId });
         await workflowRepo.softDelete({ stageId, templateId, versionId });
         break;
@@ -326,7 +344,7 @@ export class ProductionTemplateEditingService {
           where: { id: patternId, templateId, versionId, deletedAt: IsNull() },
         });
         if (!pattern) {
-          throw new BusinessRuleError(`النمط المستهدف للتعديل غير موجود: ${patternId}`, 'PRODUCTION_TEMPLATE_PATTERN_NOT_FOUND');
+          throw new BusinessRuleError(`النمط المستهدف للتعديل غير موجود أو لا ينتمي لهذا الإصدار: ${patternId}`, 'PRODUCTION_TEMPLATE_PATTERN_NOT_FOUND');
         }
 
         const payload = op.payload || {};
@@ -337,6 +355,12 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_PATTERN': {
         const patternId = resolveId(op.targetId);
+        const pattern = await patternRepo.findOne({
+          where: { id: patternId, templateId, versionId, deletedAt: IsNull() },
+        });
+        if (!pattern) {
+          throw new BusinessRuleError(`النمط المستهدف للحذف غير موجود أو لا ينتمي لهذا الإصدار: ${patternId}`, 'PRODUCTION_TEMPLATE_PATTERN_NOT_FOUND');
+        }
         await patternRepo.softDelete({ id: patternId, templateId, versionId });
         await workflowRepo.softDelete({ patternId, templateId, versionId });
         break;
@@ -347,6 +371,13 @@ export class ProductionTemplateEditingService {
       // ----------------------------------------------------
       case 'ADD_OPTION': {
         const patternId = resolveId(op.parentId);
+        const pattern = await patternRepo.findOne({
+          where: { id: patternId, templateId, versionId, deletedAt: IsNull() },
+        });
+        if (!pattern) {
+          throw new BusinessRuleError(`النمط الأب غير موجود أو لا ينتمي لهذا الإصدار: ${patternId}`, 'PRODUCTION_TEMPLATE_PATTERN_NOT_FOUND');
+        }
+
         const payload = op.payload || {};
         const activeOptions = await optionRepo.find({
           where: { patternId, deletedAt: IsNull() },
@@ -373,9 +404,16 @@ export class ProductionTemplateEditingService {
         const optionId = resolveId(op.targetId);
         const option = await optionRepo.findOne({
           where: { id: optionId, deletedAt: IsNull() },
+          relations: { pattern: true },
         });
-        if (!option) {
-          throw new BusinessRuleError(`الخيار المستهدف للتعديل غير موجود: ${optionId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
+        if (
+          !option ||
+          !option.pattern ||
+          option.pattern.deletedAt ||
+          option.pattern.templateId !== templateId ||
+          option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`الخيار المستهدف للتعديل غير موجود أو لا ينتمي لهذا الإصدار: ${optionId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
         }
 
         const payload = op.payload || {};
@@ -386,6 +424,19 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_OPTION': {
         const optionId = resolveId(op.targetId);
+        const option = await optionRepo.findOne({
+          where: { id: optionId, deletedAt: IsNull() },
+          relations: { pattern: true },
+        });
+        if (
+          !option ||
+          !option.pattern ||
+          option.pattern.deletedAt ||
+          option.pattern.templateId !== templateId ||
+          option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`الخيار المستهدف للحذف غير موجود أو لا ينتمي لهذا الإصدار: ${optionId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
+        }
         await optionRepo.softDelete(optionId);
         break;
       }
@@ -395,6 +446,20 @@ export class ProductionTemplateEditingService {
       // ----------------------------------------------------
       case 'ADD_TASK': {
         const optionId = resolveId(op.parentId);
+        const option = await optionRepo.findOne({
+          where: { id: optionId, deletedAt: IsNull() },
+          relations: { pattern: true },
+        });
+        if (
+          !option ||
+          !option.pattern ||
+          option.pattern.deletedAt ||
+          option.pattern.templateId !== templateId ||
+          option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`خيار النمط الأب غير موجود أو لا ينتمي لهذا الإصدار: ${optionId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
+        }
+
         const payload = op.payload || {};
         await this.departmentService.validateDepartmentForStage(payload.departmentId);
 
@@ -430,9 +495,18 @@ export class ProductionTemplateEditingService {
         const taskId = resolveId(op.targetId);
         const task = await taskRepo.findOne({
           where: { id: taskId, deletedAt: IsNull() },
+          relations: { option: { pattern: true } },
         });
-        if (!task) {
-          throw new BusinessRuleError(`المهمة المستهدفة للتعديل غير موجودة: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+        if (
+          !task ||
+          !task.option ||
+          task.option.deletedAt ||
+          !task.option.pattern ||
+          task.option.pattern.deletedAt ||
+          task.option.pattern.templateId !== templateId ||
+          task.option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`المهمة المستهدفة للتعديل غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
         }
 
         const payload = op.payload || {};
@@ -464,6 +538,21 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_TASK': {
         const taskId = resolveId(op.targetId);
+        const task = await taskRepo.findOne({
+          where: { id: taskId, deletedAt: IsNull() },
+          relations: { option: { pattern: true } },
+        });
+        if (
+          !task ||
+          !task.option ||
+          task.option.deletedAt ||
+          !task.option.pattern ||
+          task.option.pattern.deletedAt ||
+          task.option.pattern.templateId !== templateId ||
+          task.option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`المهمة المستهدفة للحذف غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+        }
         await taskRepo.softDelete(taskId);
         break;
       }
@@ -474,6 +563,14 @@ export class ProductionTemplateEditingService {
       case 'REORDER_WORKFLOW': {
         const payload = op.payload || {};
         const orderedItemIds: string[] = (payload.itemIds || []).map((raw: string) => resolveId(raw));
+        for (const itemId of orderedItemIds) {
+          const item = await workflowRepo.findOne({
+            where: { id: itemId, templateId, versionId, deletedAt: IsNull() },
+          });
+          if (!item) {
+            throw new BusinessRuleError(`عنصر سير العمل غير موجود أو لا ينتمي لهذا الإصدار: ${itemId}`, 'PRODUCTION_TEMPLATE_WORKFLOW_ITEM_NOT_FOUND');
+          }
+        }
         for (let i = 0; i < orderedItemIds.length; i++) {
           await workflowRepo.update(
             { id: orderedItemIds[i], templateId, versionId },
@@ -486,8 +583,24 @@ export class ProductionTemplateEditingService {
       case 'REORDER_PATTERN_OPTIONS': {
         const payload = op.payload || {};
         const orderedOptionIds: string[] = (payload.optionIds || []).map((raw: string) => resolveId(raw));
-        for (let i = 0; i < orderedOptionIds.length; i++) {
-          await optionRepo.update({ id: orderedOptionIds[i] }, { sortOrder: i + 1 });
+        if (orderedOptionIds.length > 0) {
+          const options = await optionRepo.find({
+            where: { id: In(orderedOptionIds), deletedAt: IsNull() },
+            relations: { pattern: true },
+          });
+          if (options.length !== orderedOptionIds.length) {
+            throw new BusinessRuleError('أحد خيارات النمط المراد ترتيبها غير موجود', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
+          }
+          const firstPatternId = options[0].patternId;
+          if (!options[0].pattern || options[0].pattern.templateId !== templateId || options[0].pattern.versionId !== versionId) {
+            throw new BusinessRuleError('خيارات النمط لا تنتمي لهذا الإصدار', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
+          }
+          if (options.some((o) => o.patternId !== firstPatternId)) {
+            throw new BusinessRuleError('لا يمكن إعادة ترتيب خيارات من أنماط مختلفة معاً', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_REORDER_MISMATCH');
+          }
+          for (let i = 0; i < orderedOptionIds.length; i++) {
+            await optionRepo.update({ id: orderedOptionIds[i] }, { sortOrder: i + 1 });
+          }
         }
         break;
       }
@@ -495,8 +608,29 @@ export class ProductionTemplateEditingService {
       case 'REORDER_OPTION_TASKS': {
         const payload = op.payload || {};
         const orderedTaskIds: string[] = (payload.taskIds || []).map((raw: string) => resolveId(raw));
-        for (let i = 0; i < orderedTaskIds.length; i++) {
-          await taskRepo.update({ id: orderedTaskIds[i] }, { sortOrder: i + 1 });
+        if (orderedTaskIds.length > 0) {
+          const tasks = await taskRepo.find({
+            where: { id: In(orderedTaskIds), deletedAt: IsNull() },
+            relations: { option: { pattern: true } },
+          });
+          if (tasks.length !== orderedTaskIds.length) {
+            throw new BusinessRuleError('إحدى المهام المراد ترتيبها غير موجودة', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+          }
+          const firstOptionId = tasks[0].optionId;
+          if (
+            !tasks[0].option ||
+            !tasks[0].option.pattern ||
+            tasks[0].option.pattern.templateId !== templateId ||
+            tasks[0].option.pattern.versionId !== versionId
+          ) {
+            throw new BusinessRuleError('المهام لا تنتمي لهذا الإصدار', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+          }
+          if (tasks.some((t) => t.optionId !== firstOptionId)) {
+            throw new BusinessRuleError('لا يمكن إعادة ترتيب مهام من خيارات مختلفة معاً', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_REORDER_MISMATCH');
+          }
+          for (let i = 0; i < orderedTaskIds.length; i++) {
+            await taskRepo.update({ id: orderedTaskIds[i] }, { sortOrder: i + 1 });
+          }
         }
         break;
       }
@@ -506,6 +640,12 @@ export class ProductionTemplateEditingService {
       // ----------------------------------------------------
       case 'ADD_STAGE_MATERIAL': {
         const stageId = resolveId(op.parentId);
+        const stage = await stageRepo.findOne({
+          where: { id: stageId, templateId, versionId, deletedAt: IsNull() },
+        });
+        if (!stage) {
+          throw new BusinessRuleError(`المرحلة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${stageId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+        }
         const payload = op.payload || {};
         const mat = manager.create(ProductionTemplateStageMaterialEntity, {
           id: crypto.randomUUID(),
@@ -521,12 +661,35 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_STAGE_MATERIAL': {
         const matId = resolveId(op.targetId);
-        await manager.delete(ProductionTemplateStageMaterialEntity, matId);
+        const matRepo = manager.getRepository(ProductionTemplateStageMaterialEntity);
+        const mat = await matRepo.findOne({
+          where: { id: matId },
+          relations: { stage: true },
+        });
+        if (!mat || !mat.stage || mat.stage.templateId !== templateId || mat.stage.versionId !== versionId || mat.stage.deletedAt) {
+          throw new BusinessRuleError(`المادة المخططة للمرحلة غير موجودة أو لا تنتمي لهذا الإصدار: ${matId}`, 'PRODUCTION_TEMPLATE_STAGE_MATERIAL_NOT_FOUND');
+        }
+        await matRepo.delete(matId);
         break;
       }
 
       case 'ADD_TASK_MATERIAL': {
         const taskId = resolveId(op.parentId);
+        const task = await taskRepo.findOne({
+          where: { id: taskId, deletedAt: IsNull() },
+          relations: { option: { pattern: true } },
+        });
+        if (
+          !task ||
+          !task.option ||
+          task.option.deletedAt ||
+          !task.option.pattern ||
+          task.option.pattern.deletedAt ||
+          task.option.pattern.templateId !== templateId ||
+          task.option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`المهمة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+        }
         const payload = op.payload || {};
         const mat = manager.create(ProductionTemplatePatternOptionTaskMaterialEntity, {
           id: crypto.randomUUID(),
@@ -542,7 +705,25 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_TASK_MATERIAL': {
         const matId = resolveId(op.targetId);
-        await manager.delete(ProductionTemplatePatternOptionTaskMaterialEntity, matId);
+        const taskMatRepo = manager.getRepository(ProductionTemplatePatternOptionTaskMaterialEntity);
+        const mat = await taskMatRepo.findOne({
+          where: { id: matId },
+          relations: { task: { option: { pattern: true } } },
+        });
+        if (
+          !mat ||
+          !mat.task ||
+          mat.task.deletedAt ||
+          !mat.task.option ||
+          mat.task.option.deletedAt ||
+          !mat.task.option.pattern ||
+          mat.task.option.pattern.deletedAt ||
+          mat.task.option.pattern.templateId !== templateId ||
+          mat.task.option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`المادة المخططة للمهمة غير موجودة أو لا تنتمي لهذا الإصدار: ${matId}`, 'PRODUCTION_TEMPLATE_TASK_MATERIAL_NOT_FOUND');
+        }
+        await taskMatRepo.delete(matId);
         break;
       }
 
@@ -551,6 +732,12 @@ export class ProductionTemplateEditingService {
       // ----------------------------------------------------
       case 'ADD_STAGE_ATTACHMENT': {
         const stageId = resolveId(op.parentId);
+        const stage = await stageRepo.findOne({
+          where: { id: stageId, templateId, versionId, deletedAt: IsNull() },
+        });
+        if (!stage) {
+          throw new BusinessRuleError(`المرحلة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${stageId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+        }
         const payload = op.payload || {};
         const storedFile = await this.sharedFileService.getOrCreateStoredFile(
           {
@@ -582,12 +769,35 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_STAGE_ATTACHMENT': {
         const attId = resolveId(op.targetId);
-        await manager.getRepository(ProductionTemplateStageAttachmentEntity).softDelete(attId);
+        const stageAttRepo = manager.getRepository(ProductionTemplateStageAttachmentEntity);
+        const att = await stageAttRepo.findOne({
+          where: { id: attId, deletedAt: IsNull() },
+          relations: { stage: true },
+        });
+        if (!att || !att.stage || att.stage.templateId !== templateId || att.stage.versionId !== versionId || att.stage.deletedAt) {
+          throw new BusinessRuleError(`مرفق المرحلة غير موجود أو لا ينتمي لهذا الإصدار: ${attId}`, 'PRODUCTION_TEMPLATE_STAGE_ATTACHMENT_NOT_FOUND');
+        }
+        await stageAttRepo.softDelete(attId);
         break;
       }
 
       case 'ADD_TASK_ATTACHMENT': {
         const taskId = resolveId(op.parentId);
+        const task = await taskRepo.findOne({
+          where: { id: taskId, deletedAt: IsNull() },
+          relations: { option: { pattern: true } },
+        });
+        if (
+          !task ||
+          !task.option ||
+          task.option.deletedAt ||
+          !task.option.pattern ||
+          task.option.pattern.deletedAt ||
+          task.option.pattern.templateId !== templateId ||
+          task.option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`المهمة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+        }
         const payload = op.payload || {};
         const storedFile = await this.sharedFileService.getOrCreateStoredFile(
           {
@@ -619,7 +829,25 @@ export class ProductionTemplateEditingService {
 
       case 'DELETE_TASK_ATTACHMENT': {
         const attId = resolveId(op.targetId);
-        await manager.getRepository(ProductionTemplatePatternOptionTaskAttachmentEntity).softDelete(attId);
+        const taskAttRepo = manager.getRepository(ProductionTemplatePatternOptionTaskAttachmentEntity);
+        const att = await taskAttRepo.findOne({
+          where: { id: attId, deletedAt: IsNull() },
+          relations: { task: { option: { pattern: true } } },
+        });
+        if (
+          !att ||
+          !att.task ||
+          att.task.deletedAt ||
+          !att.task.option ||
+          att.task.option.deletedAt ||
+          !att.task.option.pattern ||
+          att.task.option.pattern.deletedAt ||
+          att.task.option.pattern.templateId !== templateId ||
+          att.task.option.pattern.versionId !== versionId
+        ) {
+          throw new BusinessRuleError(`مرفق المهمة غير موجود أو لا ينتمي لهذا الإصدار: ${attId}`, 'PRODUCTION_TEMPLATE_TASK_ATTACHMENT_NOT_FOUND');
+        }
+        await taskAttRepo.softDelete(attId);
         break;
       }
 
@@ -645,18 +873,25 @@ export class ProductionTemplateEditingService {
         const spec = await specRepo.findOne({
           where: { id: specId, templateId },
         });
-        if (spec) {
-          const payload = op.payload || {};
-          if (payload.name !== undefined) spec.name = payload.name.trim();
-          if (payload.value !== undefined) spec.value = payload.value.trim();
-          if (payload.unit !== undefined) spec.unit = payload.unit || null;
-          await specRepo.save(spec);
+        if (!spec) {
+          throw new BusinessRuleError(`المواصفة المستهدفة للتعديل غير موجودة: ${specId}`, 'PRODUCTION_TEMPLATE_SPECIFICATION_NOT_FOUND');
         }
+        const payload = op.payload || {};
+        if (payload.name !== undefined) spec.name = payload.name.trim();
+        if (payload.value !== undefined) spec.value = payload.value.trim();
+        if (payload.unit !== undefined) spec.unit = payload.unit || null;
+        await specRepo.save(spec);
         break;
       }
 
       case 'DELETE_SPEC': {
         const specId = resolveId(op.targetId);
+        const spec = await specRepo.findOne({
+          where: { id: specId, templateId },
+        });
+        if (!spec) {
+          throw new BusinessRuleError(`المواصفة المستهدفة للحذف غير موجودة: ${specId}`, 'PRODUCTION_TEMPLATE_SPECIFICATION_NOT_FOUND');
+        }
         await specRepo.delete({ id: specId, templateId });
         break;
       }

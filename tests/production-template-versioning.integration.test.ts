@@ -196,6 +196,81 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual(detail.specifications.length, 1);
       assert.strictEqual(detail.specifications[0].name, 'العرض الإجمالي');
     });
+
+    it('rejects STRUCTURAL changes with OVERWRITE_CURRENT decision', async () => {
+      const created = await templateService.createTemplate({
+        name: 'قالب فحص حظر التعديل المباشر',
+        isActive: true,
+      });
+
+      const v1 = await versionService.getLatestVersion(created.id);
+
+      // Attempt structural change (ADD_STAGE) with OVERWRITE_CURRENT
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(created.id, {
+            baseVersionId: v1.id,
+            commitDecision: 'OVERWRITE_CURRENT',
+            operations: [
+              {
+                type: 'ADD_STAGE',
+                tempClientId: 'illegal-stage',
+                payload: {
+                  name: 'مرحلة غير مسموح بها',
+                  departmentId: testDepartmentId,
+                },
+              },
+            ],
+          }),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STRUCTURAL_CHANGE_REQUIRES_NEW_VERSION');
+          return true;
+        }
+      );
+    });
+
+    it('rejects modifying elements from another version or template (Strict Hierarchy)', async () => {
+      const t1 = await templateService.createTemplate({ name: 'قالب 1', isActive: true });
+      const t2 = await templateService.createTemplate({ name: 'قالب 2', isActive: true });
+
+      const v1 = await versionService.getLatestVersion(t1.id);
+      const v2 = await versionService.getLatestVersion(t2.id);
+
+      // Add stage to template 2
+      const resT2 = await editingService.commitEditingSession(t2.id, {
+        baseVersionId: v2.id,
+        commitDecision: 'AUTO',
+        operations: [
+          {
+            type: 'ADD_STAGE',
+            tempClientId: 't2-stage',
+            payload: { name: 'مرحلة قالب 2', departmentId: testDepartmentId },
+          },
+        ],
+      });
+      const t2StageId = resT2.tempClientMap['t2-stage'];
+
+      // Attempt to delete t2's stage within t1's editing session
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(t1.id, {
+            baseVersionId: v1.id,
+            commitDecision: 'AUTO',
+            operations: [
+              {
+                type: 'DELETE_STAGE',
+                targetId: t2StageId,
+              },
+            ],
+          }),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+          return true;
+        }
+      );
+    });
   });
 
   // ------------------------------------------------------------------------
@@ -210,10 +285,10 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
 
       const v1 = await versionService.getLatestVersion(created.id);
 
-      // 1. Add a stage with an attachment in v1.0
-      await editingService.commitEditingSession(created.id, {
+      // 1. Add a stage with an attachment (structural change forks to v1.1)
+      const v1Fork = await editingService.commitEditingSession(created.id, {
         baseVersionId: v1.id,
-        commitDecision: 'OVERWRITE_CURRENT',
+        commitDecision: 'AUTO',
         operations: [
           {
             type: 'ADD_STAGE',
@@ -236,15 +311,18 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         ],
       });
 
+      assert.strictEqual(v1Fork.createdNewVersion, true);
+      assert.strictEqual(v1Fork.targetVersionNumber, '1.1');
+
       // Verify stored file record created
       const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
       const storedFiles = await storedFileRepo.find({ where: { templateId: created.id } });
       assert.strictEqual(storedFiles.length, 1);
       const storedFileId = storedFiles[0].id;
 
-      // 2. Now commit a structural change to fork v1.1
+      // 2. Now commit another structural change to fork v1.2
       const forkRes = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1.id,
+        baseVersionId: v1Fork.targetVersionId,
         commitDecision: 'NEW_VERSION',
         operations: [
           {
@@ -259,7 +337,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
 
       assert.strictEqual(forkRes.createdNewVersion, true);
-      assert.strictEqual(forkRes.targetVersionNumber, '1.1');
+      assert.strictEqual(forkRes.targetVersionNumber, '1.2');
 
       // Verify stored file was NOT duplicated (still exactly 1 stored file for this storageKey)
       const storedFilesAfter = await storedFileRepo.find({ where: { templateId: created.id } });

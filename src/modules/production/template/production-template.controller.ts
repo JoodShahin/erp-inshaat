@@ -281,10 +281,10 @@ export class ProductionTemplateController {
 
   addStage = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id } = req.params;
-      const dto = req.body as CreateTemplateStageDto;
-      const stage = await this.stageService.addStage(id as string, dto);
-      res.status(201).json(ApiResponse.success(stage, 'تمت إضافة المرحلة بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -292,10 +292,10 @@ export class ProductionTemplateController {
 
   reorderStages = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id } = req.params;
-      const dto = req.body as ReorderTemplateStagesDto;
-      const stages = await this.stageService.reorderStages(id as string, dto);
-      res.status(200).json(ApiResponse.success(stages, 'تم إعادة ترتيب المراحل بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -303,10 +303,10 @@ export class ProductionTemplateController {
 
   updateStage = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId } = req.params;
-      const dto = req.body as UpdateTemplateStageDto;
-      const stage = await this.stageService.updateStage(id as string, stageId as string, dto);
-      res.status(200).json(ApiResponse.success(stage, 'تم تحديث بيانات المرحلة بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -314,9 +314,10 @@ export class ProductionTemplateController {
 
   softDeleteStage = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId } = req.params;
-      await this.stageService.softDeleteStage(id as string, stageId as string);
-      res.status(200).json(ApiResponse.success(null, 'تم أرشفة المرحلة بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -338,10 +339,10 @@ export class ProductionTemplateController {
 
   addStageMaterial = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId } = req.params;
-      const dto = req.body as AddTemplateStageMaterialDto;
-      const material = await this.materialService.addPlannedMaterial(id as string, stageId as string, dto);
-      res.status(201).json(ApiResponse.success(material, 'تمت إضافة المادة المخططة بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -349,15 +350,10 @@ export class ProductionTemplateController {
 
   updateStageMaterial = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId, materialId } = req.params;
-      const dto = req.body as UpdateTemplateStageMaterialDto;
-      const material = await this.materialService.updatePlannedMaterial(
-        id as string,
-        stageId as string,
-        materialId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(material, 'تم تعديل كمية المادة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -365,9 +361,10 @@ export class ProductionTemplateController {
 
   removeStageMaterial = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId, materialId } = req.params;
-      await this.materialService.removePlannedMaterial(id as string, stageId as string, materialId as string);
-      res.status(200).json(ApiResponse.success(null, 'تمت إزالة المادة المخططة بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -389,24 +386,10 @@ export class ProductionTemplateController {
 
   addStageAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId } = req.params;
-      const file = req.file;
-      if (!file) {
-        throw new BusinessRuleError('الملف مطلوب', 'ATTACHMENT_FILE_MISSING');
-      }
-
-      const description = typeof req.body?.description === 'string' ? req.body.description : null;
-      const userId = (req as any).user?.id || null;
-
-      const attachment = await this.attachmentService.addStageAttachment(
-        id as string,
-        stageId as string,
-        file,
-        description,
-        userId
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-
-      res.status(201).json(ApiResponse.success(attachment, 'تم إرفاق الوثيقة المرجعية بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -414,15 +397,10 @@ export class ProductionTemplateController {
 
   updateStageAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId, attachmentId } = req.params;
-      const dto = req.body as UpdateStageAttachmentDto;
-      const attachment = await this.attachmentService.updateStageAttachment(
-        id as string,
-        stageId as string,
-        attachmentId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(attachment, 'تم تحديث وصف الوثيقة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -430,13 +408,10 @@ export class ProductionTemplateController {
 
   softDeleteStageAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId, attachmentId } = req.params;
-      await this.attachmentService.softDeleteStageAttachment(
-        id as string,
-        stageId as string,
-        attachmentId as string
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(null, 'تم حذف الوثيقة المرجعية بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -444,14 +419,10 @@ export class ProductionTemplateController {
 
   reorderStageAttachments = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, stageId } = req.params;
-      const dto = req.body as ReorderStageAttachmentsDto;
-      const attachments = await this.attachmentService.reorderStageAttachments(
-        id as string,
-        stageId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(attachments, 'تم إعادة ترتيب الوثائق بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -495,10 +466,10 @@ export class ProductionTemplateController {
 
   reorderWorkflow = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id } = req.params;
-      const dto = req.body as ReorderWorkflowItemsDto;
-      const items = await this.workflowService.reorderWorkflow(id as string, dto.workflowItemIds);
-      res.status(200).json(ApiResponse.success(items, 'تم إعادة ترتيب سير العمل بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -530,10 +501,10 @@ export class ProductionTemplateController {
 
   addPattern = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id } = req.params;
-      const dto = req.body as CreateTemplatePatternDto;
-      const pattern = await this.patternService.addPattern(id as string, dto);
-      res.status(201).json(ApiResponse.success(pattern, 'تمت إضافة النمط بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -541,10 +512,10 @@ export class ProductionTemplateController {
 
   updatePattern = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId } = req.params;
-      const dto = req.body as UpdateTemplatePatternDto;
-      const pattern = await this.patternService.updatePattern(id as string, patternId as string, dto);
-      res.status(200).json(ApiResponse.success(pattern, 'تم تحديث النمط بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -552,9 +523,10 @@ export class ProductionTemplateController {
 
   archivePattern = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId } = req.params;
-      await this.patternService.archivePattern(id as string, patternId as string);
-      res.status(200).json(ApiResponse.success(null, 'تم أرشفة النمط بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -576,10 +548,10 @@ export class ProductionTemplateController {
 
   addOption = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId } = req.params;
-      const dto = req.body as CreateTemplatePatternOptionDto;
-      const option = await this.optionService.addOption(id as string, patternId as string, dto);
-      res.status(201).json(ApiResponse.success(option, 'تمت إضافة الخيار بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -587,15 +559,10 @@ export class ProductionTemplateController {
 
   updateOption = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId } = req.params;
-      const dto = req.body as UpdateTemplatePatternOptionDto;
-      const option = await this.optionService.updateOption(
-        id as string,
-        patternId as string,
-        optionId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(option, 'تم تحديث الخيار بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -603,9 +570,10 @@ export class ProductionTemplateController {
 
   archiveOption = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId } = req.params;
-      await this.optionService.archiveOption(id as string, patternId as string, optionId as string);
-      res.status(200).json(ApiResponse.success(null, 'تم أرشفة الخيار بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -613,10 +581,10 @@ export class ProductionTemplateController {
 
   reorderOptions = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId } = req.params;
-      const dto = req.body as ReorderPatternOptionsDto;
-      const options = await this.optionService.reorderOptions(id as string, patternId as string, dto);
-      res.status(200).json(ApiResponse.success(options, 'تم إعادة ترتيب الخيارات بنجاح'));
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
+      );
     } catch (error) {
       next(error);
     }
@@ -657,15 +625,10 @@ export class ProductionTemplateController {
 
   addTask = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId } = req.params;
-      const dto = req.body as CreateTemplatePatternOptionTaskDto;
-      const task = await this.taskService.addTask(
-        id as string,
-        patternId as string,
-        optionId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(201).json(ApiResponse.success(task, 'تمت إضافة المهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -673,16 +636,10 @@ export class ProductionTemplateController {
 
   updateTask = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId } = req.params;
-      const dto = req.body as UpdateTemplatePatternOptionTaskDto;
-      const task = await this.taskService.updateTask(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(task, 'تم تحديث المهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -690,14 +647,10 @@ export class ProductionTemplateController {
 
   archiveTask = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId } = req.params;
-      await this.taskService.archiveTask(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(null, 'تم أرشفة المهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -705,15 +658,10 @@ export class ProductionTemplateController {
 
   reorderTasks = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId } = req.params;
-      const dto = req.body as ReorderPatternOptionTasksDto;
-      const tasks = await this.taskService.reorderTasks(
-        id as string,
-        patternId as string,
-        optionId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(tasks, 'تم إعادة ترتيب المهام بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -740,16 +688,10 @@ export class ProductionTemplateController {
 
   addTaskMaterial = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId } = req.params;
-      const dto = req.body as AddTemplatePatternOptionTaskMaterialDto;
-      const material = await this.taskMaterialService.addTaskMaterial(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(201).json(ApiResponse.success(material, 'تمت إضافة المادة للمهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -757,17 +699,10 @@ export class ProductionTemplateController {
 
   updateTaskMaterial = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId, materialId } = req.params;
-      const dto = req.body as UpdateTemplatePatternOptionTaskMaterialDto;
-      const material = await this.taskMaterialService.updateTaskMaterial(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        materialId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(material, 'تم تعديل كمية مادة المهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -775,15 +710,10 @@ export class ProductionTemplateController {
 
   removeTaskMaterial = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId, materialId } = req.params;
-      await this.taskMaterialService.removeTaskMaterial(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        materialId as string
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(null, 'تمت إزالة مادة المهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -810,26 +740,10 @@ export class ProductionTemplateController {
 
   addTaskAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId } = req.params;
-      const file = req.file;
-      if (!file) {
-        throw new BusinessRuleError('الملف مطلوب', 'TASK_ATTACHMENT_FILE_MISSING');
-      }
-
-      const description = typeof req.body?.description === 'string' ? req.body.description : null;
-      const userId = (req as any).user?.id || null;
-
-      const attachment = await this.taskAttachmentService.addTaskAttachment(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        file,
-        description,
-        userId
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-
-      res.status(201).json(ApiResponse.success(attachment, 'تم إرفاق الوثيقة بالمهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -837,17 +751,10 @@ export class ProductionTemplateController {
 
   updateTaskAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId, attachmentId } = req.params;
-      const dto = req.body as UpdatePatternOptionTaskAttachmentDto;
-      const attachment = await this.taskAttachmentService.updateTaskAttachment(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        attachmentId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(attachment, 'تم تحديث وصف وثيقة المهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -855,15 +762,10 @@ export class ProductionTemplateController {
 
   softDeleteTaskAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId, attachmentId } = req.params;
-      await this.taskAttachmentService.softDeleteTaskAttachment(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        attachmentId as string
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(null, 'تم حذف وثيقة المهمة بنجاح'));
     } catch (error) {
       next(error);
     }
@@ -871,16 +773,10 @@ export class ProductionTemplateController {
 
   reorderTaskAttachments = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { id, patternId, optionId, taskId } = req.params;
-      const dto = req.body as ReorderPatternOptionTaskAttachmentsDto;
-      const attachments = await this.taskAttachmentService.reorderTaskAttachments(
-        id as string,
-        patternId as string,
-        optionId as string,
-        taskId as string,
-        dto
+      throw new BusinessRuleError(
+        'تعديل البنية الإنتاجية للقالب يجب أن يتم عبر جلسات التحرير الذرية',
+        'PRODUCTION_TEMPLATE_DIRECT_MUTATION_DISABLED'
       );
-      res.status(200).json(ApiResponse.success(attachments, 'تم إعادة ترتيب وثائق المهمة بنجاح'));
     } catch (error) {
       next(error);
     }

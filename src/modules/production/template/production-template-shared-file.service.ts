@@ -4,6 +4,7 @@ import { ProductionTemplateStoredFileEntity } from '../template-stored-file/prod
 import { ProductionTemplateStageAttachmentEntity } from '../template-stage-attachment/production-template-stage-attachment.entity.js';
 import { ProductionTemplatePatternOptionTaskAttachmentEntity } from '../template-pattern-option-task-attachment/production-template-pattern-option-task-attachment.entity.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { productionTemplateReferenceFileStorageService } from './production-template-reference-file-storage.service.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -128,8 +129,7 @@ export class ProductionTemplateSharedFileService {
    */
   async safeDeletePhysicalFileIfUnreferenced(
     fileId: string,
-    storageKey: string,
-    uploadsRootDir: string = 'uploads'
+    storageKey: string
   ): Promise<boolean> {
     try {
       const refCount = await this.countActiveReferences(fileId);
@@ -137,17 +137,11 @@ export class ProductionTemplateSharedFileService {
         // Soft delete stored file record
         await this.fileRepo.softDelete(fileId);
 
-        // Remove from physical disk
-        const absolutePath = path.isAbsolute(storageKey)
-          ? storageKey
-          : path.join(uploadsRootDir, storageKey);
-
+        // Remove from physical disk using safe path resolver with path.relative check
         try {
-          await fs.unlink(absolutePath);
+          await productionTemplateReferenceFileStorageService.deleteStoredFile(storageKey);
         } catch (unlinkErr: any) {
-          if (unlinkErr.code !== 'ENOENT') {
-            console.warn(`Could not unlink unreferenced file ${absolutePath}:`, unlinkErr);
-          }
+          console.warn(`Could not unlink unreferenced file ${storageKey}:`, unlinkErr);
         }
         return true;
       }
