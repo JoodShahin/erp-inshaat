@@ -177,8 +177,8 @@ export class ProductionTemplatePatternOptionTaskService {
       // 2. Lock parent template
       await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 3. Verify option ownership
-      await this.guardService.requireOptionBelongsToPattern(templateId, patternId, optionId, manager);
+      // 3. Verify option ownership and mutable version
+      await this.guardService.requireMutableOptionBelongsToPattern(templateId, patternId, optionId, manager);
 
       // 4. Dense ordering under lock
       const activeTasks = await manager.find(ProductionTemplatePatternOptionTaskEntity, {
@@ -240,8 +240,8 @@ export class ProductionTemplatePatternOptionTaskService {
       // 1. Lock template
       await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 2. Verify task ownership
-      const { task } = await this.guardService.requireTaskBelongsToOption(
+      // 2. Verify task ownership and mutable version
+      const { task } = await this.guardService.requireMutableTaskBelongsToOption(
         templateId,
         patternId,
         optionId,
@@ -341,8 +341,8 @@ export class ProductionTemplatePatternOptionTaskService {
       // 1. Lock template
       await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 2. Verify option ownership
-      await this.guardService.requireOptionBelongsToPattern(templateId, patternId, optionId, manager);
+      // 2. Verify option ownership and mutable version
+      await this.guardService.requireMutableOptionBelongsToPattern(templateId, patternId, optionId, manager);
 
       // 3. Lock active tasks
       const existingTasks = await manager.find(ProductionTemplatePatternOptionTaskEntity, {

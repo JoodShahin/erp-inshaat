@@ -5,7 +5,12 @@ import { ProductionTemplateStageEntity } from '../template-stage/production-temp
 import { ProductionTemplatePatternEntity } from '../template-pattern/production-template-pattern.entity.js';
 import { ProductionTemplatePatternOptionEntity } from '../template-pattern-option/production-template-pattern-option.entity.js';
 import { ProductionTemplatePatternOptionTaskEntity } from '../template-pattern-option-task/production-template-pattern-option-task.entity.js';
+import {
+  ProductionTemplateVersionService,
+  productionTemplateVersionService,
+} from '../template-version/production-template-version.service.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 
 export class ProductionTemplateGuardService {
   private templateRepo: Repository<ProductionTemplateEntity>;
@@ -13,13 +18,18 @@ export class ProductionTemplateGuardService {
   private patternRepo: Repository<ProductionTemplatePatternEntity>;
   private optionRepo: Repository<ProductionTemplatePatternOptionEntity>;
   private taskRepo: Repository<ProductionTemplatePatternOptionTaskEntity>;
+  private versionService: ProductionTemplateVersionService;
 
-  constructor(private dataSource: DataSource = AppDataSource) {
+  constructor(
+    private dataSource: DataSource = AppDataSource,
+    versionService: ProductionTemplateVersionService = productionTemplateVersionService
+  ) {
     this.templateRepo = this.dataSource.getRepository(ProductionTemplateEntity);
     this.stageRepo = this.dataSource.getRepository(ProductionTemplateStageEntity);
     this.patternRepo = this.dataSource.getRepository(ProductionTemplatePatternEntity);
     this.optionRepo = this.dataSource.getRepository(ProductionTemplatePatternOptionEntity);
     this.taskRepo = this.dataSource.getRepository(ProductionTemplatePatternOptionTaskEntity);
+    this.versionService = versionService;
   }
 
   /**
@@ -82,6 +92,17 @@ export class ProductionTemplateGuardService {
   }
 
   /**
+   * Asserts that a specified versionId is the latest active version of the template.
+   */
+  async assertLatestVersion(
+    templateId: string,
+    versionId: string,
+    manager?: EntityManager
+  ): Promise<void> {
+    await this.versionService.assertIsLatestVersion(templateId, versionId, manager);
+  }
+
+  /**
    * Guards read access to a stage: ensures parent template is active and stage belongs to it.
    */
   async requireStageBelongsToTemplate(
@@ -104,7 +125,8 @@ export class ProductionTemplateGuardService {
   }
 
   /**
-   * Guards mutation access to a stage: ensures parent template is mutable and stage belongs to it.
+   * Guards mutation access to a stage: ensures parent template is mutable, stage belongs to it,
+   * and the stage belongs to the LATEST active version of the template (historical versions are read-only).
    */
   async requireMutableStageBelongsToTemplate(
     templateId: string,
@@ -120,6 +142,10 @@ export class ProductionTemplateGuardService {
 
     if (!stage) {
       throw new NotFoundError('المرحلة غير موجودة', 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+    }
+
+    if (stage.versionId) {
+      await this.versionService.assertIsLatestVersion(templateId, stage.versionId, manager);
     }
 
     return { template, stage };
@@ -149,6 +175,7 @@ export class ProductionTemplateGuardService {
 
   /**
    * Guards option ownership and existence: option belongs to pattern, pattern belongs to template.
+   * If mutating, enforces that pattern belongs to the LATEST active version.
    */
   async requireOptionBelongsToPattern(
     templateId: string,
@@ -172,6 +199,26 @@ export class ProductionTemplateGuardService {
     }
 
     return { template, pattern, option };
+  }
+
+  /**
+   * Guards option mutation: option belongs to pattern, and pattern belongs to LATEST version.
+   */
+  async requireMutableOptionBelongsToPattern(
+    templateId: string,
+    patternId: string,
+    optionId: string,
+    manager?: EntityManager
+  ): Promise<{
+    template: ProductionTemplateEntity;
+    pattern: ProductionTemplatePatternEntity;
+    option: ProductionTemplatePatternOptionEntity;
+  }> {
+    const res = await this.requireOptionBelongsToPattern(templateId, patternId, optionId, manager);
+    if (res.pattern.versionId) {
+      await this.versionService.assertIsLatestVersion(templateId, res.pattern.versionId, manager);
+    }
+    return res;
   }
 
   /**
@@ -207,6 +254,28 @@ export class ProductionTemplateGuardService {
     }
 
     return { template, pattern, option, task };
+  }
+
+  /**
+   * Guards task mutation: task -> option -> pattern -> template, enforcing LATEST version.
+   */
+  async requireMutableTaskBelongsToOption(
+    templateId: string,
+    patternId: string,
+    optionId: string,
+    taskId: string,
+    manager?: EntityManager
+  ): Promise<{
+    template: ProductionTemplateEntity;
+    pattern: ProductionTemplatePatternEntity;
+    option: ProductionTemplatePatternOptionEntity;
+    task: ProductionTemplatePatternOptionTaskEntity;
+  }> {
+    const res = await this.requireTaskBelongsToOption(templateId, patternId, optionId, taskId, manager);
+    if (res.pattern.versionId) {
+      await this.versionService.assertIsLatestVersion(templateId, res.pattern.versionId, manager);
+    }
+    return res;
   }
 }
 

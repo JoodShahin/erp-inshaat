@@ -75,6 +75,23 @@ productionTemplateApiRouter.get(
   productionTemplateController.getOrderConfiguration
 );
 
+// GET /api/production/templates/:id/versions - List template versions
+productionTemplateApiRouter.get(
+  '/:id/versions',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_VIEW),
+  validateUuidParam('id'),
+  productionTemplateController.listTemplateVersions
+);
+
+// GET /api/production/templates/:id/versions/:versionId - Get template details for a specific version
+productionTemplateApiRouter.get(
+  '/:id/versions/:versionId',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_VIEW),
+  validateUuidParam('id'),
+  validateUuidParam('versionId'),
+  productionTemplateController.getTemplateVersionById
+);
+
 // GET /api/production/templates/:id - Get template details with stages & specifications
 productionTemplateApiRouter.get(
   '/:id',

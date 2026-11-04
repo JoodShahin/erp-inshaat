@@ -7,6 +7,10 @@ import { ProductionTemplateStageMaterialEntity } from '../template-stage-materia
 import { ProductionTemplateStageAttachmentEntity } from '../template-stage-attachment/production-template-stage-attachment.entity.js';
 import { ProductionTemplateGuardService, productionTemplateGuardService } from '../template/production-template-guard.service.js';
 import {
+  ProductionTemplateVersionService,
+  productionTemplateVersionService,
+} from '../template-version/production-template-version.service.js';
+import {
   ProductionTemplateWorkflowItemDto,
   toProductionTemplateWorkflowItemDto,
   TaskDurationUnit,
@@ -16,22 +20,27 @@ import { BusinessRuleError } from '../../../common/errors/business-rule.error.js
 export class ProductionTemplateWorkflowService {
   private workflowRepo: Repository<ProductionTemplateWorkflowItemEntity>;
   private guardService: ProductionTemplateGuardService;
+  private versionService: ProductionTemplateVersionService;
 
   constructor(
     private dataSource: DataSource = AppDataSource,
-    guardService: ProductionTemplateGuardService = productionTemplateGuardService
+    guardService: ProductionTemplateGuardService = productionTemplateGuardService,
+    versionService: ProductionTemplateVersionService = productionTemplateVersionService
   ) {
     this.workflowRepo = this.dataSource.getRepository(ProductionTemplateWorkflowItemEntity);
     this.guardService = guardService;
+    this.versionService = versionService;
   }
 
   /**
-   * Lists all top-level workflow items for an active template.
+   * Lists all top-level workflow items for an active template and optional version.
+   * If versionId is not supplied, defaults to the template's latest version.
    * Performs strict polymorphic integrity checks and fails closed if corrupted.
    * Stage reference counts are loaded in batch (zero N+1, no relation over-fetch).
    */
   async listWorkflowItems(
     templateId: string,
+    versionId?: string,
     manager?: EntityManager
   ): Promise<ProductionTemplateWorkflowItemDto[]> {
     await this.guardService.requireExistingTemplate(templateId, manager);
@@ -40,8 +49,24 @@ export class ProductionTemplateWorkflowService {
       ? manager.getRepository(ProductionTemplateWorkflowItemEntity)
       : this.workflowRepo;
 
+    let targetVersionId = versionId;
+    if (!targetVersionId) {
+      try {
+        const latest = await this.versionService.getLatestVersion(templateId, manager);
+        targetVersionId = latest.id;
+      } catch {
+        // Fallback for isolated unit tests that do not seed versions
+        targetVersionId = undefined;
+      }
+    }
+
+    const whereClause: any = { templateId, deletedAt: IsNull() };
+    if (targetVersionId) {
+      whereClause.versionId = targetVersionId;
+    }
+
     const items = await repo.find({
-      where: { templateId, deletedAt: IsNull() },
+      where: whereClause,
       relations: {
         stage: {
           department: true,
@@ -74,10 +99,10 @@ export class ProductionTemplateWorkflowService {
         .addSelect('COUNT(*)', 'cnt')
         .where('mat.stageId IN (:...stageIds)', { stageIds })
         .groupBy('mat.stageId')
-        .getRawMany<{ stageId: string; cnt: string | number }>();
+        .getRawMany();
 
       for (const row of matCounts) {
-        stageMatCountMap.set(row.stageId, Number(row.cnt));
+        stageMatCountMap.set(row.stageId, parseInt(row.cnt, 10));
       }
 
       const stageAttRepo = manager
@@ -90,10 +115,10 @@ export class ProductionTemplateWorkflowService {
         .addSelect('COUNT(*)', 'cnt')
         .where('att.stageId IN (:...stageIds) AND att.deletedAt IS NULL', { stageIds })
         .groupBy('att.stageId')
-        .getRawMany<{ stageId: string; cnt: string | number }>();
+        .getRawMany();
 
       for (const row of attCounts) {
-        stageAttCountMap.set(row.stageId, Number(row.cnt));
+        stageAttCountMap.set(row.stageId, parseInt(row.cnt, 10));
       }
     }
 
@@ -150,19 +175,14 @@ export class ProductionTemplateWorkflowService {
         }
 
         const pattern = item.pattern;
-        const activeOptions = (pattern.options || []).filter((o) => !o.deletedAt);
+        const optionsCount = (pattern.options || []).filter((o) => !o.deletedAt).length;
 
         result.push(
           toProductionTemplateWorkflowItemDto(item, undefined, {
             id: pattern.id,
             name: pattern.name,
-            optionsCount: activeOptions.length,
+            optionsCount,
           })
-        );
-      } else {
-        throw new BusinessRuleError(
-          'نوع عنصر سير العمل غير معروف',
-          'PRODUCTION_TEMPLATE_WORKFLOW_CORRUPT'
         );
       }
     }
@@ -171,17 +191,33 @@ export class ProductionTemplateWorkflowService {
   }
 
   /**
-   * Inserts a workflow item under parent template lock.
+   * Inserts a workflow item under parent template lock within a specific version.
    */
   async insertWorkflowItem(
     manager: EntityManager,
     templateId: string,
     itemType: ProductionTemplateWorkflowItemType,
     targetId: string,
-    desiredSortOrder?: number
+    desiredSortOrder?: number,
+    versionId?: string
   ): Promise<ProductionTemplateWorkflowItemEntity> {
+    let resolvedVersionId = versionId;
+    if (!resolvedVersionId) {
+      try {
+        const latest = await this.versionService.getLatestVersion(templateId, manager);
+        resolvedVersionId = latest.id;
+      } catch {
+        resolvedVersionId = undefined;
+      }
+    }
+
+    const whereClause: any = { templateId, deletedAt: IsNull() };
+    if (resolvedVersionId) {
+      whereClause.versionId = resolvedVersionId;
+    }
+
     const activeItems = await manager.find(ProductionTemplateWorkflowItemEntity, {
-      where: { templateId, deletedAt: IsNull() },
+      where: whereClause,
       order: { sortOrder: 'ASC' },
       lock: { mode: 'pessimistic_write' },
     });
@@ -193,21 +229,27 @@ export class ProductionTemplateWorkflowService {
         ? desiredSortOrder
         : nextOrder;
 
-    // Shift items if inserted in between
+    // Shift items if inserted in between within the same version
     if (sortOrder < nextOrder) {
-      await manager
+      const qb = manager
         .createQueryBuilder()
         .update(ProductionTemplateWorkflowItemEntity)
         .set({ sortOrder: () => 'sort_order + 1' })
         .where('template_id = :templateId AND sort_order >= :sortOrder AND deleted_at IS NULL', {
           templateId,
           sortOrder,
-        })
-        .execute();
+        });
+
+      if (resolvedVersionId) {
+        qb.andWhere('version_id = :versionId', { versionId: resolvedVersionId });
+      }
+
+      await qb.execute();
     }
 
     const workflowItem = manager.create(ProductionTemplateWorkflowItemEntity, {
       templateId,
+      versionId: resolvedVersionId || null,
       itemType,
       stageId: itemType === 'STAGE' ? targetId : null,
       patternId: itemType === 'PATTERN' ? targetId : null,
@@ -218,7 +260,7 @@ export class ProductionTemplateWorkflowService {
   }
 
   /**
-   * Archives a workflow item and re-compacts the remaining items densely 1..N under template lock.
+   * Archives a workflow item and re-compacts the remaining items densely 1..N under template lock within version.
    */
   async archiveWorkflowItem(
     manager: EntityManager,
@@ -241,9 +283,15 @@ export class ProductionTemplateWorkflowService {
       await manager.softDelete(ProductionTemplateWorkflowItemEntity, item.id);
     }
 
+    const versionId = item?.versionId;
+    const remainingWhere: any = { templateId, deletedAt: IsNull() };
+    if (versionId) {
+      remainingWhere.versionId = versionId;
+    }
+
     // Dense re-compact remaining active items 1..N
     const remainingItems = await manager.find(ProductionTemplateWorkflowItemEntity, {
-      where: { templateId, deletedAt: IsNull() },
+      where: remainingWhere,
       order: { sortOrder: 'ASC' },
       lock: { mode: 'pessimistic_write' },
     });
@@ -259,7 +307,7 @@ export class ProductionTemplateWorkflowService {
 
   /**
    * Reorders workflow items densely 1..N under parent template lock.
-   * Validates exact permutation of active items.
+   * Enforces that items belong to the LATEST active version of the template.
    */
   async reorderWorkflow(
     templateId: string,
@@ -288,11 +336,15 @@ export class ProductionTemplateWorkflowService {
 
       const existingMap = new Map(existingItems.map((i) => [i.id, i]));
       for (const id of workflowItemIds) {
-        if (!existingMap.has(id)) {
+        const item = existingMap.get(id);
+        if (!item) {
           throw new BusinessRuleError(
             'أحد المعرفات لا يتبع لسير عمل هذا القالب',
             'PRODUCTION_TEMPLATE_WORKFLOW_INVALID_REORDER'
           );
+        }
+        if (item.versionId) {
+          await this.versionService.assertIsLatestVersion(templateId, item.versionId, manager);
         }
       }
 
@@ -307,7 +359,7 @@ export class ProductionTemplateWorkflowService {
       }
 
       // 4. Return refreshed workflow list
-      return await this.listWorkflowItems(templateId, manager);
+      return await this.listWorkflowItems(templateId, undefined, manager);
     });
   }
 

@@ -3,6 +3,10 @@ import { ApiResponse } from '../../../common/responses/api-response.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { ProductionTemplateService, productionTemplateService } from './production-template.service.js';
 import {
+  ProductionTemplateVersionService,
+  productionTemplateVersionService,
+} from '../template-version/production-template-version.service.js';
+import {
   ProductionTemplateSpecificationService,
   productionTemplateSpecificationService,
 } from '../template-specification/production-template-specification.service.js';
@@ -81,7 +85,8 @@ export class ProductionTemplateController {
     private optionService: ProductionTemplatePatternOptionService = productionTemplatePatternOptionService,
     private taskService: ProductionTemplatePatternOptionTaskService = productionTemplatePatternOptionTaskService,
     private taskMaterialService: ProductionTemplatePatternOptionTaskMaterialService = productionTemplatePatternOptionTaskMaterialService,
-    private taskAttachmentService: ProductionTemplatePatternOptionTaskAttachmentService = productionTemplatePatternOptionTaskAttachmentService
+    private taskAttachmentService: ProductionTemplatePatternOptionTaskAttachmentService = productionTemplatePatternOptionTaskAttachmentService,
+    private versionService: ProductionTemplateVersionService = productionTemplateVersionService
   ) {}
 
   // ==========================================
@@ -101,7 +106,8 @@ export class ProductionTemplateController {
   getTemplateById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { id } = req.params;
-      const template = await this.templateService.getTemplateById(id as string);
+      const versionId = typeof req.query.versionId === 'string' ? req.query.versionId : undefined;
+      const template = await this.templateService.getTemplateById(id as string, versionId);
       res.status(200).json(ApiResponse.success(template));
     } catch (error) {
       next(error);
@@ -151,10 +157,31 @@ export class ProductionTemplateController {
     }
   };
 
+  listTemplateVersions = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const versions = await this.versionService.listVersions(id as string);
+      res.status(200).json(ApiResponse.success(versions));
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  getTemplateVersionById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id, versionId } = req.params;
+      const template = await this.templateService.getTemplateById(id as string, versionId as string);
+      res.status(200).json(ApiResponse.success(template));
+    } catch (error) {
+      next(error);
+    }
+  };
+
   getOrderConfiguration = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { id } = req.params;
-      const config = await this.templateService.getOrderConfiguration(id as string);
+      const versionId = typeof req.query.versionId === 'string' ? req.query.versionId : undefined;
+      const config = await this.templateService.getOrderConfiguration(id as string, versionId);
       res.status(200).json(ApiResponse.success(config));
     } catch (error) {
       next(error);

@@ -85,8 +85,11 @@ export class ProductionTemplatePatternOptionService {
       // 1. Lock parent template row
       await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 2. Verify pattern belongs to template
-      await this.guardService.requirePatternBelongsToTemplate(templateId, patternId, manager);
+      // 2. Verify pattern belongs to template and is latest version
+      const { pattern } = await this.guardService.requirePatternBelongsToTemplate(templateId, patternId, manager);
+      if (pattern.versionId) {
+        await this.guardService.assertLatestVersion(templateId, pattern.versionId, manager);
+      }
 
       // 3. Dense ordering under lock
       const activeOptions = await manager.find(ProductionTemplatePatternOptionEntity, {
@@ -133,8 +136,8 @@ export class ProductionTemplatePatternOptionService {
       // 1. Lock template
       await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 2. Verify option ownership
-      const { option } = await this.guardService.requireOptionBelongsToPattern(
+      // 2. Verify option ownership and mutable version
+      const { option } = await this.guardService.requireMutableOptionBelongsToPattern(
         templateId,
         patternId,
         optionId,
@@ -177,8 +180,8 @@ export class ProductionTemplatePatternOptionService {
       // 1. Lock template
       await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 2. Verify option ownership
-      await this.guardService.requireOptionBelongsToPattern(templateId, patternId, optionId, manager);
+      // 2. Verify option ownership and mutable version
+      await this.guardService.requireMutableOptionBelongsToPattern(templateId, patternId, optionId, manager);
 
       // 3. Soft delete option
       await manager.softDelete(ProductionTemplatePatternOptionEntity, optionId);
@@ -209,8 +212,11 @@ export class ProductionTemplatePatternOptionService {
       // 1. Lock template
       await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 2. Verify pattern belongs to template
-      await this.guardService.requirePatternBelongsToTemplate(templateId, patternId, manager);
+      // 2. Verify pattern belongs to template and is latest version
+      const { pattern } = await this.guardService.requirePatternBelongsToTemplate(templateId, patternId, manager);
+      if (pattern.versionId) {
+        await this.guardService.assertLatestVersion(templateId, pattern.versionId, manager);
+      }
 
       // 3. Lock active options
       const existingOptions = await manager.find(ProductionTemplatePatternOptionEntity, {

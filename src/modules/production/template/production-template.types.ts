@@ -96,6 +96,13 @@ export interface ProductionTemplateDetailStageDto {
   attachmentsCount: number;
 }
 
+export interface ProductionTemplateVersionSummaryDto {
+  id: string;
+  version: string;
+  isLatest: boolean;
+  createdAt: Date;
+}
+
 export interface ProductionTemplateDetailDto {
   id: string;
   name: string;
@@ -105,6 +112,8 @@ export interface ProductionTemplateDetailDto {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+  currentVersion?: ProductionTemplateVersionSummaryDto;
+  versions?: ProductionTemplateVersionSummaryDto[];
   specifications: ProductionTemplateDetailSpecificationDto[];
   /**
    * Derived compatibility field for consumers expecting stages.
@@ -140,7 +149,6 @@ export interface ProductionTemplateOrderConfigOptionDto {
 export interface ProductionTemplateOrderConfigPatternDto {
   id: string;
   name: string;
-  sortOrder?: number;
   options: ProductionTemplateOrderConfigOptionDto[];
   defaultOptionId: string | null;
 }
@@ -148,14 +156,11 @@ export interface ProductionTemplateOrderConfigPatternDto {
 export interface ProductionTemplateOrderConfigurationDto {
   templateId: string;
   templateName: string;
+  templateVersionId?: string;
+  templateVersion?: string;
   patterns: ProductionTemplateOrderConfigPatternDto[];
 }
 
-/**
- * Escapes characters that can break out of HTML/script contexts:
- * <, >, &, \u2028, \u2029
- * This guarantees safe serialization into <script type="application/json"> elements.
- */
 export function safeJsonStringify(obj: unknown): string {
   return JSON.stringify(obj)
     .replace(/&/g, '\\u0026')

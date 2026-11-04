@@ -37,6 +37,11 @@ import {
   ProductionTemplateSequenceService,
   productionTemplateSequenceService,
 } from './production-template-sequence.service.js';
+import {
+  ProductionTemplateVersionService,
+  productionTemplateVersionService,
+} from '../template-version/production-template-version.service.js';
+import { ProductionTemplateVersionSummaryDto } from './production-template.types.js';
 
 export class ProductionTemplateService {
   private templateRepo: Repository<ProductionTemplateEntity>;
@@ -44,19 +49,22 @@ export class ProductionTemplateService {
   private workflowService: ProductionTemplateWorkflowService;
   private patternService: ProductionTemplatePatternService;
   private sequenceService: ProductionTemplateSequenceService;
+  private versionService: ProductionTemplateVersionService;
 
   constructor(
     private dataSource: DataSource = AppDataSource,
     guardService: ProductionTemplateGuardService = productionTemplateGuardService,
     workflowService: ProductionTemplateWorkflowService = productionTemplateWorkflowService,
     patternService: ProductionTemplatePatternService = productionTemplatePatternService,
-    sequenceService: ProductionTemplateSequenceService = productionTemplateSequenceService
+    sequenceService: ProductionTemplateSequenceService = productionTemplateSequenceService,
+    versionService: ProductionTemplateVersionService = productionTemplateVersionService
   ) {
     this.templateRepo = this.dataSource.getRepository(ProductionTemplateEntity);
     this.guardService = guardService;
     this.workflowService = workflowService;
     this.patternService = patternService;
     this.sequenceService = sequenceService;
+    this.versionService = versionService;
   }
 
   async listTemplates(query: ListProductionTemplatesQueryDto): Promise<PaginatedProductionTemplatesResult> {
@@ -123,7 +131,7 @@ export class ProductionTemplateService {
     };
   }
 
-  async getTemplateById(id: string): Promise<ProductionTemplateDetailDto> {
+  async getTemplateById(id: string, versionId?: string): Promise<ProductionTemplateDetailDto> {
     const template = await this.templateRepo.findOne({
       where: { id, deletedAt: IsNull() },
       relations: {
@@ -145,8 +153,35 @@ export class ProductionTemplateService {
         sortOrder: s.sortOrder,
       }));
 
+    let currentVersion: ProductionTemplateVersionSummaryDto | undefined;
+    let versions: ProductionTemplateVersionSummaryDto[] = [];
+    let resolvedVersionId: string | undefined = versionId;
+
+    try {
+      const versionList = await this.versionService.listVersions(id);
+      versions = versionList;
+      let targetVersionEntity: ProductionTemplateVersionEntity;
+      if (resolvedVersionId) {
+        targetVersionEntity = await this.versionService.getVersionById(id, resolvedVersionId);
+      } else {
+        targetVersionEntity = await this.versionService.getLatestVersion(id);
+      }
+      resolvedVersionId = targetVersionEntity.id;
+      currentVersion = {
+        id: targetVersionEntity.id,
+        version: targetVersionEntity.version,
+        isLatest: targetVersionEntity.id === versionList[0]?.id,
+        createdAt: targetVersionEntity.createdAt,
+      };
+    } catch (err) {
+      if (versionId) {
+        throw err;
+      }
+      currentVersion = undefined;
+    }
+
     // Top-level single source of truth for workflow
-    const workflowItems = await this.workflowService.listWorkflowItems(id);
+    const workflowItems = await this.workflowService.listWorkflowItems(id, resolvedVersionId);
 
     // Derived compatibility stages list
     const stages = workflowItems
@@ -171,7 +206,7 @@ export class ProductionTemplateService {
       });
 
     // Patterns details
-    const patterns = await this.patternService.listPatterns(id);
+    const patterns = await this.patternService.listPatterns(id, resolvedVersionId);
     const patternsCount = patterns.length;
 
     return {
@@ -183,6 +218,8 @@ export class ProductionTemplateService {
       isActive: template.isActive,
       createdAt: template.createdAt,
       updatedAt: template.updatedAt,
+      currentVersion,
+      versions,
       specifications,
       stages,
       workflowItems,
@@ -305,15 +342,36 @@ export class ProductionTemplateService {
     };
   }
 
-  async getOrderConfiguration(templateId: string): Promise<ProductionTemplateOrderConfigurationDto> {
+  async getOrderConfiguration(templateId: string, versionId?: string): Promise<ProductionTemplateOrderConfigurationDto> {
     const template = await this.guardService.requireExistingTemplate(templateId);
     if (!template.isActive) {
       throw new BusinessRuleError('لا يمكن استخدام قالب تصنيع غير فعال', 'PRODUCTION_ORDER_TEMPLATE_INACTIVE');
     }
 
+    let targetVersionId = versionId;
+    let targetVersionStr: string | undefined;
+
+    try {
+      if (targetVersionId) {
+        const ver = await this.versionService.getVersionById(templateId, targetVersionId);
+        targetVersionStr = ver.version;
+      } else {
+        const latest = await this.versionService.getLatestVersion(templateId);
+        targetVersionId = latest.id;
+        targetVersionStr = latest.version;
+      }
+    } catch {
+      // Fallback if template has no versions
+    }
+
     const patternRepo = this.dataSource.getRepository(ProductionTemplatePatternEntity);
+    const whereClause: any = { templateId, deletedAt: IsNull() };
+    if (targetVersionId) {
+      whereClause.versionId = targetVersionId;
+    }
+
     const patterns = await patternRepo.find({
-      where: { templateId, deletedAt: IsNull() },
+      where: whereClause,
       relations: { options: true },
       order: { createdAt: 'ASC' },
     });
@@ -321,6 +379,8 @@ export class ProductionTemplateService {
     return {
       templateId: template.id,
       templateName: template.name,
+      templateVersionId: targetVersionId,
+      templateVersion: targetVersionStr,
       patterns: patterns.map((p) => {
         const activeOptions = (p.options || [])
           .filter((o) => !o.deletedAt)
