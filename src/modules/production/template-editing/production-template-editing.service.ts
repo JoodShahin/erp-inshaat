@@ -746,18 +746,55 @@ export class ProductionTemplateEditingService {
       // ----------------------------------------------------
       case 'REORDER_WORKFLOW': {
         const payload = op.payload || {};
-        const orderedItemIds: string[] = (payload.itemIds || []).map((raw: string) => resolveId(raw));
-        for (const itemId of orderedItemIds) {
-          const item = await workflowRepo.findOne({
-            where: { id: itemId, templateId, versionId, deletedAt: IsNull() },
+        const rawItemIds: string[] = payload.itemIds || payload.orderedItemIds || [];
+        if (rawItemIds.length === 0) break;
+
+        const resolvedWfItemIds: string[] = [];
+        const seenWfIds = new Set<string>();
+
+        for (const raw of rawItemIds) {
+          const resolvedId = resolveId(raw);
+          let item = await workflowRepo.findOne({
+            where: { id: resolvedId, templateId, versionId, deletedAt: IsNull() },
           });
           if (!item) {
-            throw new BusinessRuleError(`عنصر سير العمل غير موجود أو لا ينتمي لهذا الإصدار: ${itemId}`, 'PRODUCTION_TEMPLATE_WORKFLOW_ITEM_NOT_FOUND');
+            item = await workflowRepo.findOne({
+              where: [
+                { stageId: resolvedId, templateId, versionId, deletedAt: IsNull() },
+                { patternId: resolvedId, templateId, versionId, deletedAt: IsNull() },
+              ],
+            });
           }
+          if (!item) {
+            throw new BusinessRuleError(
+              `عنصر سير العمل غير موجود أو لا ينتمي لهذا الإصدار: ${raw}`,
+              'PRODUCTION_TEMPLATE_WORKFLOW_ITEM_NOT_FOUND'
+            );
+          }
+          if (seenWfIds.has(item.id)) {
+            throw new BusinessRuleError(
+              'تكرار في معرفات عناصر سير العمل',
+              'PRODUCTION_TEMPLATE_WORKFLOW_DUPLICATE_ITEM'
+            );
+          }
+          seenWfIds.add(item.id);
+          resolvedWfItemIds.push(item.id);
         }
-        for (let i = 0; i < orderedItemIds.length; i++) {
+
+        // Verify that the list covers all active workflow items of the version
+        const totalActiveWfCount = await workflowRepo.count({
+          where: { templateId, versionId, deletedAt: IsNull() },
+        });
+        if (resolvedWfItemIds.length !== totalActiveWfCount) {
+          throw new BusinessRuleError(
+            'قائمة إعادة ترتيب سير العمل يجب أن تشمل جميع العناصر النشطة',
+            'PRODUCTION_TEMPLATE_WORKFLOW_REORDER_INCOMPLETE'
+          );
+        }
+
+        for (let i = 0; i < resolvedWfItemIds.length; i++) {
           await workflowRepo.update(
-            { id: orderedItemIds[i], templateId, versionId },
+            { id: resolvedWfItemIds[i], templateId, versionId },
             { sortOrder: i + 1 }
           );
         }
@@ -766,8 +803,20 @@ export class ProductionTemplateEditingService {
 
       case 'REORDER_PATTERN_OPTIONS': {
         const payload = op.payload || {};
-        const orderedOptionIds: string[] = (payload.optionIds || []).map((raw: string) => resolveId(raw));
-        if (orderedOptionIds.length > 0) {
+        const rawOptionIds: string[] = payload.optionIds || payload.orderedOptionIds || [];
+        if (rawOptionIds.length > 0) {
+          const orderedOptionIds = rawOptionIds.map((raw: string) => resolveId(raw));
+          const seenOptIds = new Set<string>();
+          for (const optId of orderedOptionIds) {
+            if (seenOptIds.has(optId)) {
+              throw new BusinessRuleError(
+                'تكرار في معرفات خيارات النمط المراد ترتيبها',
+                'PRODUCTION_TEMPLATE_PATTERN_OPTION_REORDER_DUPLICATE'
+              );
+            }
+            seenOptIds.add(optId);
+          }
+
           const options = await optionRepo.find({
             where: { id: In(orderedOptionIds), deletedAt: IsNull() },
             relations: { pattern: true },
@@ -775,13 +824,24 @@ export class ProductionTemplateEditingService {
           if (options.length !== orderedOptionIds.length) {
             throw new BusinessRuleError('أحد خيارات النمط المراد ترتيبها غير موجود', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
           }
-          const firstPatternId = options[0].patternId;
+          const targetPatternId = options[0].patternId;
           if (!options[0].pattern || options[0].pattern.templateId !== templateId || options[0].pattern.versionId !== versionId) {
             throw new BusinessRuleError('خيارات النمط لا تنتمي لهذا الإصدار', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
           }
-          if (options.some((o) => o.patternId !== firstPatternId)) {
+          if (options.some((o) => o.patternId !== targetPatternId)) {
             throw new BusinessRuleError('لا يمكن إعادة ترتيب خيارات من أنماط مختلفة معاً', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_REORDER_MISMATCH');
           }
+
+          const totalPatternOpts = await optionRepo.count({
+            where: { patternId: targetPatternId, deletedAt: IsNull() },
+          });
+          if (orderedOptionIds.length !== totalPatternOpts) {
+            throw new BusinessRuleError(
+              'قائمة إعادة ترتيب خيارات النمط يجب أن تشمل جميع الخيارات النشطة',
+              'PRODUCTION_TEMPLATE_PATTERN_OPTION_REORDER_INCOMPLETE'
+            );
+          }
+
           for (let i = 0; i < orderedOptionIds.length; i++) {
             await optionRepo.update({ id: orderedOptionIds[i] }, { sortOrder: i + 1 });
           }
@@ -791,8 +851,20 @@ export class ProductionTemplateEditingService {
 
       case 'REORDER_OPTION_TASKS': {
         const payload = op.payload || {};
-        const orderedTaskIds: string[] = (payload.taskIds || []).map((raw: string) => resolveId(raw));
-        if (orderedTaskIds.length > 0) {
+        const rawTaskIds: string[] = payload.taskIds || payload.orderedTaskIds || [];
+        if (rawTaskIds.length > 0) {
+          const orderedTaskIds = rawTaskIds.map((raw: string) => resolveId(raw));
+          const seenTaskIds = new Set<string>();
+          for (const taskId of orderedTaskIds) {
+            if (seenTaskIds.has(taskId)) {
+              throw new BusinessRuleError(
+                'تكرار في معرفات المهام المراد ترتيبها',
+                'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_REORDER_DUPLICATE'
+              );
+            }
+            seenTaskIds.add(taskId);
+          }
+
           const tasks = await taskRepo.find({
             where: { id: In(orderedTaskIds), deletedAt: IsNull() },
             relations: { option: { pattern: true } },
@@ -800,7 +872,7 @@ export class ProductionTemplateEditingService {
           if (tasks.length !== orderedTaskIds.length) {
             throw new BusinessRuleError('إحدى المهام المراد ترتيبها غير موجودة', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
           }
-          const firstOptionId = tasks[0].optionId;
+          const targetOptionId = tasks[0].optionId;
           if (
             !tasks[0].option ||
             !tasks[0].option.pattern ||
@@ -809,9 +881,20 @@ export class ProductionTemplateEditingService {
           ) {
             throw new BusinessRuleError('المهام لا تنتمي لهذا الإصدار', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
           }
-          if (tasks.some((t) => t.optionId !== firstOptionId)) {
+          if (tasks.some((t) => t.optionId !== targetOptionId)) {
             throw new BusinessRuleError('لا يمكن إعادة ترتيب مهام من خيارات مختلفة معاً', 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_REORDER_MISMATCH');
           }
+
+          const totalOptionTasks = await taskRepo.count({
+            where: { optionId: targetOptionId, deletedAt: IsNull() },
+          });
+          if (orderedTaskIds.length !== totalOptionTasks) {
+            throw new BusinessRuleError(
+              'قائمة إعادة ترتيب المهام يجب أن تشمل جميع المهام النشطة',
+              'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_REORDER_INCOMPLETE'
+            );
+          }
+
           for (let i = 0; i < orderedTaskIds.length; i++) {
             await taskRepo.update({ id: orderedTaskIds[i] }, { sortOrder: i + 1 });
           }
@@ -831,13 +914,18 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`المرحلة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${stageId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
         }
         const payload = op.payload || {};
+        const plannedQuantityStr = payload.plannedQuantity != null && String(payload.plannedQuantity).trim() !== ''
+          ? String(payload.plannedQuantity).trim()
+          : payload.quantity != null && String(payload.quantity).trim() !== ''
+            ? String(payload.quantity).trim()
+            : '1';
+
         const mat = manager.create(ProductionTemplateStageMaterialEntity, {
           id: crypto.randomUUID(),
           stageId,
           productId: payload.productId,
           productUnitId: payload.productUnitId,
-          plannedQuantity: String(payload.plannedQuantity || payload.quantity || '1'),
-          notes: payload.notes || null,
+          plannedQuantity: plannedQuantityStr,
         });
         await manager.getRepository(ProductionTemplateStageMaterialEntity).save(mat);
         break;
@@ -875,13 +963,18 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`المهمة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
         }
         const payload = op.payload || {};
+        const plannedQuantityStr = payload.plannedQuantity != null && String(payload.plannedQuantity).trim() !== ''
+          ? String(payload.plannedQuantity).trim()
+          : payload.quantity != null && String(payload.quantity).trim() !== ''
+            ? String(payload.quantity).trim()
+            : '1';
+
         const mat = manager.create(ProductionTemplatePatternOptionTaskMaterialEntity, {
           id: crypto.randomUUID(),
           taskId,
           productId: payload.productId,
           productUnitId: payload.productUnitId,
-          plannedQuantity: String(payload.plannedQuantity || payload.quantity || '1'),
-          notes: payload.notes || null,
+          plannedQuantity: plannedQuantityStr,
         });
         await manager.getRepository(ProductionTemplatePatternOptionTaskMaterialEntity).save(mat);
         break;

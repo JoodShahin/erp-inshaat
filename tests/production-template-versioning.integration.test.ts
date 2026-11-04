@@ -515,6 +515,308 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual(resRevert.createdNewVersion, false);
       assert.strictEqual(resRevert.appliedOperationsCount, 0);
     });
+
+    it('Fix 1: Workflow Reorder Persists Across Reload (C -> A -> B)', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب اختبار إعادة ترتيب سير العمل', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      // 1. Initial setup: Stage A, Pattern B, Stage C
+      const initRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 'stg-a', payload: { name: 'المرحلة A', departmentId: testDepartmentId } },
+            { type: 'ADD_PATTERN', tempClientId: 'pat-b', payload: { name: 'النمط B' } },
+            { type: 'ADD_OPTION', parentId: 'pat-b', tempClientId: 'opt-b', payload: { name: 'الخيار B1' } },
+            { type: 'ADD_STAGE', tempClientId: 'stg-c', payload: { name: 'المرحلة C', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const targetVer = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, targetVer.id);
+
+      const stgAId = initRes.tempClientMap['stg-a'];
+      const patBId = initRes.tempClientMap['pat-b'];
+      const stgCId = initRes.tempClientMap['stg-c'];
+
+      // 2. Reorder to C -> A -> B using OVERWRITE_CURRENT
+      const reorderRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: targetVer.id,
+          baseRevision: rev,
+          commitDecision: 'OVERWRITE_CURRENT',
+          operations: [
+            {
+              type: 'REORDER_WORKFLOW',
+              payload: {
+                itemIds: [stgCId, stgAId, patBId],
+              },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(reorderRes.createdNewVersion, false);
+      assert.strictEqual(reorderRes.changeType, 'MINOR');
+
+      // 3. Reload from database and verify order
+      const detail = await templateService.getTemplateById(created.id, targetVer.id);
+      assert.strictEqual(detail.workflowItems.length, 3);
+      assert.strictEqual(detail.workflowItems[0].stageId, stgCId);
+      assert.strictEqual(detail.workflowItems[0].sortOrder, 1);
+      assert.strictEqual(detail.workflowItems[1].stageId, stgAId);
+      assert.strictEqual(detail.workflowItems[1].sortOrder, 2);
+      assert.strictEqual(detail.workflowItems[2].patternId, patBId);
+      assert.strictEqual(detail.workflowItems[2].sortOrder, 3);
+    });
+
+    it('Fix 2: Pattern Options and Tasks Reorder Persists Across Reload', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب اختبار ترتيب الخيارات والمهام', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      // Create Pattern with O1, O2, O3 and T1, T2, T3
+      const initRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'pat-1', payload: { name: 'نمط الترتيب' } },
+            { type: 'ADD_OPTION', parentId: 'pat-1', tempClientId: 'opt-1', payload: { name: 'خيار 1' } },
+            { type: 'ADD_OPTION', parentId: 'pat-1', tempClientId: 'opt-2', payload: { name: 'خيار 2' } },
+            { type: 'ADD_OPTION', parentId: 'pat-1', tempClientId: 'opt-3', payload: { name: 'خيار 3' } },
+            { type: 'ADD_TASK', parentId: 'opt-1', tempClientId: 'tsk-1', payload: { name: 'مهمة 1', departmentId: testDepartmentId } },
+            { type: 'ADD_TASK', parentId: 'opt-1', tempClientId: 'tsk-2', payload: { name: 'مهمة 2', departmentId: testDepartmentId } },
+            { type: 'ADD_TASK', parentId: 'opt-1', tempClientId: 'tsk-3', payload: { name: 'مهمة 3', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const opt1Id = initRes.tempClientMap['opt-1'];
+      const opt2Id = initRes.tempClientMap['opt-2'];
+      const opt3Id = initRes.tempClientMap['opt-3'];
+      const tsk1Id = initRes.tempClientMap['tsk-1'];
+      const tsk2Id = initRes.tempClientMap['tsk-2'];
+      const tsk3Id = initRes.tempClientMap['tsk-3'];
+
+      const targetVer = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, targetVer.id);
+
+      // Reorder options to opt-3 -> opt-1 -> opt-2 and tasks to tsk-3 -> tsk-1 -> tsk-2
+      const reorderRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: targetVer.id,
+          baseRevision: rev,
+          commitDecision: 'OVERWRITE_CURRENT',
+          operations: [
+            {
+              type: 'REORDER_PATTERN_OPTIONS',
+              targetId: initRes.tempClientMap['pat-1'],
+              payload: { optionIds: [opt3Id, opt1Id, opt2Id] },
+            },
+            {
+              type: 'REORDER_OPTION_TASKS',
+              targetId: opt1Id,
+              payload: { taskIds: [tsk3Id, tsk1Id, tsk2Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(reorderRes.createdNewVersion, false);
+      assert.strictEqual(reorderRes.changeType, 'MINOR');
+
+      // Reload and verify
+      const detail = await templateService.getTemplateById(created.id, targetVer.id);
+      const pattern = detail.patterns![0];
+      assert.strictEqual(pattern.options[0].id, opt3Id);
+      assert.strictEqual(pattern.options[0].sortOrder, 1);
+      assert.strictEqual(pattern.options[1].id, opt1Id);
+      assert.strictEqual(pattern.options[1].sortOrder, 2);
+      assert.strictEqual(pattern.options[2].id, opt2Id);
+      assert.strictEqual(pattern.options[2].sortOrder, 3);
+
+      const opt1 = pattern.options.find((o) => o.id === opt1Id)!;
+      assert.strictEqual(opt1.tasks[0].id, tsk3Id);
+      assert.strictEqual(opt1.tasks[0].sortOrder, 1);
+      assert.strictEqual(opt1.tasks[1].id, tsk1Id);
+      assert.strictEqual(opt1.tasks[1].sortOrder, 2);
+      assert.strictEqual(opt1.tasks[2].id, tsk2Id);
+      assert.strictEqual(opt1.tasks[2].sortOrder, 3);
+    });
+
+    it('Fix 3: Estimated Cost Survives Normalization and Minor Cost Update Updates In-Place', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب اختبار التكلفة التقديرية', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      // Add stage with 1500 and task with 250
+      const initRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 'stg-cost',
+              payload: { name: 'مرحلة مكلفة', departmentId: testDepartmentId, estimatedCost: '1500' },
+            },
+            { type: 'ADD_PATTERN', tempClientId: 'pat-cost', payload: { name: 'نمط مكلف' } },
+            { type: 'ADD_OPTION', parentId: 'pat-cost', tempClientId: 'opt-cost', payload: { name: 'خيار مكلف' } },
+            {
+              type: 'ADD_TASK',
+              parentId: 'opt-cost',
+              tempClientId: 'tsk-cost',
+              payload: { name: 'مهمة مكلفة', departmentId: testDepartmentId, estimatedCost: '250' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const targetVer = await versionService.getLatestVersion(created.id);
+      let detail = await templateService.getTemplateById(created.id, targetVer.id);
+      assert.strictEqual(Number(detail.stages[0].estimatedCost), 1500);
+      assert.strictEqual(Number(detail.patterns![0].options[0].tasks[0].estimatedCost), 250);
+
+      // Update cost only to 1800 and 300 using OVERWRITE_CURRENT
+      rev = await getRevision(created.id, targetVer.id);
+      const updateRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: targetVer.id,
+          baseRevision: rev,
+          commitDecision: 'OVERWRITE_CURRENT',
+          operations: [
+            {
+              type: 'UPDATE_STAGE',
+              targetId: initRes.tempClientMap['stg-cost'],
+              payload: { estimatedCost: '1800' },
+            },
+            {
+              type: 'UPDATE_TASK',
+              targetId: initRes.tempClientMap['tsk-cost'],
+              payload: { estimatedCost: '300' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(updateRes.createdNewVersion, false);
+      assert.strictEqual(updateRes.changeType, 'MINOR');
+
+      detail = await templateService.getTemplateById(created.id, targetVer.id);
+      assert.strictEqual(Number(detail.stages[0].estimatedCost), 1800);
+      assert.strictEqual(Number(detail.patterns![0].options[0].tasks[0].estimatedCost), 300);
+
+      // Decimal equality: updating from 1800 to 1800.00 results in NONE diff
+      rev = await getRevision(created.id, targetVer.id);
+      const noopRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: targetVer.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'UPDATE_STAGE',
+              targetId: initRes.tempClientMap['stg-cost'],
+              payload: { estimatedCost: '1800.00' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(noopRes.changeType, 'NONE');
+      assert.strictEqual(noopRes.appliedOperationsCount, 0);
+    });
+
+    it('Fix 5: Nested Temporary Elements Cancellation & Block Updating Deleted Elements', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب اختبار الإلغاء الشجري', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      // Example 1: Add P -> O -> T, then delete P before save -> NONE
+      const cancelRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط مؤقت' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار مؤقت' } },
+            { type: 'ADD_TASK', parentId: 'o1', tempClientId: 't1', payload: { name: 'مهمة مؤقتة', departmentId: testDepartmentId } },
+            { type: 'DELETE_PATTERN', targetId: 'p1' },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(cancelRes.changeType, 'NONE');
+      assert.strictEqual(cancelRes.appliedOperationsCount, 0);
+
+      // Example 2: Create a real option and task first
+      const initRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p-real', payload: { name: 'النمط الحقيقي' } },
+            { type: 'ADD_OPTION', parentId: 'p-real', tempClientId: 'o-real', payload: { name: 'الخيار الحقيقي' } },
+            { type: 'ADD_TASK', parentId: 'o-real', tempClientId: 't-real', payload: { name: 'المهمة الحقيقية', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const targetVer = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, targetVer.id);
+      const optId = initRes.tempClientMap['o-real'];
+      const taskId = initRes.tempClientMap['t-real'];
+
+      // Example 3: Delete option then try to update task under it in same session -> rejected!
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: targetVer.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                { type: 'DELETE_OPTION', targetId: optId },
+                { type: 'UPDATE_TASK', targetId: taskId, payload: { name: 'محاولة تعديل مهمة ملغاة' } },
+              ],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED');
+          return true;
+        }
+      );
+    });
   });
 
   // ------------------------------------------------------------------------

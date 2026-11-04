@@ -1960,7 +1960,7 @@ document.addEventListener('DOMContentLoaded', () => {
     editingSession.start();
     editingSession.addOperation({
       type: 'REORDER_WORKFLOW',
-      payload: { orderedItemIds: currentWorkflowItems.map((w) => w.id) },
+      payload: { itemIds: currentWorkflowItems.map((w) => w.id) },
     });
   }
 
@@ -1982,7 +1982,7 @@ document.addEventListener('DOMContentLoaded', () => {
     editingSession.start();
     editingSession.addOperation({
       type: 'REORDER_WORKFLOW',
-      payload: { orderedItemIds: currentWorkflowItems.map((w) => w.id) },
+      payload: { itemIds: currentWorkflowItems.map((w) => w.id) },
     });
   }
 
@@ -2003,7 +2003,7 @@ document.addEventListener('DOMContentLoaded', () => {
     editingSession.addOperation({
       type: 'REORDER_PATTERN_OPTIONS',
       targetId: patternId,
-      payload: { orderedOptionIds: pattern.options.map((o) => o.id) },
+      payload: { optionIds: pattern.options.map((o) => o.id) },
     });
   }
 
@@ -2026,7 +2026,7 @@ document.addEventListener('DOMContentLoaded', () => {
     editingSession.addOperation({
       type: 'REORDER_OPTION_TASKS',
       targetId: optionId,
-      payload: { orderedTaskIds: option.tasks.map((t) => t.id) },
+      payload: { taskIds: option.tasks.map((t) => t.id) },
     });
   }
 
@@ -2051,7 +2051,7 @@ document.addEventListener('DOMContentLoaded', () => {
     editingSession.addOperation({
       type: 'REORDER_OPTION_TASKS',
       targetId: optionId,
-      payload: { orderedTaskIds: option.tasks.map((t) => t.id) },
+      payload: { taskIds: option.tasks.map((t) => t.id) },
     });
   }
 

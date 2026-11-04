@@ -19,6 +19,22 @@ export interface NormalizedClassificationResult extends ClassificationResult {
   hasEffectiveChanges: boolean;
 }
 
+export function areCostsEqual(a?: string | number | null, b?: string | number | null): boolean {
+  if ((a === undefined || a === null || a === '') && (b === undefined || b === null || b === '')) {
+    return true;
+  }
+  if (a == null || b == null || a === '' || b === '') {
+    return false;
+  }
+  const strA = String(a).trim();
+  const strB = String(b).trim();
+  if (strA === strB) return true;
+  const numA = Number(strA);
+  const numB = Number(strB);
+  if (isNaN(numA) || isNaN(numB)) return strA === strB;
+  return Math.abs(numA - numB) < 0.000001;
+}
+
 interface InMemStage {
   id: string;
   name: string;
@@ -27,6 +43,7 @@ interface InMemStage {
   estimatedDurationMinutes: number | null;
   estimatedDurationValue: number | null;
   estimatedDurationUnit: string | null;
+  estimatedCost: string | null;
   isNew?: boolean;
   isDeleted?: boolean;
 }
@@ -56,6 +73,7 @@ interface InMemTask {
   estimatedDurationMinutes: number | null;
   estimatedDurationValue: number | null;
   estimatedDurationUnit: string | null;
+  estimatedCost: string | null;
   sortOrder: number;
   isNew?: boolean;
   isDeleted?: boolean;
@@ -68,6 +86,7 @@ interface InMemMaterial {
   productId: string;
   productUnitId: string;
   plannedQuantity: string;
+  notes: string | null;
   isNew?: boolean;
   isDeleted?: boolean;
 }
@@ -217,6 +236,7 @@ export class ProductionTemplateEditingNormalizer {
         estimatedDurationMinutes: s.estimatedDurationMinutes,
         estimatedDurationValue: s.estimatedDurationValue,
         estimatedDurationUnit: s.estimatedDurationUnit,
+        estimatedCost: s.estimatedCost ? String(s.estimatedCost) : null,
       });
     });
 
@@ -241,6 +261,7 @@ export class ProductionTemplateEditingNormalizer {
         estimatedDurationMinutes: t.estimatedDurationMinutes,
         estimatedDurationValue: t.estimatedDurationValue,
         estimatedDurationUnit: t.estimatedDurationUnit,
+        estimatedCost: t.estimatedCost ? String(t.estimatedCost) : null,
         sortOrder: t.sortOrder,
       });
     });
@@ -254,6 +275,7 @@ export class ProductionTemplateEditingNormalizer {
         productId: m.productId,
         productUnitId: m.productUnitId,
         plannedQuantity: String(m.plannedQuantity),
+        notes: (m as any).notes || null,
       });
     });
     baseTaskMaterials.forEach((m) => {
@@ -264,6 +286,7 @@ export class ProductionTemplateEditingNormalizer {
         productId: m.productId,
         productUnitId: m.productUnitId,
         plannedQuantity: String(m.plannedQuantity),
+        notes: (m as any).notes || null,
       });
     });
 
@@ -345,6 +368,7 @@ export class ProductionTemplateEditingNormalizer {
             estimatedDurationMinutes: duration.estimatedDurationMinutes,
             estimatedDurationValue: duration.estimatedDurationValue,
             estimatedDurationUnit: duration.estimatedDurationUnit,
+            estimatedCost: op.payload?.estimatedCost != null ? String(op.payload.estimatedCost) : null,
             isNew: true,
           };
           stagesMap.set(tempId, newStage);
@@ -384,6 +408,9 @@ export class ProductionTemplateEditingNormalizer {
             stage.estimatedDurationUnit = duration.estimatedDurationUnit;
             stage.estimatedDurationMinutes = duration.estimatedDurationMinutes;
           }
+          if (op.payload?.estimatedCost !== undefined) {
+            stage.estimatedCost = op.payload.estimatedCost != null ? String(op.payload.estimatedCost) : null;
+          }
           break;
         }
 
@@ -403,8 +430,24 @@ export class ProductionTemplateEditingNormalizer {
           // Mark corresponding workflow item
           for (const [wfId, wf] of wfMap.entries()) {
             if (wf.targetId === targetId) {
-              if (wf.isNew) wfMap.delete(wfId);
+              if (wf.isNew || stage.isNew) wfMap.delete(wfId);
               else wf.isDeleted = true;
+            }
+          }
+
+          // Cascade to stage materials
+          for (const [matId, mat] of materialsMap.entries()) {
+            if (mat.parentType === 'STAGE' && mat.parentId === targetId) {
+              if (mat.isNew || stage.isNew) materialsMap.delete(matId);
+              else mat.isDeleted = true;
+            }
+          }
+
+          // Cascade to stage attachments
+          for (const [attId, att] of attachmentsMap.entries()) {
+            if (att.parentType === 'STAGE' && att.parentId === targetId) {
+              if (att.isNew || stage.isNew) attachmentsMap.delete(attId);
+              else att.isDeleted = true;
             }
           }
           break;
@@ -453,10 +496,40 @@ export class ProductionTemplateEditingNormalizer {
             pat.isDeleted = true;
           }
 
+          // Cascade to workflow item
           for (const [wfId, wf] of wfMap.entries()) {
             if (wf.targetId === targetId) {
-              if (wf.isNew) wfMap.delete(wfId);
+              if (wf.isNew || pat.isNew) wfMap.delete(wfId);
               else wf.isDeleted = true;
+            }
+          }
+
+          // Cascade to options and their tasks/materials/attachments
+          for (const [optId, opt] of optionsMap.entries()) {
+            if (opt.patternId === targetId) {
+              if (opt.isNew || pat.isNew) optionsMap.delete(optId);
+              else opt.isDeleted = true;
+
+              for (const [taskId, task] of tasksMap.entries()) {
+                if (task.optionId === optId) {
+                  if (task.isNew || pat.isNew) tasksMap.delete(taskId);
+                  else task.isDeleted = true;
+
+                  for (const [matId, mat] of materialsMap.entries()) {
+                    if (mat.parentType === 'TASK' && mat.parentId === taskId) {
+                      if (mat.isNew || pat.isNew) materialsMap.delete(matId);
+                      else mat.isDeleted = true;
+                    }
+                  }
+
+                  for (const [attId, att] of attachmentsMap.entries()) {
+                    if (att.parentType === 'TASK' && att.parentId === taskId) {
+                      if (att.isNew || pat.isNew) attachmentsMap.delete(attId);
+                      else att.isDeleted = true;
+                    }
+                  }
+                }
+              }
             }
           }
           break;
@@ -485,7 +558,14 @@ export class ProductionTemplateEditingNormalizer {
         case 'UPDATE_OPTION': {
           const targetId = resolveRef(op.targetId);
           const opt = optionsMap.get(targetId);
-          if (!opt || opt.isDeleted) {
+          if (!opt) {
+            throw new BusinessRuleError(`الخيار المستهدف للتعديل غير موجود: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
+          }
+          const parentPat = patternsMap.get(opt.patternId);
+          if (parentPat && parentPat.isDeleted) {
+            throw new BusinessRuleError(`لا يمكن تعديل خيار تابع لنمط تم حذفه: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_PARENT_DELETED');
+          }
+          if (opt.isDeleted) {
             throw new BusinessRuleError(`الخيار المستهدف للتعديل غير موجود: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
           }
           if (op.payload?.name !== undefined) opt.name = op.payload.name.trim();
@@ -498,8 +578,33 @@ export class ProductionTemplateEditingNormalizer {
           if (!opt || opt.isDeleted) {
             throw new BusinessRuleError(`الخيار المستهدف للحذف غير موجود: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
           }
-          if (opt.isNew) optionsMap.delete(targetId);
-          else opt.isDeleted = true;
+          if (opt.isNew) {
+            optionsMap.delete(targetId);
+          } else {
+            opt.isDeleted = true;
+          }
+
+          // Cascade to tasks under this option
+          for (const [taskId, task] of tasksMap.entries()) {
+            if (task.optionId === targetId) {
+              if (task.isNew || opt.isNew) tasksMap.delete(taskId);
+              else task.isDeleted = true;
+
+              for (const [matId, mat] of materialsMap.entries()) {
+                if (mat.parentType === 'TASK' && mat.parentId === taskId) {
+                  if (mat.isNew || opt.isNew) materialsMap.delete(matId);
+                  else mat.isDeleted = true;
+                }
+              }
+
+              for (const [attId, att] of attachmentsMap.entries()) {
+                if (att.parentType === 'TASK' && att.parentId === taskId) {
+                  if (att.isNew || opt.isNew) attachmentsMap.delete(attId);
+                  else att.isDeleted = true;
+                }
+              }
+            }
+          }
           break;
         }
 
@@ -521,6 +626,7 @@ export class ProductionTemplateEditingNormalizer {
             estimatedDurationMinutes: duration.estimatedDurationMinutes,
             estimatedDurationValue: duration.estimatedDurationValue,
             estimatedDurationUnit: duration.estimatedDurationUnit,
+            estimatedCost: op.payload?.estimatedCost != null ? String(op.payload.estimatedCost) : null,
             sortOrder: op.payload?.sortOrder || (tasksMap.size + 1),
             isNew: true,
           };
@@ -532,7 +638,20 @@ export class ProductionTemplateEditingNormalizer {
         case 'UPDATE_TASK': {
           const targetId = resolveRef(op.targetId);
           const task = tasksMap.get(targetId);
-          if (!task || task.isDeleted) {
+          if (!task) {
+            throw new BusinessRuleError(`المهمة المستهدفة للتعديل غير موجودة: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+          }
+          const parentOpt = optionsMap.get(task.optionId);
+          if (parentOpt && parentOpt.isDeleted) {
+            throw new BusinessRuleError(`لا يمكن تعديل مهمة تابعة لخيار تم حذفه: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED');
+          }
+          if (parentOpt) {
+            const parentPat = patternsMap.get(parentOpt.patternId);
+            if (parentPat && parentPat.isDeleted) {
+              throw new BusinessRuleError(`لا يمكن تعديل مهمة تابعة لنمط تم حذفه: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED');
+            }
+          }
+          if (task.isDeleted) {
             throw new BusinessRuleError(`المهمة المستهدفة للتعديل غير موجودة: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
           }
           if (op.payload?.name !== undefined) task.name = op.payload.name.trim();
@@ -552,6 +671,9 @@ export class ProductionTemplateEditingNormalizer {
             task.estimatedDurationUnit = duration.estimatedDurationUnit;
             task.estimatedDurationMinutes = duration.estimatedDurationMinutes;
           }
+          if (op.payload?.estimatedCost !== undefined) {
+            task.estimatedCost = op.payload.estimatedCost != null ? String(op.payload.estimatedCost) : null;
+          }
           break;
         }
 
@@ -563,32 +685,151 @@ export class ProductionTemplateEditingNormalizer {
           }
           if (task.isNew) tasksMap.delete(targetId);
           else task.isDeleted = true;
+
+          // Cascade to task materials and attachments
+          for (const [matId, mat] of materialsMap.entries()) {
+            if (mat.parentType === 'TASK' && mat.parentId === targetId) {
+              if (mat.isNew || task.isNew) materialsMap.delete(matId);
+              else mat.isDeleted = true;
+            }
+          }
+
+          for (const [attId, att] of attachmentsMap.entries()) {
+            if (att.parentType === 'TASK' && att.parentId === targetId) {
+              if (att.isNew || task.isNew) attachmentsMap.delete(attId);
+              else att.isDeleted = true;
+            }
+          }
           break;
         }
 
         case 'REORDER_WORKFLOW': {
-          const itemIds: string[] = (op.payload?.itemIds || []).map((raw: string) => resolveRef(raw));
-          for (let i = 0; i < itemIds.length; i++) {
-            const item = wfMap.get(itemIds[i]);
-            if (item) item.sortOrder = i + 1;
+          const rawItemIds: string[] = op.payload?.itemIds || op.payload?.orderedItemIds || [];
+          if (rawItemIds.length > 0) {
+            const findWfItem = (idOrTarget: string): InMemWorkflowItem | undefined => {
+              const resolved = resolveRef(idOrTarget);
+              if (wfMap.has(resolved)) {
+                const item = wfMap.get(resolved)!;
+                if (!item.isDeleted) return item;
+              }
+              for (const wf of wfMap.values()) {
+                if (!wf.isDeleted && (wf.id === resolved || wf.targetId === resolved || wf.id === idOrTarget || wf.targetId === idOrTarget)) {
+                  return wf;
+                }
+              }
+              return undefined;
+            };
+
+            const seenIds = new Set<string>();
+            const targetWfs: InMemWorkflowItem[] = [];
+
+            for (const raw of rawItemIds) {
+              const wf = findWfItem(raw);
+              if (!wf) {
+                throw new BusinessRuleError(
+                  `عنصر سير العمل غير موجود أو لا ينتمي لهذا الإصدار: ${raw}`,
+                  'PRODUCTION_TEMPLATE_WORKFLOW_ITEM_NOT_FOUND'
+                );
+              }
+              if (seenIds.has(wf.id)) {
+                throw new BusinessRuleError(
+                  'تكرار في معرفات عناصر سير العمل',
+                  'PRODUCTION_TEMPLATE_WORKFLOW_DUPLICATE_ITEM'
+                );
+              }
+              seenIds.add(wf.id);
+              targetWfs.push(wf);
+            }
+
+            const activeWfItems = Array.from(wfMap.values()).filter((w) => !w.isDeleted);
+            if (seenIds.size !== activeWfItems.length) {
+              throw new BusinessRuleError(
+                'قائمة إعادة ترتيب سير العمل يجب أن تشمل جميع العناصر النشطة',
+                'PRODUCTION_TEMPLATE_WORKFLOW_REORDER_INCOMPLETE'
+              );
+            }
+
+            for (let i = 0; i < targetWfs.length; i++) {
+              targetWfs[i].sortOrder = i + 1;
+            }
           }
           break;
         }
 
         case 'REORDER_PATTERN_OPTIONS': {
-          const optIds: string[] = (op.payload?.optionIds || []).map((raw: string) => resolveRef(raw));
-          for (let i = 0; i < optIds.length; i++) {
-            const opt = optionsMap.get(optIds[i]);
-            if (opt) opt.sortOrder = i + 1;
+          const patternId = resolveRef(op.targetId || op.parentId);
+          const rawOptIds: string[] = op.payload?.optionIds || op.payload?.orderedOptionIds || [];
+          if (rawOptIds.length > 0) {
+            const seenOptIds = new Set<string>();
+            const patternOpts = Array.from(optionsMap.values()).filter(
+              (o) => !o.isDeleted && o.patternId === patternId
+            );
+            for (const raw of rawOptIds) {
+              const optId = resolveRef(raw);
+              const opt = optionsMap.get(optId);
+              if (!opt || opt.isDeleted || opt.patternId !== patternId) {
+                throw new BusinessRuleError(
+                  `أحد خيارات النمط المراد ترتيبها غير موجود أو لا ينتمي لهذا النمط: ${raw}`,
+                  'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND'
+                );
+              }
+              if (seenOptIds.has(optId)) {
+                throw new BusinessRuleError(
+                  'تكرار في معرفات خيارات النمط المراد ترتيبها',
+                  'PRODUCTION_TEMPLATE_PATTERN_OPTION_REORDER_DUPLICATE'
+                );
+              }
+              seenOptIds.add(optId);
+            }
+            if (seenOptIds.size !== patternOpts.length) {
+              throw new BusinessRuleError(
+                'قائمة إعادة ترتيب خيارات النمط يجب أن تشمل جميع الخيارات النشطة',
+                'PRODUCTION_TEMPLATE_PATTERN_OPTION_REORDER_INCOMPLETE'
+              );
+            }
+            for (let i = 0; i < rawOptIds.length; i++) {
+              const opt = optionsMap.get(resolveRef(rawOptIds[i]))!;
+              opt.sortOrder = i + 1;
+            }
           }
           break;
         }
 
         case 'REORDER_OPTION_TASKS': {
-          const taskIds: string[] = (op.payload?.taskIds || []).map((raw: string) => resolveRef(raw));
-          for (let i = 0; i < taskIds.length; i++) {
-            const task = tasksMap.get(taskIds[i]);
-            if (task) task.sortOrder = i + 1;
+          const optionId = resolveRef(op.targetId || op.parentId);
+          const rawTaskIds: string[] = op.payload?.taskIds || op.payload?.orderedTaskIds || [];
+          if (rawTaskIds.length > 0) {
+            const seenTaskIds = new Set<string>();
+            const optionTasks = Array.from(tasksMap.values()).filter(
+              (t) => !t.isDeleted && t.optionId === optionId
+            );
+            for (const raw of rawTaskIds) {
+              const taskId = resolveRef(raw);
+              const task = tasksMap.get(taskId);
+              if (!task || task.isDeleted || task.optionId !== optionId) {
+                throw new BusinessRuleError(
+                  `إحدى المهام المراد ترتيبها غير موجودة أو لا تنتمي لهذا الخيار: ${raw}`,
+                  'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND'
+                );
+              }
+              if (seenTaskIds.has(taskId)) {
+                throw new BusinessRuleError(
+                  'تكرار في معرفات المهام المراد ترتيبها',
+                  'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_REORDER_DUPLICATE'
+                );
+              }
+              seenTaskIds.add(taskId);
+            }
+            if (seenTaskIds.size !== optionTasks.length) {
+              throw new BusinessRuleError(
+                'قائمة إعادة ترتيب المهام يجب أن تشمل جميع المهام النشطة',
+                'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_REORDER_INCOMPLETE'
+              );
+            }
+            for (let i = 0; i < rawTaskIds.length; i++) {
+              const task = tasksMap.get(resolveRef(rawTaskIds[i]))!;
+              task.sortOrder = i + 1;
+            }
           }
           break;
         }
@@ -596,6 +837,24 @@ export class ProductionTemplateEditingNormalizer {
         case 'ADD_STAGE_MATERIAL':
         case 'ADD_TASK_MATERIAL': {
           const parentId = resolveRef(op.parentId);
+          if (op.type === 'ADD_STAGE_MATERIAL') {
+            const parentStage = stagesMap.get(parentId);
+            if (!parentStage || parentStage.isDeleted) {
+              throw new BusinessRuleError(`المرحلة الأب غير موجودة أو تم حذفها: ${parentId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+            }
+          } else {
+            const parentTask = tasksMap.get(parentId);
+            if (!parentTask || parentTask.isDeleted) {
+              throw new BusinessRuleError(`المهمة الأب غير موجودة أو تم حذفها: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+            }
+          }
+
+          const plannedQuantityStr = op.payload?.plannedQuantity != null && String(op.payload.plannedQuantity).trim() !== ''
+            ? String(op.payload.plannedQuantity)
+            : op.payload?.quantity != null && String(op.payload.quantity).trim() !== ''
+              ? String(op.payload.quantity)
+              : '1';
+
           const tempId = `tmp-mat-${materialsMap.size + 1}`;
           materialsMap.set(tempId, {
             id: tempId,
@@ -603,7 +862,8 @@ export class ProductionTemplateEditingNormalizer {
             parentType: op.type === 'ADD_STAGE_MATERIAL' ? 'STAGE' : 'TASK',
             productId: op.payload?.productId,
             productUnitId: op.payload?.productUnitId,
-            plannedQuantity: String(op.payload?.plannedQuantity || op.payload?.quantity || '1'),
+            plannedQuantity: plannedQuantityStr,
+            notes: op.payload?.notes || null,
             isNew: true,
           });
           break;
@@ -629,6 +889,17 @@ export class ProductionTemplateEditingNormalizer {
             );
           }
           const parentId = resolveRef(op.parentId);
+          if (op.type === 'ADD_STAGE_ATTACHMENT') {
+            const parentStage = stagesMap.get(parentId);
+            if (!parentStage || parentStage.isDeleted) {
+              throw new BusinessRuleError(`المرحلة الأب غير موجودة أو تم حذفها: ${parentId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+            }
+          } else {
+            const parentTask = tasksMap.get(parentId);
+            if (!parentTask || parentTask.isDeleted) {
+              throw new BusinessRuleError(`المهمة الأب غير موجودة أو تم حذفها: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
+            }
+          }
           const tempId = `tmp-att-${attachmentsMap.size + 1}`;
           attachmentsMap.set(tempId, {
             id: tempId,
@@ -723,6 +994,10 @@ export class ProductionTemplateEditingNormalizer {
             minorCount++;
             reasons.push(`تعديل بيانات وصفية للمرحلة (${s.name})`);
           }
+          if (!areCostsEqual(s.estimatedCost, base.estimatedCost)) {
+            minorCount++;
+            reasons.push(`تعديل التكلفة التقديرية للمرحلة (${s.name})`);
+          }
         }
       }
     }
@@ -787,6 +1062,10 @@ export class ProductionTemplateEditingNormalizer {
           if (t.name !== base.name || t.description !== base.description) {
             minorCount++;
             reasons.push(`تعديل بيانات وصفية للمهمة (${t.name})`);
+          }
+          if (!areCostsEqual(t.estimatedCost, base.estimatedCost)) {
+            minorCount++;
+            reasons.push(`تعديل التكلفة التقديرية للمهمة (${t.name})`);
           }
         }
       }
@@ -870,6 +1149,7 @@ export class ProductionTemplateEditingNormalizer {
             estimatedDurationMinutes: s.estimatedDurationMinutes,
             estimatedDurationValue: s.estimatedDurationValue,
             estimatedDurationUnit: s.estimatedDurationUnit,
+            estimatedCost: s.estimatedCost ?? null,
           },
         });
       } else if (!s.isNew && !s.isDeleted) {
@@ -881,7 +1161,8 @@ export class ProductionTemplateEditingNormalizer {
             s.departmentId !== base.departmentId ||
             s.estimatedDurationMinutes !== base.estimatedDurationMinutes ||
             s.estimatedDurationValue !== base.estimatedDurationValue ||
-            s.estimatedDurationUnit !== base.estimatedDurationUnit)
+            s.estimatedDurationUnit !== base.estimatedDurationUnit ||
+            !areCostsEqual(s.estimatedCost, base.estimatedCost))
         ) {
           normalizedOperations.push({
             type: 'UPDATE_STAGE',
@@ -893,6 +1174,7 @@ export class ProductionTemplateEditingNormalizer {
               estimatedDurationMinutes: s.estimatedDurationMinutes,
               estimatedDurationValue: s.estimatedDurationValue,
               estimatedDurationUnit: s.estimatedDurationUnit,
+              estimatedCost: s.estimatedCost ?? null,
             },
           });
         }
@@ -931,6 +1213,9 @@ export class ProductionTemplateEditingNormalizer {
 
     // Options
     for (const [id, o] of optionsMap.entries()) {
+      const parentPat = patternsMap.get(o.patternId);
+      if (parentPat && parentPat.isDeleted) continue;
+
       if (o.isNew && !o.isDeleted) {
         normalizedOperations.push({
           type: 'ADD_OPTION',
@@ -957,6 +1242,13 @@ export class ProductionTemplateEditingNormalizer {
 
     // Tasks
     for (const [id, t] of tasksMap.entries()) {
+      const parentOpt = optionsMap.get(t.optionId);
+      if (parentOpt && parentOpt.isDeleted) continue;
+      if (parentOpt) {
+        const parentPat = patternsMap.get(parentOpt.patternId);
+        if (parentPat && parentPat.isDeleted) continue;
+      }
+
       if (t.isNew && !t.isDeleted) {
         normalizedOperations.push({
           type: 'ADD_TASK',
@@ -970,6 +1262,7 @@ export class ProductionTemplateEditingNormalizer {
             estimatedDurationMinutes: t.estimatedDurationMinutes,
             estimatedDurationValue: t.estimatedDurationValue,
             estimatedDurationUnit: t.estimatedDurationUnit,
+            estimatedCost: t.estimatedCost ?? null,
           },
         });
       } else if (!t.isNew && !t.isDeleted) {
@@ -982,7 +1275,8 @@ export class ProductionTemplateEditingNormalizer {
             t.sortOrder !== base.sortOrder ||
             t.estimatedDurationMinutes !== base.estimatedDurationMinutes ||
             t.estimatedDurationValue !== base.estimatedDurationValue ||
-            t.estimatedDurationUnit !== base.estimatedDurationUnit)
+            t.estimatedDurationUnit !== base.estimatedDurationUnit ||
+            !areCostsEqual(t.estimatedCost, base.estimatedCost))
         ) {
           normalizedOperations.push({
             type: 'UPDATE_TASK',
@@ -995,6 +1289,7 @@ export class ProductionTemplateEditingNormalizer {
               estimatedDurationMinutes: t.estimatedDurationMinutes,
               estimatedDurationValue: t.estimatedDurationValue,
               estimatedDurationUnit: t.estimatedDurationUnit,
+              estimatedCost: t.estimatedCost ?? null,
             },
           });
         }
@@ -1008,6 +1303,22 @@ export class ProductionTemplateEditingNormalizer {
 
     // Materials
     for (const [id, m] of materialsMap.entries()) {
+      if (m.parentType === 'STAGE') {
+        const parentStage = stagesMap.get(m.parentId);
+        if (parentStage && parentStage.isDeleted) continue;
+      } else {
+        const parentTask = tasksMap.get(m.parentId);
+        if (parentTask && parentTask.isDeleted) continue;
+        if (parentTask) {
+          const parentOpt = optionsMap.get(parentTask.optionId);
+          if (parentOpt && parentOpt.isDeleted) continue;
+          if (parentOpt) {
+            const parentPat = patternsMap.get(parentOpt.patternId);
+            if (parentPat && parentPat.isDeleted) continue;
+          }
+        }
+      }
+
       if (m.isNew && !m.isDeleted) {
         normalizedOperations.push({
           type: m.parentType === 'STAGE' ? 'ADD_STAGE_MATERIAL' : 'ADD_TASK_MATERIAL',
@@ -1016,6 +1327,7 @@ export class ProductionTemplateEditingNormalizer {
             productId: m.productId,
             productUnitId: m.productUnitId,
             plannedQuantity: m.plannedQuantity,
+            notes: m.notes ?? null,
           },
         });
       } else if (!m.isNew && m.isDeleted) {
@@ -1028,6 +1340,22 @@ export class ProductionTemplateEditingNormalizer {
 
     // Attachments
     for (const [id, a] of attachmentsMap.entries()) {
+      if (a.parentType === 'STAGE') {
+        const parentStage = stagesMap.get(a.parentId);
+        if (parentStage && parentStage.isDeleted) continue;
+      } else {
+        const parentTask = tasksMap.get(a.parentId);
+        if (parentTask && parentTask.isDeleted) continue;
+        if (parentTask) {
+          const parentOpt = optionsMap.get(parentTask.optionId);
+          if (parentOpt && parentOpt.isDeleted) continue;
+          if (parentOpt) {
+            const parentPat = patternsMap.get(parentOpt.patternId);
+            if (parentPat && parentPat.isDeleted) continue;
+          }
+        }
+      }
+
       if (a.isNew && !a.isDeleted) {
         normalizedOperations.push({
           type: a.parentType === 'STAGE' ? 'ADD_STAGE_ATTACHMENT' : 'ADD_TASK_ATTACHMENT',
@@ -1080,7 +1408,76 @@ export class ProductionTemplateEditingNormalizer {
       }
     }
 
+    // Pattern Options Reorder
+    for (const [patternId, pat] of patternsMap.entries()) {
+      if (pat.isDeleted) continue;
+      const activeOpts = Array.from(optionsMap.values())
+        .filter((o) => !o.isDeleted && o.patternId === patternId)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+
+      let orderChanged = false;
+      const baseOptsForPat = baseOptions
+        .filter((b) => b.patternId === patternId)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+
+      if (activeOpts.length === baseOptsForPat.length) {
+        for (let i = 0; i < activeOpts.length; i++) {
+          if (activeOpts[i].id !== baseOptsForPat[i].id) {
+            orderChanged = true;
+            break;
+          }
+        }
+      }
+      if (orderChanged && activeOpts.length > 1) {
+        normalizedOperations.push({
+          type: 'REORDER_PATTERN_OPTIONS',
+          targetId: patternId,
+          payload: {
+            optionIds: activeOpts.map((o) => o.id),
+          },
+        });
+      }
+    }
+
+    // Option Tasks Reorder
+    for (const [optionId, opt] of optionsMap.entries()) {
+      if (opt.isDeleted) continue;
+      const parentPat = patternsMap.get(opt.patternId);
+      if (parentPat && parentPat.isDeleted) continue;
+
+      const activeTasks = Array.from(tasksMap.values())
+        .filter((t) => !t.isDeleted && t.optionId === optionId)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+
+      let orderChanged = false;
+      const baseTasksForOpt = baseTasks
+        .filter((b) => b.optionId === optionId)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+
+      if (activeTasks.length === baseTasksForOpt.length) {
+        for (let i = 0; i < activeTasks.length; i++) {
+          if (activeTasks[i].id !== baseTasksForOpt[i].id) {
+            orderChanged = true;
+            break;
+          }
+        }
+      }
+      if (orderChanged && activeTasks.length > 1) {
+        normalizedOperations.push({
+          type: 'REORDER_OPTION_TASKS',
+          targetId: optionId,
+          payload: {
+            taskIds: activeTasks.map((t) => t.id),
+          },
+        });
+      }
+    }
+
     // Workflow Reorder
+    const activeWfItems = Array.from(wfMap.values())
+      .filter((w) => !w.isDeleted)
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+
     let wfOrderChanged = false;
     for (const [id, w] of wfMap.entries()) {
       if (!w.isNew && !w.isDeleted) {
@@ -1091,17 +1488,11 @@ export class ProductionTemplateEditingNormalizer {
         }
       }
     }
-    if (wfOrderChanged) {
-      const activeWfItems = Array.from(wfMap.values())
-        .filter((w) => !w.isDeleted)
-        .sort((a, b) => a.sortOrder - b.sortOrder)
-        .map((w) => ({
-          type: w.itemType,
-          id: w.targetId,
-        }));
+    if (wfOrderChanged && activeWfItems.length > 1) {
+      const finalWorkflowItemIds = activeWfItems.map((w) => (w.isNew ? w.targetId : w.id));
       normalizedOperations.push({
         type: 'REORDER_WORKFLOW',
-        payload: { items: activeWfItems },
+        payload: { itemIds: finalWorkflowItemIds },
       });
     }
 
