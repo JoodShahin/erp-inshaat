@@ -35,6 +35,32 @@ export function areCostsEqual(a?: string | number | null, b?: string | number | 
   return Math.abs(numA - numB) < 0.000001;
 }
 
+export function normalizeDecimal(val?: string | number | null, precision = 6): string | null {
+  if (val === undefined || val === null || val === '') return null;
+  const str = String(val).trim();
+  if (!str) return null;
+  const [intPartRaw, fracPartRaw = ''] = str.split('.');
+  const isNegative = intPartRaw.startsWith('-');
+  const intPart = (isNegative ? intPartRaw.slice(1) : intPartRaw).replace(/^0+/, '') || '0';
+  const fracPart = fracPartRaw.padEnd(precision, '0').slice(0, precision);
+  if (intPart === '0' && /^0+$/.test(fracPart)) {
+    return '0.' + ''.padEnd(precision, '0');
+  }
+  return `${isNegative ? '-' : ''}${intPart}.${fracPart}`;
+}
+
+export function areDecimalQuantitiesEqual(a?: string | number | null, b?: string | number | null): boolean {
+  if ((a === undefined || a === null || a === '') && (b === undefined || b === null || b === '')) {
+    return true;
+  }
+  if (a == null || b == null || a === '' || b === '') {
+    return false;
+  }
+  const normA = normalizeDecimal(a, 6);
+  const normB = normalizeDecimal(b, 6);
+  return normA === normB;
+}
+
 interface InMemStage {
   id: string;
   name: string;
@@ -86,7 +112,6 @@ interface InMemMaterial {
   productId: string;
   productUnitId: string;
   plannedQuantity: string;
-  notes: string | null;
   isNew?: boolean;
   isDeleted?: boolean;
 }
@@ -275,7 +300,6 @@ export class ProductionTemplateEditingNormalizer {
         productId: m.productId,
         productUnitId: m.productUnitId,
         plannedQuantity: String(m.plannedQuantity),
-        notes: (m as any).notes || null,
       });
     });
     baseTaskMaterials.forEach((m) => {
@@ -286,7 +310,6 @@ export class ProductionTemplateEditingNormalizer {
         productId: m.productId,
         productUnitId: m.productUnitId,
         plannedQuantity: String(m.plannedQuantity),
-        notes: (m as any).notes || null,
       });
     });
 
@@ -556,17 +579,20 @@ export class ProductionTemplateEditingNormalizer {
         }
 
         case 'UPDATE_OPTION': {
+          if (op.payload?.sortOrder !== undefined) {
+            throw new BusinessRuleError(
+              'لا يمكن تعديل ترتيب الخيار عبر UPDATE_OPTION. استخدم REORDER_PATTERN_OPTIONS بدلاً من ذلك.',
+              'PRODUCTION_TEMPLATE_OPTION_REORDER_OPERATION_REQUIRED'
+            );
+          }
           const targetId = resolveRef(op.targetId);
           const opt = optionsMap.get(targetId);
-          if (!opt) {
+          if (!opt || opt.isDeleted) {
             throw new BusinessRuleError(`الخيار المستهدف للتعديل غير موجود: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
           }
           const parentPat = patternsMap.get(opt.patternId);
           if (parentPat && parentPat.isDeleted) {
             throw new BusinessRuleError(`لا يمكن تعديل خيار تابع لنمط تم حذفه: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_PARENT_DELETED');
-          }
-          if (opt.isDeleted) {
-            throw new BusinessRuleError(`الخيار المستهدف للتعديل غير موجود: ${targetId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
           }
           if (op.payload?.name !== undefined) opt.name = op.payload.name.trim();
           break;
@@ -614,6 +640,10 @@ export class ProductionTemplateEditingNormalizer {
           if (!opt || opt.isDeleted) {
             throw new BusinessRuleError(`خيار النمط الأب غير موجود أو تم حذفه: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
           }
+          const parentPat = patternsMap.get(opt.patternId);
+          if (parentPat && parentPat.isDeleted) {
+            throw new BusinessRuleError(`لا يمكن إضافة مهمة لخيار تابع لنمط تم حذفه: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_PARENT_DELETED');
+          }
 
           const tempId = op.tempClientId || `tmp-task-${tasksMap.size + 1}`;
           const duration = resolveTaskDuration(op.payload || {});
@@ -636,6 +666,12 @@ export class ProductionTemplateEditingNormalizer {
         }
 
         case 'UPDATE_TASK': {
+          if (op.payload?.sortOrder !== undefined) {
+            throw new BusinessRuleError(
+              'لا يمكن تعديل ترتيب المهمة عبر UPDATE_TASK. استخدم REORDER_OPTION_TASKS بدلاً من ذلك.',
+              'PRODUCTION_TEMPLATE_TASK_REORDER_OPERATION_REQUIRED'
+            );
+          }
           const targetId = resolveRef(op.targetId);
           const task = tasksMap.get(targetId);
           if (!task) {
@@ -847,6 +883,16 @@ export class ProductionTemplateEditingNormalizer {
             if (!parentTask || parentTask.isDeleted) {
               throw new BusinessRuleError(`المهمة الأب غير موجودة أو تم حذفها: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
             }
+            const parentOpt = optionsMap.get(parentTask.optionId);
+            if (parentOpt && parentOpt.isDeleted) {
+              throw new BusinessRuleError(`لا يمكن إضافة مادة لمهمة تابعة لخيار تم حذفه: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED');
+            }
+            if (parentOpt) {
+              const parentPat = patternsMap.get(parentOpt.patternId);
+              if (parentPat && parentPat.isDeleted) {
+                throw new BusinessRuleError(`لا يمكن إضافة مادة لمهمة تابعة لنمط تم حذفه: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED');
+              }
+            }
           }
 
           const plannedQuantityStr = op.payload?.plannedQuantity != null && String(op.payload.plannedQuantity).trim() !== ''
@@ -855,7 +901,7 @@ export class ProductionTemplateEditingNormalizer {
               ? String(op.payload.quantity)
               : '1';
 
-          const tempId = `tmp-mat-${materialsMap.size + 1}`;
+          const tempId = op.tempClientId || `tmp-mat-${materialsMap.size + 1}`;
           materialsMap.set(tempId, {
             id: tempId,
             parentId,
@@ -863,20 +909,69 @@ export class ProductionTemplateEditingNormalizer {
             productId: op.payload?.productId,
             productUnitId: op.payload?.productUnitId,
             plannedQuantity: plannedQuantityStr,
-            notes: op.payload?.notes || null,
             isNew: true,
           });
+          if (op.tempClientId) tempToEntity.set(op.tempClientId, { type: op.type, id: tempId });
           break;
         }
 
-        case 'DELETE_STAGE_MATERIAL':
+        case 'DELETE_STAGE_MATERIAL': {
+          const targetId = resolveRef(op.targetId);
+          const mat = materialsMap.get(targetId);
+          if (!mat || mat.isDeleted || mat.parentType !== 'STAGE') {
+            throw new BusinessRuleError(
+              `المادة المخططة للمرحلة المستهدفة للحذف غير موجودة: ${targetId}`,
+              'PRODUCTION_TEMPLATE_STAGE_MATERIAL_NOT_FOUND'
+            );
+          }
+          const parentStage = stagesMap.get(mat.parentId);
+          if (parentStage && parentStage.isDeleted) {
+            throw new BusinessRuleError(
+              `لا يمكن حذف مادة لمرحلة تم حذفها: ${targetId}`,
+              'PRODUCTION_TEMPLATE_STAGE_PARENT_DELETED'
+            );
+          }
+          if (mat.isNew) materialsMap.delete(targetId);
+          else mat.isDeleted = true;
+          break;
+        }
+
         case 'DELETE_TASK_MATERIAL': {
           const targetId = resolveRef(op.targetId);
           const mat = materialsMap.get(targetId);
-          if (mat) {
-            if (mat.isNew) materialsMap.delete(targetId);
-            else mat.isDeleted = true;
+          if (!mat || mat.isDeleted || mat.parentType !== 'TASK') {
+            throw new BusinessRuleError(
+              `المادة المخططة للمهمة المستهدفة للحذف غير موجودة: ${targetId}`,
+              'PRODUCTION_TEMPLATE_TASK_MATERIAL_NOT_FOUND'
+            );
           }
+          const parentTask = tasksMap.get(mat.parentId);
+          if (parentTask && parentTask.isDeleted) {
+            throw new BusinessRuleError(
+              `لا يمكن حذف مادة لمهمة تم حذفها: ${targetId}`,
+              'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED'
+            );
+          }
+          if (parentTask) {
+            const parentOpt = optionsMap.get(parentTask.optionId);
+            if (parentOpt && parentOpt.isDeleted) {
+              throw new BusinessRuleError(
+                `لا يمكن حذف مادة لمهمة تابعة لخيار تم حذفه: ${targetId}`,
+                'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED'
+              );
+            }
+            if (parentOpt) {
+              const parentPat = patternsMap.get(parentOpt.patternId);
+              if (parentPat && parentPat.isDeleted) {
+                throw new BusinessRuleError(
+                  `لا يمكن حذف مادة لمهمة تابعة لنمط تم حذفه: ${targetId}`,
+                  'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED'
+                );
+              }
+            }
+          }
+          if (mat.isNew) materialsMap.delete(targetId);
+          else mat.isDeleted = true;
           break;
         }
 
@@ -899,8 +994,18 @@ export class ProductionTemplateEditingNormalizer {
             if (!parentTask || parentTask.isDeleted) {
               throw new BusinessRuleError(`المهمة الأب غير موجودة أو تم حذفها: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
             }
+            const parentOpt = optionsMap.get(parentTask.optionId);
+            if (parentOpt && parentOpt.isDeleted) {
+              throw new BusinessRuleError(`لا يمكن إضافة مرفق لمهمة تابعة لخيار تم حذفه: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED');
+            }
+            if (parentOpt) {
+              const parentPat = patternsMap.get(parentOpt.patternId);
+              if (parentPat && parentPat.isDeleted) {
+                throw new BusinessRuleError(`لا يمكن إضافة مرفق لمهمة تابعة لنمط تم حذفه: ${parentId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED');
+              }
+            }
           }
-          const tempId = `tmp-att-${attachmentsMap.size + 1}`;
+          const tempId = op.tempClientId || `tmp-att-${attachmentsMap.size + 1}`;
           attachmentsMap.set(tempId, {
             id: tempId,
             parentId,
@@ -912,17 +1017,67 @@ export class ProductionTemplateEditingNormalizer {
             sortOrder: op.payload?.sortOrder || 1,
             isNew: true,
           });
+          if (op.tempClientId) tempToEntity.set(op.tempClientId, { type: op.type, id: tempId });
           break;
         }
 
-        case 'DELETE_STAGE_ATTACHMENT':
+        case 'DELETE_STAGE_ATTACHMENT': {
+          const targetId = resolveRef(op.targetId);
+          const att = attachmentsMap.get(targetId);
+          if (!att || att.isDeleted || att.parentType !== 'STAGE') {
+            throw new BusinessRuleError(
+              `المرفق المستهدف للحذف غير موجود: ${targetId}`,
+              'PRODUCTION_TEMPLATE_STAGE_ATTACHMENT_NOT_FOUND'
+            );
+          }
+          const parentStage = stagesMap.get(att.parentId);
+          if (parentStage && parentStage.isDeleted) {
+            throw new BusinessRuleError(
+              `لا يمكن حذف مرفق لمرحلة تم حذفها: ${targetId}`,
+              'PRODUCTION_TEMPLATE_STAGE_PARENT_DELETED'
+            );
+          }
+          if (att.isNew) attachmentsMap.delete(targetId);
+          else att.isDeleted = true;
+          break;
+        }
+
         case 'DELETE_TASK_ATTACHMENT': {
           const targetId = resolveRef(op.targetId);
           const att = attachmentsMap.get(targetId);
-          if (att) {
-            if (att.isNew) attachmentsMap.delete(targetId);
-            else att.isDeleted = true;
+          if (!att || att.isDeleted || att.parentType !== 'TASK') {
+            throw new BusinessRuleError(
+              `المرفق المستهدف للحذف غير موجود: ${targetId}`,
+              'PRODUCTION_TEMPLATE_TASK_ATTACHMENT_NOT_FOUND'
+            );
           }
+          const parentTask = tasksMap.get(att.parentId);
+          if (parentTask && parentTask.isDeleted) {
+            throw new BusinessRuleError(
+              `لا يمكن حذف مرفق لمهمة تم حذفها: ${targetId}`,
+              'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED'
+            );
+          }
+          if (parentTask) {
+            const parentOpt = optionsMap.get(parentTask.optionId);
+            if (parentOpt && parentOpt.isDeleted) {
+              throw new BusinessRuleError(
+                `لا يمكن حذف مرفق لمهمة تابعة لخيار تم حذفه: ${targetId}`,
+                'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED'
+              );
+            }
+            if (parentOpt) {
+              const parentPat = patternsMap.get(parentOpt.patternId);
+              if (parentPat && parentPat.isDeleted) {
+                throw new BusinessRuleError(
+                  `لا يمكن حذف مرفق لمهمة تابعة لنمط تم حذفه: ${targetId}`,
+                  'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_PARENT_DELETED'
+                );
+              }
+            }
+          }
+          if (att.isNew) attachmentsMap.delete(targetId);
+          else att.isDeleted = true;
           break;
         }
 
@@ -942,21 +1097,23 @@ export class ProductionTemplateEditingNormalizer {
         case 'UPDATE_SPEC': {
           const targetId = resolveRef(op.targetId);
           const spec = specsMap.get(targetId);
-          if (spec && !spec.isDeleted) {
-            if (op.payload?.name !== undefined) spec.name = op.payload.name.trim();
-            if (op.payload?.value !== undefined) spec.value = op.payload.value.trim();
-            if (op.payload?.unit !== undefined) spec.unit = op.payload.unit || null;
+          if (!spec || spec.isDeleted) {
+            throw new BusinessRuleError(`المواصفة الهندسية المستهدفة للتعديل غير موجودة: ${targetId}`, 'PRODUCTION_TEMPLATE_SPECIFICATION_NOT_FOUND');
           }
+          if (op.payload?.name !== undefined) spec.name = op.payload.name.trim();
+          if (op.payload?.value !== undefined) spec.value = op.payload.value.trim();
+          if (op.payload?.unit !== undefined) spec.unit = op.payload.unit || null;
           break;
         }
 
         case 'DELETE_SPEC': {
           const targetId = resolveRef(op.targetId);
           const spec = specsMap.get(targetId);
-          if (spec) {
-            if (spec.isNew) specsMap.delete(targetId);
-            else spec.isDeleted = true;
+          if (!spec || spec.isDeleted) {
+            throw new BusinessRuleError(`المواصفة الهندسية المستهدفة للحذف غير موجودة: ${targetId}`, 'PRODUCTION_TEMPLATE_SPECIFICATION_NOT_FOUND');
           }
+          if (spec.isNew) specsMap.delete(targetId);
+          else spec.isDeleted = true;
           break;
         }
       }
@@ -1036,6 +1193,18 @@ export class ProductionTemplateEditingNormalizer {
       }
     }
 
+    // Check Options Reorder net diff
+    for (const [id, o] of optionsMap.entries()) {
+      if (!o.isNew && !o.isDeleted) {
+        const base = baseOptions.find((b) => b.id === id);
+        if (base && o.sortOrder !== base.sortOrder) {
+          minorCount++;
+          reasons.push('إعادة ترتيب خيارات النمط');
+          break;
+        }
+      }
+    }
+
     // Check Tasks net diff
     for (const [id, t] of tasksMap.entries()) {
       if (t.isNew) {
@@ -1081,7 +1250,7 @@ export class ProductionTemplateEditingNormalizer {
         reasons.push('حذف مادة مخططة');
       } else {
         const base = [...baseStageMaterials, ...baseTaskMaterials].find((b) => b.id === id);
-        if (base && String(m.plannedQuantity) !== String(base.plannedQuantity)) {
+        if (base && !areDecimalQuantitiesEqual(m.plannedQuantity, base.plannedQuantity)) {
           structuralCount++;
           reasons.push('تعديل كمية المادة المخططة');
         }
@@ -1134,12 +1303,34 @@ export class ProductionTemplateEditingNormalizer {
       }
     }
 
-    const normalizedOperations: TemplateEditingOperationDto[] = [];
+    // Normalized operations buckets to enforce strict execution order:
+    // 1. additions -> 2. material/att deletions -> 3. material/att additions ->
+    // 4. updates -> 5. entity deletions -> 6. reorders
+    const stageAdds: TemplateEditingOperationDto[] = [];
+    const patternAdds: TemplateEditingOperationDto[] = [];
+    const optionAdds: TemplateEditingOperationDto[] = [];
+    const taskAdds: TemplateEditingOperationDto[] = [];
+    const materialDeletes: TemplateEditingOperationDto[] = [];
+    const attachmentDeletes: TemplateEditingOperationDto[] = [];
+    const materialAdds: TemplateEditingOperationDto[] = [];
+    const attachmentAdds: TemplateEditingOperationDto[] = [];
+    const specAdds: TemplateEditingOperationDto[] = [];
+    const stageUpdates: TemplateEditingOperationDto[] = [];
+    const patternUpdates: TemplateEditingOperationDto[] = [];
+    const optionUpdates: TemplateEditingOperationDto[] = [];
+    const taskUpdates: TemplateEditingOperationDto[] = [];
+    const specUpdates: TemplateEditingOperationDto[] = [];
+    const taskDeletes: TemplateEditingOperationDto[] = [];
+    const optionDeletes: TemplateEditingOperationDto[] = [];
+    const stageDeletes: TemplateEditingOperationDto[] = [];
+    const patternDeletes: TemplateEditingOperationDto[] = [];
+    const specDeletes: TemplateEditingOperationDto[] = [];
+    const reorders: TemplateEditingOperationDto[] = [];
 
     // Stages
     for (const [id, s] of stagesMap.entries()) {
       if (s.isNew && !s.isDeleted) {
-        normalizedOperations.push({
+        stageAdds.push({
           type: 'ADD_STAGE',
           tempClientId: s.id,
           payload: {
@@ -1164,7 +1355,7 @@ export class ProductionTemplateEditingNormalizer {
             s.estimatedDurationUnit !== base.estimatedDurationUnit ||
             !areCostsEqual(s.estimatedCost, base.estimatedCost))
         ) {
-          normalizedOperations.push({
+          stageUpdates.push({
             type: 'UPDATE_STAGE',
             targetId: s.id,
             payload: {
@@ -1179,7 +1370,7 @@ export class ProductionTemplateEditingNormalizer {
           });
         }
       } else if (!s.isNew && s.isDeleted) {
-        normalizedOperations.push({
+        stageDeletes.push({
           type: 'DELETE_STAGE',
           targetId: s.id,
         });
@@ -1189,7 +1380,7 @@ export class ProductionTemplateEditingNormalizer {
     // Patterns
     for (const [id, p] of patternsMap.entries()) {
       if (p.isNew && !p.isDeleted) {
-        normalizedOperations.push({
+        patternAdds.push({
           type: 'ADD_PATTERN',
           tempClientId: p.id,
           payload: { name: p.name },
@@ -1197,14 +1388,14 @@ export class ProductionTemplateEditingNormalizer {
       } else if (!p.isNew && !p.isDeleted) {
         const base = basePatterns.find((b) => b.id === id);
         if (base && p.name !== base.name) {
-          normalizedOperations.push({
+          patternUpdates.push({
             type: 'UPDATE_PATTERN',
             targetId: p.id,
             payload: { name: p.name },
           });
         }
       } else if (!p.isNew && p.isDeleted) {
-        normalizedOperations.push({
+        patternDeletes.push({
           type: 'DELETE_PATTERN',
           targetId: p.id,
         });
@@ -1217,7 +1408,7 @@ export class ProductionTemplateEditingNormalizer {
       if (parentPat && parentPat.isDeleted) continue;
 
       if (o.isNew && !o.isDeleted) {
-        normalizedOperations.push({
+        optionAdds.push({
           type: 'ADD_OPTION',
           parentId: o.patternId,
           tempClientId: o.id,
@@ -1225,15 +1416,15 @@ export class ProductionTemplateEditingNormalizer {
         });
       } else if (!o.isNew && !o.isDeleted) {
         const base = baseOptions.find((b) => b.id === id);
-        if (base && (o.name !== base.name || o.sortOrder !== base.sortOrder)) {
-          normalizedOperations.push({
+        if (base && o.name !== base.name) {
+          optionUpdates.push({
             type: 'UPDATE_OPTION',
             targetId: o.id,
-            payload: { name: o.name, sortOrder: o.sortOrder },
+            payload: { name: o.name },
           });
         }
       } else if (!o.isNew && o.isDeleted) {
-        normalizedOperations.push({
+        optionDeletes.push({
           type: 'DELETE_OPTION',
           targetId: o.id,
         });
@@ -1250,7 +1441,7 @@ export class ProductionTemplateEditingNormalizer {
       }
 
       if (t.isNew && !t.isDeleted) {
-        normalizedOperations.push({
+        taskAdds.push({
           type: 'ADD_TASK',
           parentId: t.optionId,
           tempClientId: t.id,
@@ -1272,20 +1463,18 @@ export class ProductionTemplateEditingNormalizer {
           (t.name !== base.name ||
             t.description !== base.description ||
             t.departmentId !== base.departmentId ||
-            t.sortOrder !== base.sortOrder ||
             t.estimatedDurationMinutes !== base.estimatedDurationMinutes ||
             t.estimatedDurationValue !== base.estimatedDurationValue ||
             t.estimatedDurationUnit !== base.estimatedDurationUnit ||
             !areCostsEqual(t.estimatedCost, base.estimatedCost))
         ) {
-          normalizedOperations.push({
+          taskUpdates.push({
             type: 'UPDATE_TASK',
             targetId: t.id,
             payload: {
               name: t.name,
               description: t.description,
               departmentId: t.departmentId,
-              sortOrder: t.sortOrder,
               estimatedDurationMinutes: t.estimatedDurationMinutes,
               estimatedDurationValue: t.estimatedDurationValue,
               estimatedDurationUnit: t.estimatedDurationUnit,
@@ -1294,7 +1483,7 @@ export class ProductionTemplateEditingNormalizer {
           });
         }
       } else if (!t.isNew && t.isDeleted) {
-        normalizedOperations.push({
+        taskDeletes.push({
           type: 'DELETE_TASK',
           targetId: t.id,
         });
@@ -1320,18 +1509,17 @@ export class ProductionTemplateEditingNormalizer {
       }
 
       if (m.isNew && !m.isDeleted) {
-        normalizedOperations.push({
+        materialAdds.push({
           type: m.parentType === 'STAGE' ? 'ADD_STAGE_MATERIAL' : 'ADD_TASK_MATERIAL',
           parentId: m.parentId,
           payload: {
             productId: m.productId,
             productUnitId: m.productUnitId,
             plannedQuantity: m.plannedQuantity,
-            notes: m.notes ?? null,
           },
         });
       } else if (!m.isNew && m.isDeleted) {
-        normalizedOperations.push({
+        materialDeletes.push({
           type: m.parentType === 'STAGE' ? 'DELETE_STAGE_MATERIAL' : 'DELETE_TASK_MATERIAL',
           targetId: m.id,
         });
@@ -1357,7 +1545,7 @@ export class ProductionTemplateEditingNormalizer {
       }
 
       if (a.isNew && !a.isDeleted) {
-        normalizedOperations.push({
+        attachmentAdds.push({
           type: a.parentType === 'STAGE' ? 'ADD_STAGE_ATTACHMENT' : 'ADD_TASK_ATTACHMENT',
           parentId: a.parentId,
           payload: {
@@ -1368,7 +1556,7 @@ export class ProductionTemplateEditingNormalizer {
           },
         });
       } else if (!a.isNew && a.isDeleted) {
-        normalizedOperations.push({
+        attachmentDeletes.push({
           type: a.parentType === 'STAGE' ? 'DELETE_STAGE_ATTACHMENT' : 'DELETE_TASK_ATTACHMENT',
           targetId: a.id,
         });
@@ -1378,7 +1566,7 @@ export class ProductionTemplateEditingNormalizer {
     // Specs
     for (const [id, s] of specsMap.entries()) {
       if (s.isNew && !s.isDeleted) {
-        normalizedOperations.push({
+        specAdds.push({
           type: 'ADD_SPEC',
           payload: {
             name: s.name,
@@ -1390,7 +1578,7 @@ export class ProductionTemplateEditingNormalizer {
       } else if (!s.isNew && !s.isDeleted) {
         const base = baseSpecs.find((b) => b.id === id);
         if (base && (s.name !== base.name || s.value !== base.value || s.unit !== base.unit)) {
-          normalizedOperations.push({
+          specUpdates.push({
             type: 'UPDATE_SPEC',
             targetId: s.id,
             payload: {
@@ -1401,7 +1589,7 @@ export class ProductionTemplateEditingNormalizer {
           });
         }
       } else if (!s.isNew && s.isDeleted) {
-        normalizedOperations.push({
+        specDeletes.push({
           type: 'DELETE_SPEC',
           targetId: s.id,
         });
@@ -1415,12 +1603,50 @@ export class ProductionTemplateEditingNormalizer {
         .filter((o) => !o.isDeleted && o.patternId === patternId)
         .sort((a, b) => a.sortOrder - b.sortOrder);
 
-      let orderChanged = false;
+      // Compact active options sort orders to dense 1..N
+      activeOpts.forEach((o, idx) => {
+        o.sortOrder = idx + 1;
+      });
+
       const baseOptsForPat = baseOptions
         .filter((b) => b.patternId === patternId)
         .sort((a, b) => a.sortOrder - b.sortOrder);
 
-      if (activeOpts.length === baseOptsForPat.length) {
+      let orderChanged = false;
+      if (activeOpts.length !== baseOptsForPat.length) {
+        for (const o of activeOpts) {
+          const base = baseOptsForPat.find((b) => b.id === o.id);
+          if (base && base.sortOrder !== o.sortOrder) {
+            orderChanged = true;
+            break;
+          }
+        }
+        if (!orderChanged) {
+          const survivingBaseIds = baseOptsForPat
+            .filter((b) => activeOpts.some((o) => o.id === b.id))
+            .map((b) => b.id);
+          const activeBaseIds = activeOpts
+            .filter((o) => !o.isNew)
+            .map((o) => o.id);
+          for (let i = 0; i < survivingBaseIds.length; i++) {
+            if (survivingBaseIds[i] !== activeBaseIds[i]) {
+              orderChanged = true;
+              break;
+            }
+          }
+        }
+        if (!orderChanged) {
+          let seenNew = false;
+          for (const o of activeOpts) {
+            if (o.isNew) {
+              seenNew = true;
+            } else if (seenNew) {
+              orderChanged = true;
+              break;
+            }
+          }
+        }
+      } else {
         for (let i = 0; i < activeOpts.length; i++) {
           if (activeOpts[i].id !== baseOptsForPat[i].id) {
             orderChanged = true;
@@ -1428,8 +1654,9 @@ export class ProductionTemplateEditingNormalizer {
           }
         }
       }
+
       if (orderChanged && activeOpts.length > 1) {
-        normalizedOperations.push({
+        reorders.push({
           type: 'REORDER_PATTERN_OPTIONS',
           targetId: patternId,
           payload: {
@@ -1449,12 +1676,50 @@ export class ProductionTemplateEditingNormalizer {
         .filter((t) => !t.isDeleted && t.optionId === optionId)
         .sort((a, b) => a.sortOrder - b.sortOrder);
 
-      let orderChanged = false;
+      // Compact active tasks sort orders to dense 1..N
+      activeTasks.forEach((t, idx) => {
+        t.sortOrder = idx + 1;
+      });
+
       const baseTasksForOpt = baseTasks
         .filter((b) => b.optionId === optionId)
         .sort((a, b) => a.sortOrder - b.sortOrder);
 
-      if (activeTasks.length === baseTasksForOpt.length) {
+      let orderChanged = false;
+      if (activeTasks.length !== baseTasksForOpt.length) {
+        for (const t of activeTasks) {
+          const base = baseTasksForOpt.find((b) => b.id === t.id);
+          if (base && base.sortOrder !== t.sortOrder) {
+            orderChanged = true;
+            break;
+          }
+        }
+        if (!orderChanged) {
+          const survivingBaseIds = baseTasksForOpt
+            .filter((b) => activeTasks.some((t) => t.id === b.id))
+            .map((b) => b.id);
+          const activeBaseIds = activeTasks
+            .filter((t) => !t.isNew)
+            .map((t) => t.id);
+          for (let i = 0; i < survivingBaseIds.length; i++) {
+            if (survivingBaseIds[i] !== activeBaseIds[i]) {
+              orderChanged = true;
+              break;
+            }
+          }
+        }
+        if (!orderChanged) {
+          let seenNew = false;
+          for (const t of activeTasks) {
+            if (t.isNew) {
+              seenNew = true;
+            } else if (seenNew) {
+              orderChanged = true;
+              break;
+            }
+          }
+        }
+      } else {
         for (let i = 0; i < activeTasks.length; i++) {
           if (activeTasks[i].id !== baseTasksForOpt[i].id) {
             orderChanged = true;
@@ -1462,8 +1727,9 @@ export class ProductionTemplateEditingNormalizer {
           }
         }
       }
+
       if (orderChanged && activeTasks.length > 1) {
-        normalizedOperations.push({
+        reorders.push({
           type: 'REORDER_OPTION_TASKS',
           targetId: optionId,
           payload: {
@@ -1478,23 +1744,85 @@ export class ProductionTemplateEditingNormalizer {
       .filter((w) => !w.isDeleted)
       .sort((a, b) => a.sortOrder - b.sortOrder);
 
+    // Compact workflow items sort orders to dense 1..N
+    activeWfItems.forEach((w, idx) => {
+      w.sortOrder = idx + 1;
+    });
+
     let wfOrderChanged = false;
-    for (const [id, w] of wfMap.entries()) {
-      if (!w.isNew && !w.isDeleted) {
-        const base = baseWf.find((b) => b.id === id);
-        if (base && w.sortOrder !== base.sortOrder) {
+    if (activeWfItems.length !== baseWf.length) {
+      for (const w of activeWfItems) {
+        const base = baseWf.find((b) => b.id === w.id);
+        if (base && base.sortOrder !== w.sortOrder) {
+          wfOrderChanged = true;
+          break;
+        }
+      }
+      if (!wfOrderChanged) {
+        const survivingBaseIds = baseWf
+          .filter((b) => activeWfItems.some((w) => w.id === b.id))
+          .map((b) => b.id);
+        const activeBaseIds = activeWfItems
+          .filter((w) => !w.isNew)
+          .map((w) => w.id);
+        for (let i = 0; i < survivingBaseIds.length; i++) {
+          if (survivingBaseIds[i] !== activeBaseIds[i]) {
+            wfOrderChanged = true;
+            break;
+          }
+        }
+      }
+      if (!wfOrderChanged) {
+        let seenNew = false;
+        for (const w of activeWfItems) {
+          if (w.isNew) {
+            seenNew = true;
+          } else if (seenNew) {
+            wfOrderChanged = true;
+            break;
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < activeWfItems.length; i++) {
+        if (activeWfItems[i].id !== baseWf[i].id) {
           wfOrderChanged = true;
           break;
         }
       }
     }
+
     if (wfOrderChanged && activeWfItems.length > 1) {
       const finalWorkflowItemIds = activeWfItems.map((w) => (w.isNew ? w.targetId : w.id));
-      normalizedOperations.push({
+      reorders.push({
         type: 'REORDER_WORKFLOW',
         payload: { itemIds: finalWorkflowItemIds },
       });
     }
+
+    // Strictly ordered normalized operations:
+    const normalizedOperations: TemplateEditingOperationDto[] = [
+      ...stageAdds,
+      ...patternAdds,
+      ...optionAdds,
+      ...taskAdds,
+      ...materialDeletes,
+      ...attachmentDeletes,
+      ...materialAdds,
+      ...attachmentAdds,
+      ...specAdds,
+      ...stageUpdates,
+      ...patternUpdates,
+      ...optionUpdates,
+      ...taskUpdates,
+      ...specUpdates,
+      ...taskDeletes,
+      ...optionDeletes,
+      ...stageDeletes,
+      ...patternDeletes,
+      ...specDeletes,
+      ...reorders,
+    ];
 
     const hasEffectiveChanges = normalizedOperations.length > 0;
     let finalClassification: 'STRUCTURAL' | 'MINOR' | 'NONE' = 'NONE';

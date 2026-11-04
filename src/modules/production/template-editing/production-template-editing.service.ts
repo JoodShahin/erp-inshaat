@@ -593,6 +593,13 @@ export class ProductionTemplateEditingService {
       }
 
       case 'UPDATE_OPTION': {
+        const payload = op.payload || {};
+        if (payload.sortOrder !== undefined) {
+          throw new BusinessRuleError(
+            'لا يمكن تعديل ترتيب الخيار عبر UPDATE_OPTION. استخدم REORDER_PATTERN_OPTIONS بدلاً من ذلك.',
+            'PRODUCTION_TEMPLATE_OPTION_REORDER_OPERATION_REQUIRED'
+          );
+        }
         const optionId = resolveId(op.targetId);
         const option = await optionRepo.findOne({
           where: { id: optionId, deletedAt: IsNull() },
@@ -608,7 +615,6 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`الخيار المستهدف للتعديل غير موجود أو لا ينتمي لهذا الإصدار: ${optionId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_NOT_FOUND');
         }
 
-        const payload = op.payload || {};
         if (payload.name !== undefined) option.name = payload.name.trim();
         await optionRepo.save(option);
         break;
@@ -684,6 +690,13 @@ export class ProductionTemplateEditingService {
       }
 
       case 'UPDATE_TASK': {
+        const payload = op.payload || {};
+        if (payload.sortOrder !== undefined) {
+          throw new BusinessRuleError(
+            'لا يمكن تعديل ترتيب المهمة عبر UPDATE_TASK. استخدم REORDER_OPTION_TASKS بدلاً من ذلك.',
+            'PRODUCTION_TEMPLATE_TASK_REORDER_OPERATION_REQUIRED'
+          );
+        }
         const taskId = resolveId(op.targetId);
         const task = await taskRepo.findOne({
           where: { id: taskId, deletedAt: IsNull() },
@@ -701,7 +714,6 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`المهمة المستهدفة للتعديل غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
         }
 
-        const payload = op.payload || {};
         if (payload.departmentId !== undefined) {
           await this.departmentService.validateDepartmentForStage(payload.departmentId);
           task.departmentId = payload.departmentId;

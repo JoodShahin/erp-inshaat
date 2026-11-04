@@ -32,6 +32,7 @@ import { productionTemplateApiRouter } from '../src/modules/production/template/
 import { productionTemplateReferenceFileStorageService } from '../src/modules/production/template/production-template-reference-file-storage.service.js';
 import { SystemPermission } from '../src/modules/system/permission/constants/system-permission.enum.js';
 import { canonicalizeLineConfiguration, hashLineConfiguration } from '../src/modules/production/order-line/production-order-line-configuration.helper.js';
+import { areDecimalQuantitiesEqual } from '../src/modules/production/template-editing/production-template-editing-normalizer.js';
 
 describe('Production Template Versioning & Atomic Editing Integration Suite', () => {
   let templateService: ProductionTemplateService;
@@ -2943,6 +2944,1171 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual(specs[0].name, 'مواصفة التحمل النهائي');
       assert.strictEqual(specs[0].value, '450 كجم/سم2');
       assert.strictEqual(specs[0].unit, 'كجم/سم2');
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 14. Batch B Semantic Editing, Reordering & Materials Integrity Verification
+  // ------------------------------------------------------------------------
+  describe('14. Batch B Semantic Editing, Reordering & Materials Integrity Verification', () => {
+    it('B-T1.1: Reorder options only results in MINOR change and persists', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب فحص ترتيب الخيارات',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط الترتيب' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار أ' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o2', payload: { name: 'خيار ب' } },
+          ],
+        },
+        testUserId
+      );
+
+      const p1Id = initCommit.tempClientMap['p1'];
+      const o1Id = initCommit.tempClientMap['o1'];
+      const o2Id = initCommit.tempClientMap['o2'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Preview reorder only
+      const preview = await editingService.previewEditingSession(template.id, {
+        baseVersionId: vLatest.id,
+        baseRevision: rev,
+        operations: [
+          {
+            type: 'REORDER_PATTERN_OPTIONS',
+            targetId: p1Id,
+            payload: { optionIds: [o2Id, o1Id] },
+          },
+        ],
+      });
+      assert.strictEqual(preview.classification, 'MINOR');
+      assert.strictEqual(preview.isNewVersionMandatory, false);
+
+      // Commit reorder
+      const reorderCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'REORDER_PATTERN_OPTIONS',
+              targetId: p1Id,
+              payload: { optionIds: [o2Id, o1Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+      assert.strictEqual(reorderCommit.changeType, 'MINOR');
+
+      // Reload and verify
+      const detail = await templateService.getTemplateById(template.id, reorderCommit.targetVersionId);
+      const pat = detail.patterns.find((p) => p.id === p1Id)!;
+      assert.strictEqual(pat.options[0].id, o2Id);
+      assert.strictEqual(pat.options[0].sortOrder, 1);
+      assert.strictEqual(pat.options[1].id, o1Id);
+      assert.strictEqual(pat.options[1].sortOrder, 2);
+    });
+
+    it('B-T1.2: Reorder tasks only results in MINOR change and persists', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب فحص ترتيب المهام',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط مهام' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار المهام' } },
+            { type: 'ADD_TASK', parentId: 'o1', tempClientId: 't1', payload: { name: 'مهمة 1', departmentId: testDepartmentId } },
+            { type: 'ADD_TASK', parentId: 'o1', tempClientId: 't2', payload: { name: 'مهمة 2', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const o1Id = initCommit.tempClientMap['o1'];
+      const t1Id = initCommit.tempClientMap['t1'];
+      const t2Id = initCommit.tempClientMap['t2'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Preview reorder only
+      const preview = await editingService.previewEditingSession(template.id, {
+        baseVersionId: vLatest.id,
+        baseRevision: rev,
+        operations: [
+          {
+            type: 'REORDER_OPTION_TASKS',
+            targetId: o1Id,
+            payload: { taskIds: [t2Id, t1Id] },
+          },
+        ],
+      });
+      assert.strictEqual(preview.classification, 'MINOR');
+
+      // Commit
+      const commitRes = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'REORDER_OPTION_TASKS',
+              targetId: o1Id,
+              payload: { taskIds: [t2Id, t1Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+      assert.strictEqual(commitRes.changeType, 'MINOR');
+
+      const detail = await templateService.getTemplateById(template.id, commitRes.targetVersionId);
+      const opt = detail.patterns[0].options[0];
+      assert.strictEqual(opt.tasks[0].id, t2Id);
+      assert.strictEqual(opt.tasks[0].sortOrder, 1);
+      assert.strictEqual(opt.tasks[1].id, t1Id);
+      assert.strictEqual(opt.tasks[1].sortOrder, 2);
+    });
+
+    it('B-T1.3: Reorder workflow only persists on reload', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب سير العمل المحدث',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'المرحلة الأولى', departmentId: testDepartmentId } },
+            { type: 'ADD_STAGE', tempClientId: 's2', payload: { name: 'المرحلة الثانية', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const s1Id = initCommit.tempClientMap['s1'];
+      const s2Id = initCommit.tempClientMap['s2'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Reorder workflow: s2 before s1
+      const reorderCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'REORDER_WORKFLOW',
+              payload: { itemIds: [s2Id, s1Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+      assert.strictEqual(reorderCommit.changeType, 'MINOR');
+
+      const detail = await templateService.getTemplateById(template.id, reorderCommit.targetVersionId);
+      assert.strictEqual(detail.workflowItems.length, 2);
+      assert.strictEqual(detail.workflowItems[0].stageId, s2Id);
+      assert.strictEqual(detail.workflowItems[0].sortOrder, 1);
+      assert.strictEqual(detail.workflowItems[1].stageId, s1Id);
+      assert.strictEqual(detail.workflowItems[1].sortOrder, 2);
+    });
+
+    it('B-T1.4: Add option then reorder creates 1 new version with matching order', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب إضافة وترتيب خيار',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط تجربة' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار 1' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o2', payload: { name: 'خيار 2' } },
+          ],
+        },
+        testUserId
+      );
+
+      const p1Id = initCommit.tempClientMap['p1'];
+      const o1Id = initCommit.tempClientMap['o1'];
+      const o2Id = initCommit.tempClientMap['o2'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Single session: Add Option 3, and reorder to [opt3, opt1, opt2]
+      const secondCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_OPTION', parentId: p1Id, tempClientId: 'opt3', payload: { name: 'خيار 3' } },
+            {
+              type: 'REORDER_PATTERN_OPTIONS',
+              targetId: p1Id,
+              payload: { optionIds: ['opt3', o1Id, o2Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(secondCommit.createdNewVersion, true);
+      assert.strictEqual(secondCommit.targetVersionNumber, '1.2');
+
+      const detail = await templateService.getTemplateById(template.id, secondCommit.targetVersionId);
+      const pat = detail.patterns[0];
+      assert.strictEqual(pat.options.length, 3);
+      assert.strictEqual(pat.options[0].name, 'خيار 3');
+      assert.strictEqual(pat.options[0].sortOrder, 1);
+      assert.strictEqual(pat.options[1].name, 'خيار 1');
+      assert.strictEqual(pat.options[1].sortOrder, 2);
+      assert.strictEqual(pat.options[2].name, 'خيار 2');
+      assert.strictEqual(pat.options[2].sortOrder, 3);
+    });
+
+    it('B-T1.5: Delete option then reorder creates 1 new version with dense order', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب حذف وترتيب خيار',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط خيارات 3' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار أ' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o2', payload: { name: 'خيار ب' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o3', payload: { name: 'خيار ج' } },
+          ],
+        },
+        testUserId
+      );
+
+      const p1Id = initCommit.tempClientMap['p1'];
+      const o1Id = initCommit.tempClientMap['o1'];
+      const o2Id = initCommit.tempClientMap['o2'];
+      const o3Id = initCommit.tempClientMap['o3'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Single session: Delete o2, reorder to [o3, o1]
+      const secondCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'DELETE_OPTION', targetId: o2Id },
+            {
+              type: 'REORDER_PATTERN_OPTIONS',
+              targetId: p1Id,
+              payload: { optionIds: [o3Id, o1Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(secondCommit.createdNewVersion, true);
+      assert.strictEqual(secondCommit.targetVersionNumber, '1.2');
+
+      const detail = await templateService.getTemplateById(template.id, secondCommit.targetVersionId);
+      const pat = detail.patterns[0];
+      assert.strictEqual(pat.options.length, 2);
+      assert.strictEqual(pat.options[0].name, 'خيار ج');
+      assert.strictEqual(pat.options[0].sortOrder, 1);
+      assert.strictEqual(pat.options[1].name, 'خيار أ');
+      assert.strictEqual(pat.options[1].sortOrder, 2);
+    });
+
+    it('B-T1.6: Add task + delete task + reorder creates exact dense order', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب مهام كثيفة',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
+            { type: 'ADD_TASK', parentId: 'o1', tempClientId: 't1', payload: { name: 'مهمة أولى', departmentId: testDepartmentId } },
+            { type: 'ADD_TASK', parentId: 'o1', tempClientId: 't2', payload: { name: 'مهمة ثانية', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const o1Id = initCommit.tempClientMap['o1'];
+      const t1Id = initCommit.tempClientMap['t1'];
+      const t2Id = initCommit.tempClientMap['t2'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Single session: Delete t1, Add t3, Reorder to [t3, t2]
+      const secondCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'DELETE_TASK', targetId: t1Id },
+            { type: 'ADD_TASK', parentId: o1Id, tempClientId: 't3', payload: { name: 'مهمة ثالثة', departmentId: testDepartmentId } },
+            {
+              type: 'REORDER_OPTION_TASKS',
+              targetId: o1Id,
+              payload: { taskIds: ['t3', t2Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(secondCommit.createdNewVersion, true);
+
+      const detail = await templateService.getTemplateById(template.id, secondCommit.targetVersionId);
+      const opt = detail.patterns[0].options[0];
+      assert.strictEqual(opt.tasks.length, 2);
+      assert.strictEqual(opt.tasks[0].name, 'مهمة ثالثة');
+      assert.strictEqual(opt.tasks[0].sortOrder, 1);
+      assert.strictEqual(opt.tasks[1].name, 'مهمة ثانية');
+      assert.strictEqual(opt.tasks[1].sortOrder, 2);
+    });
+
+    it('B-T1.7: Add stage + reorder workflow places stage in correct position', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب إضافة مرحلة وترتيب سير العمل',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'مرحلة قديمة', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const s1Id = initCommit.tempClientMap['s1'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Single session: Add s2, reorder workflow to [s2, s1]
+      const secondCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 's2', payload: { name: 'مرحلة سابقة', departmentId: testDepartmentId } },
+            {
+              type: 'REORDER_WORKFLOW',
+              payload: { itemIds: ['s2', s1Id] },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(secondCommit.createdNewVersion, true);
+
+      const detail = await templateService.getTemplateById(template.id, secondCommit.targetVersionId);
+      assert.strictEqual(detail.workflowItems.length, 2);
+      assert.strictEqual(detail.workflowItems[0].stage?.name, 'مرحلة سابقة');
+      assert.strictEqual(detail.workflowItems[0].sortOrder, 1);
+      assert.strictEqual(detail.workflowItems[1].stage?.name, 'مرحلة قديمة');
+      assert.strictEqual(detail.workflowItems[1].sortOrder, 2);
+    });
+
+    it('B-T1.8: Reorder then restore original returns NONE diff', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب إعادة الترتيب والإلغاء',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار 1' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o2', payload: { name: 'خيار 2' } },
+          ],
+        },
+        testUserId
+      );
+
+      const p1Id = initCommit.tempClientMap['p1'];
+      const o1Id = initCommit.tempClientMap['o1'];
+      const o2Id = initCommit.tempClientMap['o2'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Reorder to [o2, o1], then revert back to [o1, o2]
+      const preview = await editingService.previewEditingSession(template.id, {
+        baseVersionId: vLatest.id,
+        baseRevision: rev,
+        operations: [
+          {
+            type: 'REORDER_PATTERN_OPTIONS',
+            targetId: p1Id,
+            payload: { optionIds: [o2Id, o1Id] },
+          },
+          {
+            type: 'REORDER_PATTERN_OPTIONS',
+            targetId: p1Id,
+            payload: { optionIds: [o1Id, o2Id] },
+          },
+        ],
+      });
+
+      assert.strictEqual(preview.classification, 'NONE');
+      assert.strictEqual(preview.effectiveChangesCount, 0);
+    });
+
+    it('B-T2.1: UPDATE_OPTION with sortOrder is rejected with PRODUCTION_TEMPLATE_OPTION_REORDER_OPERATION_REQUIRED', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب فحص حظر تعديل ترتيب الخيار',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
+          ],
+        },
+        testUserId
+      );
+
+      const o1Id = initCommit.tempClientMap['o1'];
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            template.id,
+            {
+              baseVersionId: vLatest.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'UPDATE_OPTION',
+                  targetId: o1Id,
+                  payload: { name: 'تعديل', sortOrder: 5 },
+                },
+              ],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_OPTION_REORDER_OPERATION_REQUIRED');
+          return true;
+        }
+      );
+    });
+
+    it('B-T2.2: UPDATE_TASK with sortOrder is rejected with PRODUCTION_TEMPLATE_TASK_REORDER_OPERATION_REQUIRED', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب فحص حظر تعديل ترتيب المهمة',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
+            { type: 'ADD_TASK', parentId: 'o1', tempClientId: 't1', payload: { name: 'مهمة', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const t1Id = initCommit.tempClientMap['t1'];
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            template.id,
+            {
+              baseVersionId: vLatest.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'UPDATE_TASK',
+                  targetId: t1Id,
+                  payload: { name: 'مهمة معدلة', sortOrder: 3 },
+                },
+              ],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_TASK_REORDER_OPERATION_REQUIRED');
+          return true;
+        }
+      );
+    });
+
+    it('B-T3.1: Replace stage material executes DELETE before ADD without MySQL unique key conflict', async () => {
+      const prodRows: any[] = await AppDataSource.query(
+        `SELECT p.id as productId, u.id as unitId 
+         FROM inventory_product p 
+         JOIN inventory_product_unit u ON u.product_id = p.id 
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 
+         LIMIT 1`
+      );
+      assert.ok(prodRows.length > 0);
+      const { productId, unitId } = prodRows[0];
+
+      const template = await templateService.createTemplate({
+        name: 'قالب استبدال مادة المرحلة',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      // Add stage with initial material
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'مرحلة العزل', departmentId: testDepartmentId } },
+            {
+              type: 'ADD_STAGE_MATERIAL',
+              parentId: 's1',
+              payload: { productId, productUnitId: unitId, plannedQuantity: '5.000000' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const s1Id = initCommit.tempClientMap['s1'];
+      const stageMatRepo = AppDataSource.getRepository(ProductionTemplateStageMaterialEntity);
+      const initialMat = await stageMatRepo.findOneOrFail({ where: { stageId: s1Id } });
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Replace material for the exact same product & unit in a single session
+      // Even if client passes ADD before DELETE, normalizer ensures DELETE executes first
+      const replaceCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE_MATERIAL',
+              parentId: s1Id,
+              payload: { productId, productUnitId: unitId, plannedQuantity: '20.000000' },
+            },
+            {
+              type: 'DELETE_STAGE_MATERIAL',
+              targetId: initialMat.id,
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(replaceCommit.createdNewVersion, true);
+
+      // Verify DB has exactly 1 material with 20.000000
+      const detail = await templateService.getTemplateById(template.id, replaceCommit.targetVersionId);
+      const newStage = detail.stages[0];
+      const finalMats = await stageMatRepo.find({ where: { stageId: newStage.id } });
+      assert.strictEqual(finalMats.length, 1);
+      assert.strictEqual(Number(finalMats[0].plannedQuantity), 20);
+    });
+
+    it('B-T3.2: Replace task material executes DELETE before ADD without MySQL unique key conflict', async () => {
+      const prodRows: any[] = await AppDataSource.query(
+        `SELECT p.id as productId, u.id as unitId 
+         FROM inventory_product p 
+         JOIN inventory_product_unit u ON u.product_id = p.id 
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 
+         LIMIT 1`
+      );
+      assert.ok(prodRows.length > 0);
+      const { productId, unitId } = prodRows[0];
+
+      const template = await templateService.createTemplate({
+        name: 'قالب استبدال مادة المهمة',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
+            { type: 'ADD_TASK', parentId: 'o1', tempClientId: 't1', payload: { name: 'مهمة', departmentId: testDepartmentId } },
+            {
+              type: 'ADD_TASK_MATERIAL',
+              parentId: 't1',
+              payload: { productId, productUnitId: unitId, plannedQuantity: '8.000000' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const t1Id = initCommit.tempClientMap['t1'];
+      const taskMatRepo = AppDataSource.getRepository(ProductionTemplatePatternOptionTaskMaterialEntity);
+      const initialMat = await taskMatRepo.findOneOrFail({ where: { taskId: t1Id } });
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Replace task material in single session
+      const replaceCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_TASK_MATERIAL',
+              parentId: t1Id,
+              payload: { productId, productUnitId: unitId, plannedQuantity: '35.000000' },
+            },
+            {
+              type: 'DELETE_TASK_MATERIAL',
+              targetId: initialMat.id,
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(replaceCommit.createdNewVersion, true);
+
+      const detail = await templateService.getTemplateById(template.id, replaceCommit.targetVersionId);
+      const newTaskId = detail.patterns[0].options[0].tasks[0].id;
+      const finalMats = await taskMatRepo.find({ where: { taskId: newTaskId } });
+      assert.strictEqual(finalMats.length, 1);
+      assert.strictEqual(Number(finalMats[0].plannedQuantity), 35);
+    });
+
+    it('B-T3.3: areDecimalQuantitiesEqual compares DECIMAL(18,6) strings accurately without float bugs', () => {
+      assert.strictEqual(areDecimalQuantitiesEqual('12.5', '12.500000'), true);
+      assert.strictEqual(areDecimalQuantitiesEqual('012.50', '12.500000'), true);
+      assert.strictEqual(areDecimalQuantitiesEqual('0', '0.000000'), true);
+      assert.strictEqual(areDecimalQuantitiesEqual(12.5, '12.500000'), true);
+      assert.strictEqual(areDecimalQuantitiesEqual('12.500001', '12.500000'), false);
+      assert.strictEqual(areDecimalQuantitiesEqual('10', '10.000000'), true);
+      assert.strictEqual(areDecimalQuantitiesEqual(null, ''), true);
+      assert.strictEqual(areDecimalQuantitiesEqual(undefined, null), true);
+    });
+
+    it('B-T3.4: Delete unknown material is rejected with specific error', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب فحص مادة مجهولة',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      const rev = await getRevision(template.id, v1.id);
+      const fakeId = crypto.randomUUID();
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            template.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [{ type: 'DELETE_STAGE_MATERIAL', targetId: fakeId }],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STAGE_MATERIAL_NOT_FOUND');
+          return true;
+        }
+      );
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            template.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [{ type: 'DELETE_TASK_MATERIAL', targetId: fakeId }],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_TASK_MATERIAL_NOT_FOUND');
+          return true;
+        }
+      );
+    });
+
+    it('B-T4.1: Delete unknown attachment is rejected with specific error', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب فحص مرفق مجهول',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      const rev = await getRevision(template.id, v1.id);
+      const fakeId = crypto.randomUUID();
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            template.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [{ type: 'DELETE_STAGE_ATTACHMENT', targetId: fakeId }],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STAGE_ATTACHMENT_NOT_FOUND');
+          return true;
+        }
+      );
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            template.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [{ type: 'DELETE_TASK_ATTACHMENT', targetId: fakeId }],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_TASK_ATTACHMENT_NOT_FOUND');
+          return true;
+        }
+      );
+    });
+
+    it('B-T4.2: Cancel temporary attachment leaves token unconsumed and schedules no cleanup', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب إلغاء المرفق المؤقت',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      // Add stage first
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'المرحلة', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const s1Id = initCommit.tempClientMap['s1'];
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Create upload token
+      const uploadToken = await createTestUploadToken(template.id, testUserId, 'temporary-plan.pdf', true);
+
+      // Add stage attachment then delete it in the same session
+      const cancelCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: s1Id,
+              tempClientId: 'att-temp',
+              payload: { uploadToken },
+            },
+            {
+              type: 'DELETE_STAGE_ATTACHMENT',
+              targetId: 'att-temp',
+            },
+          ],
+        },
+        testUserId
+      );
+
+      // Canceling temporary attachment results in NONE change
+      assert.strictEqual(cancelCommit.changeType, 'NONE');
+      assert.strictEqual(cancelCommit.appliedOperationsCount, 0);
+
+      // Token must NOT be marked as used
+      const tokenRepo = AppDataSource.getRepository(ProductionTemplateUploadTokenEntity);
+      const tokenEntity = await tokenRepo.findOneOrFail({ where: { id: uploadToken } });
+      assert.strictEqual(tokenEntity.isUsed, false);
+
+      // No cleanup queue row should exist for this template's session
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+      const queueRows = await cleanupRepo.find();
+      // Ensure no cleanup row was scheduled for our temporary plan
+      const matching = queueRows.filter((r) => r.storageKey.includes('temporary-plan.pdf'));
+      assert.strictEqual(matching.length, 0);
+    });
+
+    it('B-T5.1: Mixed edits fork exactly 1 new version leaving previous version intact', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب التفرع الذري الموحد',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'مرحلة قديمة', departmentId: testDepartmentId } },
+            { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط قديم' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار مستمر' } },
+            { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o2', payload: { name: 'خيار ملغي' } },
+          ],
+        },
+        testUserId
+      );
+
+      const s1Id = initCommit.tempClientMap['s1'];
+      const p1Id = initCommit.tempClientMap['p1'];
+      const o1Id = initCommit.tempClientMap['o1'];
+      const o2Id = initCommit.tempClientMap['o2'];
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // Mixed session:
+      // 1. UPDATE_STAGE (name)
+      // 2. ADD_STAGE (new structural stage)
+      // 3. DELETE_OPTION (o2)
+      // 4. REORDER_WORKFLOW
+      const mixedCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'UPDATE_STAGE', targetId: s1Id, payload: { name: 'مرحلة محدثة' } },
+            { type: 'ADD_STAGE', tempClientId: 's2', payload: { name: 'مرحلة جديدة تماماً', departmentId: testDepartmentId } },
+            { type: 'DELETE_OPTION', targetId: o2Id },
+            { type: 'REORDER_WORKFLOW', payload: { itemIds: ['s2', p1Id, s1Id] } },
+          ],
+        },
+        testUserId
+      );
+
+      // Verify exactly 1 new version created
+      assert.strictEqual(mixedCommit.createdNewVersion, true);
+      assert.strictEqual(mixedCommit.targetVersionNumber, '1.2');
+
+      // Verify Version 1.0 remains fully intact
+      const detailV1 = await templateService.getTemplateById(template.id, vLatest.id);
+      assert.strictEqual(detailV1.stages.length, 1);
+      assert.strictEqual(detailV1.stages[0].name, 'مرحلة قديمة');
+      assert.strictEqual(detailV1.patterns[0].options.length, 2);
+
+      // Verify Version 1.1 contains all changes accurately
+      const detailV11 = await templateService.getTemplateById(template.id, mixedCommit.targetVersionId);
+      assert.strictEqual(detailV11.stages.length, 2);
+      const stageUpdated = detailV11.stages.find((s) => s.name === 'مرحلة محدثة');
+      const stageNew = detailV11.stages.find((s) => s.name === 'مرحلة جديدة تماماً');
+      assert.ok(stageUpdated && stageNew);
+
+      // Option 2 was deleted in 1.1
+      assert.strictEqual(detailV11.patterns[0].options.length, 1);
+      assert.strictEqual(detailV11.patterns[0].options[0].name, 'خيار مستمر');
+
+      // Workflow ordering verified in 1.1: s2 (sortOrder 1), p1 (sortOrder 2), s1 (sortOrder 3)
+      assert.strictEqual(detailV11.workflowItems.length, 3);
+      assert.strictEqual(detailV11.workflowItems[0].stage?.name, 'مرحلة جديدة تماماً');
+      assert.strictEqual(detailV11.workflowItems[0].sortOrder, 1);
+      assert.strictEqual(detailV11.workflowItems[1].pattern?.name, 'نمط قديم');
+      assert.strictEqual(detailV11.workflowItems[1].sortOrder, 2);
+      assert.strictEqual(detailV11.workflowItems[2].stage?.name, 'مرحلة محدثة');
+      assert.strictEqual(detailV11.workflowItems[2].sortOrder, 3);
+    });
+
+    it('B-T5.2: Comprehensive multi-entity roundtrip test (3 stages, 2 patterns, options, tasks, materials, attachments)', async () => {
+      const prodRows: any[] = await AppDataSource.query(
+        `SELECT p.id as productId, u.id as unitId 
+         FROM inventory_product p 
+         JOIN inventory_product_unit u ON u.product_id = p.id 
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 
+         LIMIT 2`
+      );
+      assert.ok(prodRows.length >= 1);
+      const prod1 = prodRows[0];
+      const prod2 = prodRows.length > 1 ? prodRows[1] : prodRows[0];
+
+      const template = await templateService.createTemplate({
+        name: 'قالب التحقق الدوري الشامل 3 مراحل',
+        description: 'اختبار دورة الحياة الكاملة للقالب',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      const stage1AttToken = await createTestUploadToken(template.id, testUserId, 'spec-stage1.pdf', true);
+      const task1AttToken = await createTestUploadToken(template.id, testUserId, 'spec-task1.pdf', true);
+
+      // 1. Initial Commit on 1.0: 3 Stages, 2 Patterns, Options, Tasks, Materials, Attachments
+      const initCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            // Stage 1
+            { type: 'ADD_STAGE', tempClientId: 'stg-1', payload: { name: 'المرحلة 1: التجهيز', departmentId: testDepartmentId, estimatedCost: '250.0000' } },
+            { type: 'ADD_STAGE_MATERIAL', parentId: 'stg-1', payload: { productId: prod1.productId, productUnitId: prod1.unitId, plannedQuantity: '10.000000' } },
+            { type: 'ADD_STAGE_ATTACHMENT', parentId: 'stg-1', payload: { uploadToken: stage1AttToken } },
+
+            // Stage 2
+            { type: 'ADD_STAGE', tempClientId: 'stg-2', payload: { name: 'المرحلة 2: التصنيع', departmentId: testDepartmentId, estimatedCost: '600.0000' } },
+
+            // Stage 3
+            { type: 'ADD_STAGE', tempClientId: 'stg-3', payload: { name: 'المرحلة 3: الفحص والتسليم', departmentId: testDepartmentId, estimatedCost: '150.0000' } },
+
+            // Pattern 1
+            { type: 'ADD_PATTERN', tempClientId: 'pat-1', payload: { name: 'نمط الهيكل' } },
+            { type: 'ADD_OPTION', parentId: 'pat-1', tempClientId: 'opt-11', payload: { name: 'هيكل حديدي' } },
+            { type: 'ADD_OPTION', parentId: 'pat-1', tempClientId: 'opt-12', payload: { name: 'هيكل خرساني' } },
+            { type: 'ADD_TASK', parentId: 'opt-11', tempClientId: 'tsk-111', payload: { name: 'لحام وتجميع', departmentId: testDepartmentId, estimatedCost: '400.0000' } },
+            { type: 'ADD_TASK_MATERIAL', parentId: 'tsk-111', payload: { productId: prod2.productId, productUnitId: prod2.unitId, plannedQuantity: '5.500000' } },
+            { type: 'ADD_TASK_ATTACHMENT', parentId: 'tsk-111', payload: { uploadToken: task1AttToken } },
+
+            // Pattern 2
+            { type: 'ADD_PATTERN', tempClientId: 'pat-2', payload: { name: 'نمط الطلاء' } },
+            { type: 'ADD_OPTION', parentId: 'pat-2', tempClientId: 'opt-21', payload: { name: 'دهان إيبوكسي' } },
+            { type: 'ADD_TASK', parentId: 'opt-21', tempClientId: 'tsk-211', payload: { name: 'تطبيق الطبقة الأولى', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const stg1Id = initCommit.tempClientMap['stg-1'];
+      const stg2Id = initCommit.tempClientMap['stg-2'];
+      const stg3Id = initCommit.tempClientMap['stg-3'];
+      const pat1Id = initCommit.tempClientMap['pat-1'];
+      const opt11Id = initCommit.tempClientMap['opt-11'];
+      const opt12Id = initCommit.tempClientMap['opt-12'];
+      const tsk111Id = initCommit.tempClientMap['tsk-111'];
+      const pat2Id = initCommit.tempClientMap['pat-2'];
+      const opt21Id = initCommit.tempClientMap['opt-21'];
+      const tsk211Id = initCommit.tempClientMap['tsk-211'];
+
+      // Verify Initial Structure in DB
+      const initDetail = await templateService.getTemplateById(template.id, initCommit.targetVersionId);
+      assert.strictEqual(initDetail.stages.length, 3);
+      assert.strictEqual(initDetail.patterns.length, 2);
+      assert.strictEqual(initDetail.workflowItems.length, 5);
+
+      // Find attachment to delete
+      const stageAttRepo = AppDataSource.getRepository(ProductionTemplateStageAttachmentEntity);
+      const stage1Att = await stageAttRepo.findOneOrFail({ where: { stageId: stg1Id } });
+
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      // 2. Second Session: Complex Multi-Operation Mutation
+      // Adds, deletes, updates, reorders in a single atomic commit
+      const secondCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            // Update Stage 1 Cost
+            { type: 'UPDATE_STAGE', targetId: stg1Id, payload: { estimatedCost: '350.0000' } },
+            // Delete Stage 3
+            { type: 'DELETE_STAGE', targetId: stg3Id },
+            // Reorder Pattern 1 options: opt12 before opt11
+            { type: 'REORDER_PATTERN_OPTIONS', targetId: pat1Id, payload: { optionIds: [opt12Id, opt11Id] } },
+            // Add a task to opt12
+            { type: 'ADD_TASK', parentId: opt12Id, tempClientId: 'tsk-121', payload: { name: 'صب الخرسانة', departmentId: testDepartmentId } },
+            // Delete stage 1 attachment
+            { type: 'DELETE_STAGE_ATTACHMENT', targetId: stage1Att.id },
+            // Reorder workflow: pat2, stg2, pat1, stg1
+            { type: 'REORDER_WORKFLOW', payload: { itemIds: [pat2Id, stg2Id, pat1Id, stg1Id] } },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(secondCommit.createdNewVersion, true);
+      assert.strictEqual(secondCommit.targetVersionNumber, '1.2');
+
+      // 3. Verify Version 1.1 in MySQL
+      const v11Detail = await templateService.getTemplateById(template.id, secondCommit.targetVersionId);
+
+      // Stages: stg3 was deleted, stg1 & stg2 remain
+      assert.strictEqual(v11Detail.stages.length, 2);
+      const finalStg1 = v11Detail.stages.find((s) => s.name === 'المرحلة 1: التجهيز')!;
+      assert.strictEqual(Number(finalStg1.estimatedCost), 350);
+
+      // Stage 1 attachment was deleted
+      const finalStageAtts = await stageAttRepo.find({ where: { stageId: finalStg1.id } });
+      assert.strictEqual(finalStageAtts.length, 0);
+
+      // Pattern 1 Options reordered: opt-12 is sortOrder 1, opt-11 is sortOrder 2
+      const finalPat1 = v11Detail.patterns.find((p) => p.name === 'نمط الهيكل')!;
+      assert.strictEqual(finalPat1.options.length, 2);
+      assert.strictEqual(finalPat1.options[0].name, 'هيكل خرساني');
+      assert.strictEqual(finalPat1.options[0].sortOrder, 1);
+      assert.strictEqual(finalPat1.options[1].name, 'هيكل حديدي');
+      assert.strictEqual(finalPat1.options[1].sortOrder, 2);
+
+      // New task added to opt-12 exists
+      assert.strictEqual(finalPat1.options[0].tasks.length, 1);
+      assert.strictEqual(finalPat1.options[0].tasks[0].name, 'صب الخرسانة');
+
+      // Workflow items compacted to dense 1..4 in specified order: pat2, stg2, pat1, stg1
+      const finalWf = v11Detail.workflowItems;
+      assert.strictEqual(finalWf.length, 4);
+      assert.strictEqual(finalWf[0].pattern?.name, 'نمط الطلاء');
+      assert.strictEqual(finalWf[0].sortOrder, 1);
+      assert.strictEqual(finalWf[1].stage?.name, 'المرحلة 2: التصنيع');
+      assert.strictEqual(finalWf[1].sortOrder, 2);
+      assert.strictEqual(finalWf[2].pattern?.name, 'نمط الهيكل');
+      assert.strictEqual(finalWf[2].sortOrder, 3);
+      assert.strictEqual(finalWf[3].stage?.name, 'المرحلة 1: التجهيز');
+      assert.strictEqual(finalWf[3].sortOrder, 4);
     });
   });
 });
