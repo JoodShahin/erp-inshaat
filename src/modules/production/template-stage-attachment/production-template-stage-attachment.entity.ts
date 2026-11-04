@@ -10,6 +10,7 @@ import {
   Index,
 } from 'typeorm';
 import { ProductionTemplateStageEntity } from '../template-stage/production-template-stage.entity.js';
+import { ProductionTemplateStoredFileEntity } from '../template-stored-file/production-template-stored-file.entity.js';
 import { UserEntity } from '../../system/user/user.entity.js';
 
 @Entity('production_template_stage_attachment')
@@ -21,11 +22,15 @@ export class ProductionTemplateStageAttachmentEntity {
   @Column({ name: 'stage_id', type: 'varchar', length: 36 })
   stageId!: string;
 
+  @Index('IDX_production_template_stage_attachment_file_id')
+  @Column({ name: 'file_id', type: 'varchar', length: 36, nullable: true })
+  fileId!: string | null;
+
   @Column({ name: 'original_file_name', type: 'varchar', length: 255 })
   originalFileName!: string;
 
-  @Index('IDX_production_template_stage_attachment_storage_key', { unique: true })
-  @Column({ name: 'storage_key', type: 'varchar', length: 500, unique: true })
+  @Index('IDX_production_template_stage_attachment_storage_key')
+  @Column({ name: 'storage_key', type: 'varchar', length: 500 })
   storageKey!: string;
 
   @Column({ name: 'mime_type', type: 'varchar', length: 100 })
@@ -62,6 +67,15 @@ export class ProductionTemplateStageAttachmentEntity {
   })
   @JoinColumn({ name: 'stage_id' })
   stage?: ProductionTemplateStageEntity;
+
+  @ManyToOne(() => ProductionTemplateStoredFileEntity, {
+    onDelete: 'RESTRICT',
+    onUpdate: 'RESTRICT',
+    eager: false,
+    nullable: true,
+  })
+  @JoinColumn({ name: 'file_id' })
+  storedFile?: ProductionTemplateStoredFileEntity | null;
 
   @ManyToOne(() => UserEntity, {
     onDelete: 'SET NULL',

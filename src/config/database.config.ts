@@ -59,6 +59,8 @@ import { AddAvailablePatternOptionsToExecutionPlan1710000000019 } from '../datab
 import { AddTaskDurationUnitFields1710000000020 } from '../database/migrations/1710000000020-AddTaskDurationUnitFields.js';
 import { MakeProductionUnitOrderNullable1710000000022 } from '../database/migrations/1710000000022-MakeProductionUnitOrderNullable.js';
 import { CreateProductionTemplateVersionAndSequence1710000000023 } from '../database/migrations/1710000000023-CreateProductionTemplateVersionAndSequence.js';
+import { CreateProductionTemplateStoredFiles1710000000024 } from '../database/migrations/1710000000024-CreateProductionTemplateStoredFiles.js';
+import { ProductionTemplateStoredFileEntity } from '../modules/production/template-stored-file/production-template-stored-file.entity.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -96,6 +98,7 @@ export const databaseConfig: DataSourceOptions = {
     ProductionTemplatePatternOptionTaskEntity,
     ProductionTemplatePatternOptionTaskMaterialEntity,
     ProductionTemplatePatternOptionTaskAttachmentEntity,
+    ProductionTemplateStoredFileEntity,
     ProductionOrderSequenceEntity,
     ProductionOrderEntity,
     ProductionOrderLineEntity,
@@ -131,6 +134,7 @@ export const databaseConfig: DataSourceOptions = {
     CreateProductionYardTemplate1710000000021,
     MakeProductionUnitOrderNullable1710000000022,
     CreateProductionTemplateVersionAndSequence1710000000023,
+    CreateProductionTemplateStoredFiles1710000000024,
   ],
   subscribers: [],
 };

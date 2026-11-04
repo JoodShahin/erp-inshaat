@@ -10,6 +10,7 @@ import {
   Index,
 } from 'typeorm';
 import { ProductionTemplatePatternOptionTaskEntity } from '../template-pattern-option-task/production-template-pattern-option-task.entity.js';
+import { ProductionTemplateStoredFileEntity } from '../template-stored-file/production-template-stored-file.entity.js';
 import { UserEntity } from '../../system/user/user.entity.js';
 
 @Entity('production_template_pattern_option_task_attachment')
@@ -21,10 +22,14 @@ export class ProductionTemplatePatternOptionTaskAttachmentEntity {
   @Column({ name: 'task_id', type: 'varchar', length: 36 })
   taskId!: string;
 
+  @Index('IDX_production_pattern_task_attachment_file_id')
+  @Column({ name: 'file_id', type: 'varchar', length: 36, nullable: true })
+  fileId!: string | null;
+
   @Column({ name: 'original_file_name', type: 'varchar', length: 255 })
   originalFileName!: string;
 
-  @Index('UQ_production_pattern_task_attachment_storage_key', { unique: true })
+  @Index('IDX_production_pattern_task_attachment_storage_key')
   @Column({ name: 'storage_key', type: 'varchar', length: 500 })
   storageKey!: string;
 
@@ -62,10 +67,20 @@ export class ProductionTemplatePatternOptionTaskAttachmentEntity {
   @JoinColumn({ name: 'task_id' })
   task?: ProductionTemplatePatternOptionTaskEntity;
 
+  @ManyToOne(() => ProductionTemplateStoredFileEntity, {
+    onDelete: 'RESTRICT',
+    onUpdate: 'RESTRICT',
+    eager: false,
+    nullable: true,
+  })
+  @JoinColumn({ name: 'file_id' })
+  storedFile?: ProductionTemplateStoredFileEntity | null;
+
   @ManyToOne(() => UserEntity, {
     onDelete: 'SET NULL',
     onUpdate: 'CASCADE',
     eager: false,
+    nullable: true,
   })
   @JoinColumn({ name: 'created_by_user_id' })
   createdByUser?: UserEntity;
