@@ -167,11 +167,18 @@ export class ProductionTemplateService {
         targetVersionEntity = await this.versionService.getLatestVersion(id);
       }
       resolvedVersionId = targetVersionEntity.id;
+      let revision: string | undefined;
+      try {
+        revision = await this.versionService.computeVersionRevision(id, targetVersionEntity.id);
+      } catch {
+        revision = undefined;
+      }
       currentVersion = {
         id: targetVersionEntity.id,
         version: targetVersionEntity.version,
         isLatest: targetVersionEntity.id === versionList[0]?.id,
         createdAt: targetVersionEntity.createdAt,
+        revision,
       };
     } catch (err) {
       if (versionId) {
@@ -218,6 +225,7 @@ export class ProductionTemplateService {
       isActive: template.isActive,
       createdAt: template.createdAt,
       updatedAt: template.updatedAt,
+      revision: currentVersion?.revision,
       currentVersion,
       versions,
       specifications,

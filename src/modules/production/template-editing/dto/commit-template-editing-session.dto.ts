@@ -4,6 +4,8 @@ import {
   IsUUID,
   IsOptional,
   IsArray,
+  ArrayMinSize,
+  ArrayMaxSize,
   ValidateNested,
   IsIn,
   IsNumber,
@@ -96,6 +98,8 @@ export class CommitTemplateEditingSessionDto {
   commitDecision?: TemplateEditingDecision;
 
   @IsArray({ message: 'قائمة العمليات يجب أن تكون مصفوفة' })
+  @ArrayMinSize(1, { message: 'يجب تقديم عملية واحدة على الأقل في جلسة التحرير' })
+  @ArrayMaxSize(200, { message: 'الحد الأقصى للعمليات في جلسة التحرير الواحدة هو 200 عملية' })
   @ValidateNested({ each: true })
   @Type(() => TemplateEditingOperationDto)
   operations!: TemplateEditingOperationDto[];

@@ -10,6 +10,9 @@ import {
   productionTemplateChangeClassifier,
   TemplateChangeClassification,
 } from './production-template-change-classifier.js';
+import { ProductionTemplateEditingNormalizer } from './production-template-editing-normalizer.js';
+import { ProductionTemplateEditingIdempotencyEntity } from './production-template-editing-idempotency.entity.js';
+import { ProductionTemplateUploadTokenEntity } from './production-template-upload-token.entity.js';
 import {
   ProductionTemplateVersionCloner,
   productionTemplateVersionCloner,
@@ -55,6 +58,7 @@ export interface CommitEditingSessionResult {
 
 export class ProductionTemplateEditingService {
   private classifier: ProductionTemplateChangeClassifier;
+  private normalizer: ProductionTemplateEditingNormalizer;
   private cloner: ProductionTemplateVersionCloner;
   private versionService: ProductionTemplateVersionService;
   private guardService: ProductionTemplateGuardService;
@@ -68,9 +72,11 @@ export class ProductionTemplateEditingService {
     versionService: ProductionTemplateVersionService = productionTemplateVersionService,
     guardService: ProductionTemplateGuardService = productionTemplateGuardService,
     sharedFileService: ProductionTemplateSharedFileService = productionTemplateSharedFileService,
-    deptService: ProductionDepartmentService = productionDepartmentService
+    deptService: ProductionDepartmentService = productionDepartmentService,
+    normalizer: ProductionTemplateEditingNormalizer = new ProductionTemplateEditingNormalizer()
   ) {
     this.classifier = classifier;
+    this.normalizer = normalizer;
     this.cloner = cloner;
     this.versionService = versionService;
     this.guardService = guardService;
@@ -91,17 +97,51 @@ export class ProductionTemplateEditingService {
       // 1. Lock template aggregate root
       const template = await this.guardService.lockMutableTemplate(templateId, manager);
 
-      // 2. Validate baseVersionId is latest active version
+      // 2. Idempotency check FIRST (retries return stored result immediately)
+      if (dto.idempotencyKey) {
+        const idempotencyRepo = manager.getRepository(ProductionTemplateEditingIdempotencyEntity);
+        const existing = await idempotencyRepo.findOne({
+          where: { templateId, idempotencyKey: dto.idempotencyKey },
+        });
+        if (existing) {
+          const isFresh = Date.now() - existing.createdAt.getTime() < 24 * 60 * 60 * 1000;
+          if (isFresh) {
+            return JSON.parse(existing.responseJson) as CommitEditingSessionResult;
+          }
+        }
+      }
+
+      // 3. Validate baseVersionId is latest active version
       const baseVersion = await this.versionService.assertIsLatestVersion(
         templateId,
         dto.baseVersionId,
         manager
       );
 
-      // 3. Classify operations
-      const classification = this.classifier.classify(dto.operations);
+      // 4. Concurrency check: baseRevision
+      if (dto.baseRevision) {
+        const currentRevision = await this.versionService.computeVersionRevision(
+          templateId,
+          baseVersion.id,
+          manager
+        );
+        if (currentRevision !== dto.baseRevision) {
+          throw new BusinessRuleError(
+            'تم تعديل هذا القالب بواسطة مستخدم آخر أو جلسة أخرى. يرجى تحديث الصفحة والمحاولة مجدداً.',
+            'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT'
+          );
+        }
+      }
 
-      // 4. Determine if we must fork a new version
+      // 5. Semantic diff normalization against baseline
+      const classification = await this.normalizer.normalizeAndClassify(
+        templateId,
+        baseVersion.id,
+        dto.operations,
+        manager
+      );
+
+      // 6. Determine if we must fork a new version
       let shouldCreateNewVersion = false;
       if (classification.classification === 'STRUCTURAL') {
         if (dto.commitDecision === 'OVERWRITE_CURRENT') {
@@ -172,7 +212,7 @@ export class ProductionTemplateEditingService {
       // 7. Ensure workflow dense compactor on target version
       await this.ensureWorkflowDenseCompacted(templateId, targetVersionId, manager);
 
-      return {
+      const result: CommitEditingSessionResult = {
         templateId,
         targetVersionId,
         targetVersionNumber,
@@ -181,6 +221,20 @@ export class ProductionTemplateEditingService {
         appliedOperationsCount: dto.operations.length,
         tempClientMap,
       };
+
+      // 8. Persist idempotency result if key was provided
+      if (dto.idempotencyKey) {
+        const idempotencyRepo = manager.getRepository(ProductionTemplateEditingIdempotencyEntity);
+        const record = idempotencyRepo.create({
+          id: crypto.randomUUID(),
+          templateId,
+          idempotencyKey: dto.idempotencyKey,
+          responseJson: JSON.stringify(result),
+        });
+        await idempotencyRepo.save(record);
+      }
+
+      return result;
     });
   }
 
@@ -739,26 +793,16 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`المرحلة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${stageId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
         }
         const payload = op.payload || {};
-        const storedFile = await this.sharedFileService.getOrCreateStoredFile(
-          {
-            templateId,
-            storageKey: payload.storageKey,
-            originalFileName: payload.originalFileName,
-            mimeType: payload.mimeType,
-            sizeBytes: payload.sizeBytes,
-            createdByUserId: userId || null,
-          },
-          manager
-        );
+        const fileDetails = await this.resolveAttachmentFile(templateId, payload, userId, manager);
 
         const att = manager.create(ProductionTemplateStageAttachmentEntity, {
           id: crypto.randomUUID(),
           stageId,
-          fileId: storedFile.id,
-          storageKey: payload.storageKey,
-          originalFileName: payload.originalFileName,
-          mimeType: payload.mimeType,
-          sizeBytes: payload.sizeBytes,
+          fileId: fileDetails.fileId,
+          storageKey: fileDetails.storageKey,
+          originalFileName: fileDetails.originalFileName,
+          mimeType: fileDetails.mimeType,
+          sizeBytes: fileDetails.sizeBytes,
           description: payload.description || null,
           sortOrder: payload.sortOrder || 1,
           createdByUserId: userId || null,
@@ -799,26 +843,16 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`المهمة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
         }
         const payload = op.payload || {};
-        const storedFile = await this.sharedFileService.getOrCreateStoredFile(
-          {
-            templateId,
-            storageKey: payload.storageKey,
-            originalFileName: payload.originalFileName,
-            mimeType: payload.mimeType,
-            sizeBytes: payload.sizeBytes,
-            createdByUserId: userId || null,
-          },
-          manager
-        );
+        const fileDetails = await this.resolveAttachmentFile(templateId, payload, userId, manager);
 
         const att = manager.create(ProductionTemplatePatternOptionTaskAttachmentEntity, {
           id: crypto.randomUUID(),
           taskId,
-          fileId: storedFile.id,
-          storageKey: payload.storageKey,
-          originalFileName: payload.originalFileName,
-          mimeType: payload.mimeType,
-          sizeBytes: payload.sizeBytes,
+          fileId: fileDetails.fileId,
+          storageKey: fileDetails.storageKey,
+          originalFileName: fileDetails.originalFileName,
+          mimeType: fileDetails.mimeType,
+          sizeBytes: fileDetails.sizeBytes,
           description: payload.description || null,
           sortOrder: payload.sortOrder || 1,
           createdByUserId: userId || null,
@@ -917,6 +951,83 @@ export class ProductionTemplateEditingService {
         await workflowRepo.update({ id: activeItems[i].id }, { sortOrder: i + 1 });
       }
     }
+  }
+
+  private async resolveAttachmentFile(
+    templateId: string,
+    payload: any,
+    userId: string | undefined,
+    manager: EntityManager
+  ): Promise<{
+    fileId: string;
+    storageKey: string;
+    originalFileName: string;
+    mimeType: string;
+    sizeBytes: number;
+  }> {
+    let storageKey = payload.storageKey;
+    let originalFileName = payload.originalFileName;
+    let mimeType = payload.mimeType;
+    let sizeBytes = Number(payload.sizeBytes || 0);
+
+    if (payload.uploadToken) {
+      const tokenRepo = manager.getRepository(ProductionTemplateUploadTokenEntity);
+      const token = await tokenRepo.findOne({
+        where: { id: payload.uploadToken, templateId, isUsed: false },
+      });
+      if (!token) {
+        throw new BusinessRuleError(
+          'رمز رفع الملف المؤقت غير صالح أو تم استخدامه مسبقاً',
+          'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_INVALID'
+        );
+      }
+      if (new Date() > token.expiresAt) {
+        throw new BusinessRuleError(
+          'رمز رفع الملف المؤقت منتهي الصلاحية',
+          'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_EXPIRED'
+        );
+      }
+      if (userId && token.userId && token.userId !== userId && token.userId !== 'system') {
+        throw new BusinessRuleError(
+          'رمز رفع الملف المؤقت لا يخص المستخدم الحالي',
+          'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_UNAUTHORIZED'
+        );
+      }
+      token.isUsed = true;
+      await tokenRepo.save(token);
+
+      storageKey = token.storageKey;
+      originalFileName = token.originalFileName;
+      mimeType = token.mimeType;
+      sizeBytes = Number(token.sizeBytes);
+    }
+
+    if (!storageKey) {
+      throw new BusinessRuleError(
+        'بيانات الملف المرفق غير مكتملة',
+        'PRODUCTION_TEMPLATE_ATTACHMENT_INVALID'
+      );
+    }
+
+    const storedFile = await this.sharedFileService.getOrCreateStoredFile(
+      {
+        templateId,
+        storageKey,
+        originalFileName: originalFileName || 'attachment',
+        mimeType: mimeType || 'application/octet-stream',
+        sizeBytes,
+        createdByUserId: userId || null,
+      },
+      manager
+    );
+
+    return {
+      fileId: storedFile.id,
+      storageKey,
+      originalFileName: originalFileName || storedFile.originalFileName,
+      mimeType: mimeType || storedFile.mimeType,
+      sizeBytes,
+    };
   }
 }
 

@@ -61,7 +61,10 @@ import { MakeProductionUnitOrderNullable1710000000022 } from '../database/migrat
 import { CreateProductionTemplateVersionAndSequence1710000000023 } from '../database/migrations/1710000000023-CreateProductionTemplateVersionAndSequence.js';
 import { CreateProductionTemplateStoredFiles1710000000024 } from '../database/migrations/1710000000024-CreateProductionTemplateStoredFiles.js';
 import { AddTemplateVersionToProductionOrderLine1710000000025 } from '../database/migrations/1710000000025-AddTemplateVersionToProductionOrderLine.js';
+import { CreateProductionTemplateEditingIdempotencyAndTokens1710000000026 } from '../database/migrations/1710000000026-CreateProductionTemplateEditingIdempotencyAndTokens.js';
 import { ProductionTemplateStoredFileEntity } from '../modules/production/template-stored-file/production-template-stored-file.entity.js';
+import { ProductionTemplateEditingIdempotencyEntity } from '../modules/production/template-editing/production-template-editing-idempotency.entity.js';
+import { ProductionTemplateUploadTokenEntity } from '../modules/production/template-editing/production-template-upload-token.entity.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -100,6 +103,8 @@ export const databaseConfig: DataSourceOptions = {
     ProductionTemplatePatternOptionTaskMaterialEntity,
     ProductionTemplatePatternOptionTaskAttachmentEntity,
     ProductionTemplateStoredFileEntity,
+    ProductionTemplateEditingIdempotencyEntity,
+    ProductionTemplateUploadTokenEntity,
     ProductionOrderSequenceEntity,
     ProductionOrderEntity,
     ProductionOrderLineEntity,
@@ -137,6 +142,7 @@ export const databaseConfig: DataSourceOptions = {
     CreateProductionTemplateVersionAndSequence1710000000023,
     CreateProductionTemplateStoredFiles1710000000024,
     AddTemplateVersionToProductionOrderLine1710000000025,
+    CreateProductionTemplateEditingIdempotencyAndTokens1710000000026,
   ],
   subscribers: [],
 };

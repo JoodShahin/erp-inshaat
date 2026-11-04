@@ -1,4 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'node:crypto';
+import { AppDataSource } from '../../../database/data-source.js';
 import { ApiResponse } from '../../../common/responses/api-response.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { ProductionTemplateService, productionTemplateService } from './production-template.service.js';
@@ -10,6 +12,7 @@ import {
   ProductionTemplateEditingService,
   productionTemplateEditingService,
 } from '../template-editing/production-template-editing.service.js';
+import { ProductionTemplateUploadTokenEntity } from '../template-editing/production-template-upload-token.entity.js';
 import { CommitTemplateEditingSessionDto } from '../template-editing/dto/commit-template-editing-session.dto.js';
 import {
   ProductionTemplateSpecificationService,
@@ -180,13 +183,30 @@ export class ProductionTemplateController {
 
   uploadEditingAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const { id } = req.params;
       if (!req.file) {
         throw new BusinessRuleError('الملف مطلوب', 'FILE_REQUIRED');
       }
+      const userId = (req as any).user?.id || 'system';
       const storageKey = req.file.path.replace(/\\/g, '/');
+
+      const tokenRepo = AppDataSource.getRepository(ProductionTemplateUploadTokenEntity);
+      const token = tokenRepo.create({
+        id: crypto.randomUUID(),
+        templateId: id as string,
+        userId,
+        storageKey,
+        originalFileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        sizeBytes: req.file.size,
+        expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2 hours
+        isUsed: false,
+      });
+      await tokenRepo.save(token);
+
       res.status(200).json(
         ApiResponse.success({
-          storageKey,
+          uploadToken: token.id,
           originalFileName: req.file.originalname,
           mimeType: req.file.mimetype,
           sizeBytes: req.file.size,

@@ -1,6 +1,10 @@
 import { DataSource, EntityManager, Repository, IsNull } from 'typeorm';
+import crypto from 'node:crypto';
 import { AppDataSource } from '../../../database/data-source.js';
 import { ProductionTemplateVersionEntity } from './production-template-version.entity.js';
+import { ProductionTemplateStageEntity } from '../template-stage/production-template-stage.entity.js';
+import { ProductionTemplatePatternEntity } from '../template-pattern/production-template-pattern.entity.js';
+import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
 import {
   parseVersion,
   formatVersion,
@@ -171,6 +175,136 @@ export class ProductionTemplateVersionService {
     });
 
     return await repo.save(nextVersion);
+  }
+
+  /**
+   * Computes a deterministic revision hash (SHA-256) for a specific template version.
+   * Used for optimistic locking and concurrent edit detection.
+   */
+  async computeVersionRevision(
+    templateId: string,
+    versionId: string,
+    manager?: EntityManager
+  ): Promise<string> {
+    const mgr = manager || this.dataSource.manager;
+    const stageRepo = mgr.getRepository(ProductionTemplateStageEntity);
+    const patternRepo = mgr.getRepository(ProductionTemplatePatternEntity);
+    const wfRepo = mgr.getRepository(ProductionTemplateWorkflowItemEntity);
+
+    const stages = await stageRepo.find({
+      where: { templateId, versionId, deletedAt: IsNull() },
+      order: { id: 'ASC' },
+    });
+
+    const patterns = await patternRepo.find({
+      where: { templateId, versionId, deletedAt: IsNull() },
+      order: { id: 'ASC' },
+    });
+
+    const wfItems = await wfRepo.find({
+      where: { templateId, versionId, deletedAt: IsNull() },
+      order: { sortOrder: 'ASC', id: 'ASC' },
+    });
+
+    const patternIds = patterns.map((p) => p.id);
+    let options: any[] = [];
+    let tasks: any[] = [];
+    if (patternIds.length > 0) {
+      options = await mgr
+        .createQueryBuilder()
+        .select([
+          'o.id AS id',
+          'o.pattern_id AS patternId',
+          'o.name AS name',
+          'o.sort_order AS sortOrder',
+          'o.updated_at AS updatedAt',
+        ])
+        .from('production_template_pattern_option', 'o')
+        .where('o.pattern_id IN (:...patternIds) AND o.deleted_at IS NULL', { patternIds })
+        .orderBy('o.id', 'ASC')
+        .getRawMany();
+
+      const optionIds = options.map((o) => o.id);
+      if (optionIds.length > 0) {
+        tasks = await mgr
+          .createQueryBuilder()
+          .select([
+            't.id AS id',
+            't.option_id AS optionId',
+            't.name AS name',
+            't.sort_order AS sortOrder',
+            't.estimated_duration_minutes AS estimatedDurationMinutes',
+            't.updated_at AS updatedAt',
+          ])
+          .from('production_template_pattern_option_task', 't')
+          .where('t.option_id IN (:...optionIds) AND t.deleted_at IS NULL', { optionIds })
+          .orderBy('t.id', 'ASC')
+          .getRawMany();
+      }
+    }
+
+    const stageIds = stages.map((s) => s.id);
+    let stageMats: any[] = [];
+    if (stageIds.length > 0) {
+      stageMats = await mgr
+        .createQueryBuilder()
+        .select([
+          'm.id AS id',
+          'm.stage_id AS stageId',
+          'm.product_id AS productId',
+          'm.planned_quantity AS plannedQuantity',
+        ])
+        .from('production_template_stage_material', 'm')
+        .where('m.stage_id IN (:...stageIds)', { stageIds })
+        .orderBy('m.id', 'ASC')
+        .getRawMany();
+    }
+
+    const payload = {
+      templateId,
+      versionId,
+      stages: stages.map((s) => ({
+        id: s.id,
+        name: s.name,
+        dur: s.estimatedDurationMinutes,
+        updated: s.updatedAt?.getTime?.() || null,
+      })),
+      patterns: patterns.map((p) => ({
+        id: p.id,
+        name: p.name,
+        updated: p.updatedAt?.getTime?.() || null,
+      })),
+      options: options.map((o) => ({
+        id: o.id,
+        patternId: o.patternId,
+        name: o.name,
+        sortOrder: o.sortOrder,
+        updated: o.updatedAt instanceof Date ? o.updatedAt.getTime() : o.updatedAt,
+      })),
+      tasks: tasks.map((t) => ({
+        id: t.id,
+        optionId: t.optionId,
+        name: t.name,
+        sortOrder: t.sortOrder,
+        dur: t.estimatedDurationMinutes,
+        updated: t.updatedAt instanceof Date ? t.updatedAt.getTime() : t.updatedAt,
+      })),
+      stageMats: stageMats.map((m) => ({
+        id: m.id,
+        stageId: m.stageId,
+        productId: m.productId,
+        qty: m.plannedQuantity,
+      })),
+      wf: wfItems.map((w) => ({
+        id: w.id,
+        itemType: w.itemType,
+        stageId: w.stageId,
+        patternId: w.patternId,
+        order: w.sortOrder,
+      })),
+    };
+
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   }
 }
 

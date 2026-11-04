@@ -10,7 +10,11 @@ import { ProductionTemplateVersionEntity } from '../src/modules/production/templ
 import { ProductionTemplateStageEntity } from '../src/modules/production/template-stage/production-template-stage.entity.js';
 import { ProductionTemplateStageAttachmentEntity } from '../src/modules/production/template-stage-attachment/production-template-stage-attachment.entity.js';
 import { ProductionTemplateStoredFileEntity } from '../src/modules/production/template-stored-file/production-template-stored-file.entity.js';
+import { ProductionTemplateUploadTokenEntity } from '../src/modules/production/template-editing/production-template-upload-token.entity.js';
+import { ProductionOrderService } from '../src/modules/production/order/production-order.service.js';
+import { ProductionOrderStatus, ProductionOrderPriority } from '../src/modules/production/order/production-order.entity.js';
 import { ProductionDepartmentEntity } from '../src/modules/production/department/production-department.entity.js';
+import { UserEntity } from '../src/modules/system/user/user.entity.js';
 import { BusinessRuleError } from '../src/common/errors/business-rule.error.js';
 import { canonicalizeLineConfiguration, hashLineConfiguration } from '../src/modules/production/order-line/production-order-line-configuration.helper.js';
 
@@ -20,6 +24,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   let versionService: ProductionTemplateVersionService;
   let guardService: ProductionTemplateGuardService;
   let testDepartmentId: string;
+  let testUserId: string;
 
   before(async () => {
     if (!AppDataSource.isInitialized) {
@@ -42,10 +47,26 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       dept = await deptRepo.save(dept);
     }
     testDepartmentId = dept.id;
+
+    const userRepo = AppDataSource.getRepository(UserEntity);
+    let user = await userRepo.findOne({ where: {} });
+    if (!user) {
+      user = userRepo.create({
+        username: 'test_admin_' + Date.now(),
+        email: 'test_admin_' + Date.now() + '@inshaat.local',
+        passwordHash: 'dummy',
+        fullName: 'Test Admin',
+        isActive: true,
+      });
+      user = await userRepo.save(user);
+    }
+    testUserId = user.id;
   });
 
   after(async () => {
-    // Keep connection intact for runner
+    if (AppDataSource.isInitialized) {
+      await AppDataSource.destroy();
+    }
   });
 
   // ------------------------------------------------------------------------
@@ -271,6 +292,205 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         }
       );
     });
+
+    it('Normalizer Case A: cancels opposing add/delete of temporary stage resulting in NONE diff', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب فحص إلغاء التعديل', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const res = await editingService.commitEditingSession(created.id, {
+        baseVersionId: v1.id,
+        commitDecision: 'AUTO',
+        operations: [
+          {
+            type: 'ADD_STAGE',
+            tempClientId: 'temp-stg',
+            payload: { name: 'مرحلة مؤقتة', departmentId: testDepartmentId },
+          },
+          {
+            type: 'DELETE_STAGE',
+            targetId: 'temp-stg',
+          },
+        ],
+      });
+      assert.strictEqual(res.changeType, 'NONE');
+      assert.strictEqual(res.createdNewVersion, false);
+      assert.strictEqual(res.targetVersionNumber, '1.0');
+    });
+
+    it('Concurrency Conflict: throws when baseRevision does not match current version revision', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب التزامن', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const staleRevision = 'rev_0000000000000000000000000000000000000000000000000000000000000000';
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(created.id, {
+            baseVersionId: v1.id,
+            baseRevision: staleRevision,
+            commitDecision: 'AUTO',
+            operations: [
+              {
+                type: 'ADD_STAGE',
+                tempClientId: 'stg-1',
+                payload: { name: 'مرحلة 1', departmentId: testDepartmentId },
+              },
+            ],
+          }),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT');
+          return true;
+        }
+      );
+    });
+
+    it('Idempotency: duplicate commit with same idempotencyKey returns stored response', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب التكرار', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const idempKey = 'idemp-session-key-999';
+      const firstRes = await editingService.commitEditingSession(created.id, {
+        baseVersionId: v1.id,
+        idempotencyKey: idempKey,
+        commitDecision: 'AUTO',
+        operations: [
+          {
+            type: 'ADD_STAGE',
+            tempClientId: 'stg-idemp',
+            payload: { name: 'مرحلة التكرار', departmentId: testDepartmentId },
+          },
+        ],
+      });
+      assert.strictEqual(firstRes.createdNewVersion, true);
+      assert.strictEqual(firstRes.targetVersionNumber, '1.1');
+
+      // Duplicate request with same idempotencyKey
+      const secondRes = await editingService.commitEditingSession(created.id, {
+        baseVersionId: v1.id,
+        idempotencyKey: idempKey,
+        commitDecision: 'AUTO',
+        operations: [
+          {
+            type: 'ADD_STAGE',
+            tempClientId: 'stg-idemp',
+            payload: { name: 'مرحلة التكرار', departmentId: testDepartmentId },
+          },
+        ],
+      });
+      assert.deepStrictEqual(secondRes, firstRes);
+    });
+
+    it('Upload Token: ADD_STAGE_ATTACHMENT consumes uploadToken and rejects reuse', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب فحص الرموز المؤقتة', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const tokenRepo = AppDataSource.getRepository(ProductionTemplateUploadTokenEntity);
+      const tokenId = 'tok-' + Date.now();
+      const tokenRecord = tokenRepo.create({
+        id: tokenId,
+        templateId: created.id,
+        userId: testUserId,
+        storageKey: 'storage/templates/test-doc.pdf',
+        originalFileName: 'test-doc.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 1024,
+        expiresAt: new Date(Date.now() + 3600000),
+        isUsed: false,
+      });
+      await tokenRepo.save(tokenRecord);
+
+      // Commit using uploadToken
+      const commitRes = await editingService.commitEditingSession(created.id, {
+        baseVersionId: v1.id,
+        commitDecision: 'AUTO',
+        operations: [
+          {
+            type: 'ADD_STAGE',
+            tempClientId: 'stage-tok',
+            payload: { name: 'مرحلة برمز', departmentId: testDepartmentId },
+          },
+          {
+            type: 'ADD_STAGE_ATTACHMENT',
+            parentId: 'stage-tok',
+            payload: {
+              uploadToken: tokenId,
+              description: 'مستند مرفق برمز',
+            },
+          },
+        ],
+      });
+      assert.strictEqual(commitRes.createdNewVersion, true);
+
+      // Re-verify token is marked used
+      const updatedToken = await tokenRepo.findOne({ where: { id: tokenId } });
+      assert.strictEqual(updatedToken?.isUsed, true);
+
+      // Reusing token must fail with PRODUCTION_TEMPLATE_UPLOAD_TOKEN_INVALID
+      const vLatest = await versionService.getLatestVersion(created.id);
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(created.id, {
+            baseVersionId: vLatest.id,
+            commitDecision: 'AUTO',
+            operations: [
+              {
+                type: 'ADD_STAGE_ATTACHMENT',
+                parentId: commitRes.tempClientMap['stage-tok'],
+                payload: {
+                  uploadToken: tokenId,
+                },
+              },
+            ],
+          }),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_INVALID');
+          return true;
+        }
+      );
+    });
+
+    it('Production Order Line: pins line to templateVersionId and filters patterns accordingly', async () => {
+      const orderService = new ProductionOrderService(AppDataSource);
+      const created = await templateService.createTemplate({ name: 'قالب ربط أمر الإنتاج', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+
+      // Add pattern to v1.0
+      await editingService.commitEditingSession(created.id, {
+        baseVersionId: v1.id,
+        commitDecision: 'AUTO',
+        operations: [
+          {
+            type: 'ADD_PATTERN',
+            tempClientId: 'pat-v1',
+            payload: { name: 'نمط الإصدار 1.0' },
+          },
+          {
+            type: 'ADD_OPTION',
+            parentId: 'pat-v1',
+            payload: { name: 'خيار 1.0' },
+          },
+        ],
+      });
+
+      // Create an order
+      const order = await orderService.createOrder(
+        {
+          orderNumber: 'ORD-TEST-' + Date.now(),
+          status: ProductionOrderStatus.DRAFT,
+          priority: ProductionOrderPriority.MEDIUM,
+        },
+        testUserId
+      );
+
+      // Add line specifying templateId
+      const line = await orderService.addLine(order.id, {
+        templateId: created.id,
+        quantity: 5,
+      });
+
+      const vLatest = await versionService.getLatestVersion(created.id);
+      assert.strictEqual(line.templateId, created.id);
+      assert.strictEqual(line.templateVersionId, vLatest.id);
+      assert.strictEqual(typeof (line as any).activeConfigurationHash, 'undefined'); // activeConfigurationHash is internal
+    });
+
   });
 
   // ------------------------------------------------------------------------

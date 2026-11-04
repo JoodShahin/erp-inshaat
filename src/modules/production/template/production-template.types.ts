@@ -101,6 +101,7 @@ export interface ProductionTemplateVersionSummaryDto {
   version: string;
   isLatest: boolean;
   createdAt: Date;
+  revision?: string;
 }
 
 export interface ProductionTemplateDetailDto {
@@ -112,6 +113,7 @@ export interface ProductionTemplateDetailDto {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+  revision?: string;
   currentVersion?: ProductionTemplateVersionSummaryDto;
   versions?: ProductionTemplateVersionSummaryDto[];
   specifications: ProductionTemplateDetailSpecificationDto[];
