@@ -14,6 +14,8 @@ import { InventoryCategoryEntity } from '../modules/inventory/category/inventory
 import { InventoryProductEntity } from '../modules/inventory/product/inventory-product.entity.js';
 import { InventoryProductUnitEntity } from '../modules/inventory/product/inventory-product-unit.entity.js';
 import { ProductionTemplateEntity } from '../modules/production/template/production-template.entity.js';
+import { ProductionTemplateVersionEntity } from '../modules/production/template-version/production-template-version.entity.js';
+import { ProductionTemplateSequenceEntity } from '../modules/production/template/production-template-sequence.entity.js';
 import { ProductionTemplateSpecificationEntity } from '../modules/production/template-specification/production-template-specification.entity.js';
 import { ProductionTemplateStageEntity } from '../modules/production/template-stage/production-template-stage.entity.js';
 import { ProductionTemplateStageMaterialEntity } from '../modules/production/template-stage-material/production-template-stage-material.entity.js';
@@ -56,6 +58,7 @@ import { AddSpecificationsToExecutionPlan1710000000018 } from '../database/migra
 import { AddAvailablePatternOptionsToExecutionPlan1710000000019 } from '../database/migrations/1710000000019-AddAvailablePatternOptionsToExecutionPlan.js';
 import { AddTaskDurationUnitFields1710000000020 } from '../database/migrations/1710000000020-AddTaskDurationUnitFields.js';
 import { MakeProductionUnitOrderNullable1710000000022 } from '../database/migrations/1710000000022-MakeProductionUnitOrderNullable.js';
+import { CreateProductionTemplateVersionAndSequence1710000000023 } from '../database/migrations/1710000000023-CreateProductionTemplateVersionAndSequence.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -81,6 +84,8 @@ export const databaseConfig: DataSourceOptions = {
     InventoryProductEntity,
     InventoryProductUnitEntity,
     ProductionTemplateEntity,
+    ProductionTemplateVersionEntity,
+    ProductionTemplateSequenceEntity,
     ProductionTemplateSpecificationEntity,
     ProductionTemplateStageEntity,
     ProductionTemplateStageMaterialEntity,
@@ -125,6 +130,7 @@ export const databaseConfig: DataSourceOptions = {
     AddTaskDurationUnitFields1710000000020,
     CreateProductionYardTemplate1710000000021,
     MakeProductionUnitOrderNullable1710000000022,
+    CreateProductionTemplateVersionAndSequence1710000000023,
   ],
   subscribers: [],
 };

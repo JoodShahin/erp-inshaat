@@ -1,6 +1,7 @@
 import { DataSource, Repository, IsNull, QueryFailedError } from 'typeorm';
 import { AppDataSource } from '../../../database/data-source.js';
 import { ProductionTemplateEntity } from './production-template.entity.js';
+import { ProductionTemplateVersionEntity } from '../template-version/production-template-version.entity.js';
 import { ProductionTemplateStageEntity } from '../template-stage/production-template-stage.entity.js';
 import { ProductionTemplateSpecificationEntity } from '../template-specification/production-template-specification.entity.js';
 import { ProductionTemplatePatternEntity } from '../template-pattern/production-template-pattern.entity.js';
@@ -32,23 +33,30 @@ import {
   ProductionTemplatePatternService,
   productionTemplatePatternService,
 } from '../template-pattern/production-template-pattern.service.js';
+import {
+  ProductionTemplateSequenceService,
+  productionTemplateSequenceService,
+} from './production-template-sequence.service.js';
 
 export class ProductionTemplateService {
   private templateRepo: Repository<ProductionTemplateEntity>;
   private guardService: ProductionTemplateGuardService;
   private workflowService: ProductionTemplateWorkflowService;
   private patternService: ProductionTemplatePatternService;
+  private sequenceService: ProductionTemplateSequenceService;
 
   constructor(
     private dataSource: DataSource = AppDataSource,
     guardService: ProductionTemplateGuardService = productionTemplateGuardService,
     workflowService: ProductionTemplateWorkflowService = productionTemplateWorkflowService,
-    patternService: ProductionTemplatePatternService = productionTemplatePatternService
+    patternService: ProductionTemplatePatternService = productionTemplatePatternService,
+    sequenceService: ProductionTemplateSequenceService = productionTemplateSequenceService
   ) {
     this.templateRepo = this.dataSource.getRepository(ProductionTemplateEntity);
     this.guardService = guardService;
     this.workflowService = workflowService;
     this.patternService = patternService;
+    this.sequenceService = sequenceService;
   }
 
   async listTemplates(query: ListProductionTemplatesQueryDto): Promise<PaginatedProductionTemplatesResult> {
@@ -194,34 +202,41 @@ export class ProductionTemplateService {
   }
 
   async createTemplate(dto: CreateProductionTemplateDto): Promise<ProductionTemplateDto> {
-    const normalizedCode = dto.code.trim().toUpperCase();
+    return await this.dataSource.transaction(async (manager) => {
+      const templateRepo = manager.getRepository(ProductionTemplateEntity);
+      const versionRepo = manager.getRepository(ProductionTemplateVersionEntity);
 
-    // Check code uniqueness including soft deleted records
-    const existing = await this.templateRepo.findOne({
-      where: { code: normalizedCode },
-      withDeleted: true,
-    });
-    if (existing) {
-      throw new ConflictError('رمز القالب مستخدم مسبقاً', 'PRODUCTION_TEMPLATE_CODE_ALREADY_EXISTS');
-    }
+      // 1. Generate unique technical code atomically using sequence table with lock
+      const code = await this.sequenceService.generateNextCode(manager);
 
-    const template = this.templateRepo.create({
-      name: dto.name.trim(),
-      code: normalizedCode,
-      referenceNumber: dto.referenceNumber ? dto.referenceNumber.trim() : null,
-      description: dto.description ? dto.description.trim() : null,
-      isActive: dto.isActive !== undefined ? dto.isActive : true,
-    });
+      // 2. Create template entity
+      const template = templateRepo.create({
+        name: dto.name.trim(),
+        code,
+        referenceNumber: dto.referenceNumber ? dto.referenceNumber.trim() : null,
+        description: dto.description ? dto.description.trim() : null,
+        isActive: dto.isActive !== undefined ? dto.isActive : true,
+      });
 
-    try {
-      const saved = await this.templateRepo.save(template);
-      return toProductionTemplateDto(saved);
-    } catch (err) {
-      if (err instanceof QueryFailedError && (err as any).driverError?.errno === 1062) {
-        throw new ConflictError('رمز القالب مستخدم مسبقاً', 'PRODUCTION_TEMPLATE_CODE_ALREADY_EXISTS');
+      let saved: ProductionTemplateEntity;
+      try {
+        saved = await templateRepo.save(template);
+      } catch (err) {
+        if (err instanceof QueryFailedError && (err as any).driverError?.errno === 1062) {
+          throw new ConflictError('رمز القالب مستخدم مسبقاً', 'PRODUCTION_TEMPLATE_CODE_ALREADY_EXISTS');
+        }
+        throw err;
       }
-      throw err;
-    }
+
+      // 3. Create initial version 1.0 in the SAME transaction
+      const initialVersion = versionRepo.create({
+        templateId: saved.id,
+        version: '1.0',
+      });
+      await versionRepo.save(initialVersion);
+
+      return toProductionTemplateDto(saved);
+    });
   }
 
   async updateTemplate(id: string, dto: UpdateProductionTemplateDto): Promise<ProductionTemplateDto> {

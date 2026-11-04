@@ -169,36 +169,28 @@ describe('Production Template Core Hardening & Architectural Invariants', () => 
   // 3. DTO Validation Rules
   // =========================================================================
   describe('3. DTO Validation & Input Constraints', () => {
-    it('CreateProductionTemplateDto: normalizes code to uppercase and enforces pattern ^[A-Z][A-Z0-9_-]*$', async () => {
+    it('CreateProductionTemplateDto: requires name, accepts optional referenceNumber and description, and excludes code', async () => {
       const valid = plainToInstance(CreateProductionTemplateDto, {
-        code: 'TPL-ROOM_01',
         name: 'قالب غرفة نموذجية',
+        referenceNumber: 'REF-ROOM-01',
+        description: 'وصف اختياري',
       });
       const validErrors = await validate(valid);
       assert.strictEqual(validErrors.length, 0);
 
-      // Normalization: lowercase room-a is transformed to uppercase ROOM-A before validation
-      const normalizedLower = plainToInstance(CreateProductionTemplateDto, {
-        code: 'room-a',
+      const minimal = plainToInstance(CreateProductionTemplateDto, {
         name: 'قالب غرفة',
       });
-      assert.strictEqual(normalizedLower.code, 'ROOM-A');
-      const lowerErrors = await validate(normalizedLower);
-      assert.strictEqual(lowerErrors.length, 0);
+      const minimalErrors = await validate(minimal);
+      assert.strictEqual(minimalErrors.length, 0);
 
-      const invalidLeadingNumber = plainToInstance(CreateProductionTemplateDto, {
-        code: '1TPL',
-        name: 'قالب غرفة',
+      const invalidEmptyName = plainToInstance(CreateProductionTemplateDto, {
+        name: '',
       });
-      const leadingNumErrors = await validate(invalidLeadingNumber);
-      assert.ok(leadingNumErrors.some((e) => e.property === 'code'));
+      const emptyNameErrors = await validate(invalidEmptyName);
+      assert.ok(emptyNameErrors.some((e) => e.property === 'name'));
 
-      const invalidSpace = plainToInstance(CreateProductionTemplateDto, {
-        code: 'TPL ROOM',
-        name: 'قالب غرفة',
-      });
-      const spaceErrors = await validate(invalidSpace);
-      assert.ok(spaceErrors.some((e) => e.property === 'code'));
+      assert.strictEqual('code' in (minimal as Record<string, unknown>), false);
     });
 
     it('UpdateTemplateSpecificationDto: excludes sortOrder and validates required fields', async () => {

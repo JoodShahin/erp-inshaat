@@ -13,6 +13,7 @@ import { ProductionTemplateStageEntity } from '../template-stage/production-temp
 import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
 import { ProductionTemplatePatternEntity } from '../template-pattern/production-template-pattern.entity.js';
 import { ProductionYardTemplateEntity } from '../yard-template/production-yard-template.entity.js';
+import { ProductionTemplateVersionEntity } from '../template-version/production-template-version.entity.js';
 
 @Entity('production_template')
 export class ProductionTemplateEntity {
@@ -45,6 +46,12 @@ export class ProductionTemplateEntity {
   @Index('IDX_production_template_deleted_at')
   @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt!: Date | null;
+
+  @OneToMany(() => ProductionTemplateVersionEntity, (ver) => ver.template, {
+    cascade: false,
+    eager: false,
+  })
+  versions?: ProductionTemplateVersionEntity[];
 
   @OneToMany(() => ProductionTemplateSpecificationEntity, (spec) => spec.template, {
     cascade: false,

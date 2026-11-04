@@ -12,6 +12,7 @@ import {
   Index,
 } from 'typeorm';
 import { ProductionTemplateEntity } from '../template/production-template.entity.js';
+import { ProductionTemplateVersionEntity } from '../template-version/production-template-version.entity.js';
 import { ProductionDepartmentEntity } from '../department/production-department.entity.js';
 import { ProductionTemplateStageMaterialEntity } from '../template-stage-material/production-template-stage-material.entity.js';
 import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
@@ -25,6 +26,10 @@ export class ProductionTemplateStageEntity {
   @Index('IDX_production_template_stage_template_id')
   @Column({ name: 'template_id', type: 'varchar', length: 36 })
   templateId!: string;
+
+  @Index('IDX_production_template_stage_version_id')
+  @Column({ name: 'version_id', type: 'varchar', length: 36, nullable: true })
+  versionId!: string | null;
 
   @Index('IDX_production_template_stage_department_id')
   @Column({ name: 'department_id', type: 'varchar', length: 36 })
@@ -65,6 +70,15 @@ export class ProductionTemplateStageEntity {
   })
   @JoinColumn({ name: 'template_id' })
   template?: ProductionTemplateEntity;
+
+  @ManyToOne(() => ProductionTemplateVersionEntity, (ver) => ver.stages, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    eager: false,
+    nullable: true,
+  })
+  @JoinColumn({ name: 'version_id' })
+  version?: ProductionTemplateVersionEntity;
 
   @ManyToOne(() => ProductionDepartmentEntity, {
     onDelete: 'RESTRICT',
