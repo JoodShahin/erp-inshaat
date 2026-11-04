@@ -21,6 +21,12 @@ export class ProductionTemplateEditingIdempotencyEntity {
   @Column({ name: 'idempotency_key', type: 'varchar', length: 128 })
   idempotencyKey!: string;
 
+  @Column({ name: 'request_hash', type: 'varchar', length: 64, nullable: true })
+  requestHash?: string | null;
+
+  @Column({ name: 'user_id', type: 'varchar', length: 36, nullable: true })
+  userId?: string | null;
+
   @Column({ name: 'response_json', type: 'longtext' })
   responseJson!: string;
 

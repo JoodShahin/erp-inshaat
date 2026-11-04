@@ -85,6 +85,15 @@ productionTemplateApiRouter.post(
   productionTemplateController.commitEditingSession
 );
 
+// POST /api/production/templates/:id/editing/preview - Preview atomic editing session
+productionTemplateApiRouter.post(
+  '/:id/editing/preview',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_VIEW),
+  validateUuidParam('id'),
+  validateDto(CommitTemplateEditingSessionDto),
+  productionTemplateController.previewEditingSession
+);
+
 // POST /api/production/templates/:id/editing/upload - Upload file for editing session
 productionTemplateApiRouter.post(
   '/:id/editing/upload',

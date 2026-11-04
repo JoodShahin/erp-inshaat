@@ -53,6 +53,7 @@ import {
 } from './production-order-guard.service.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { compareVersions } from '../template-version/version-number.helper.js';
 
 export class ProductionOrderService {
   private orderRepo: Repository<ProductionOrderEntity>;
@@ -411,14 +412,26 @@ export class ProductionOrderService {
 
     // Resolve templateVersionId: explicit on dto, existingVersionId, or latest version
     const versionRepo = manager.getRepository(ProductionTemplateVersionEntity);
-    let resolvedVersionId: string | null = (dto as any).templateVersionId || existingVersionId || null;
-    if (!resolvedVersionId) {
-      const latestVersion = await versionRepo.findOne({
-        where: { templateId: dto.templateId, deletedAt: IsNull() },
-        order: { createdAt: 'DESC' },
+    let resolvedVersionId: string | null = null;
+    const requestedVersionId = (dto as any).templateVersionId || existingVersionId;
+    if (requestedVersionId) {
+      const explicitVer = await versionRepo.findOne({
+        where: { id: requestedVersionId, templateId: dto.templateId, deletedAt: IsNull() },
       });
-      if (latestVersion) {
-        resolvedVersionId = latestVersion.id;
+      if (!explicitVer) {
+        throw new BusinessRuleError(
+          `إصدار القالب المحدد (${requestedVersionId}) غير موجود أو لا ينتمي لهذا القالب`,
+          'PRODUCTION_TEMPLATE_VERSION_INVALID'
+        );
+      }
+      resolvedVersionId = explicitVer.id;
+    } else {
+      const activeVersions = await versionRepo.find({
+        where: { templateId: dto.templateId, deletedAt: IsNull() },
+      });
+      if (activeVersions.length > 0) {
+        activeVersions.sort((a, b) => compareVersions(b.version, a.version));
+        resolvedVersionId = activeVersions[0].id;
       }
     }
 

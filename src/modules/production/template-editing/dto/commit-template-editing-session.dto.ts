@@ -10,6 +10,7 @@ import {
   IsIn,
   IsNumber,
   Min,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -82,9 +83,12 @@ export class CommitTemplateEditingSessionDto {
   @IsNotEmpty({ message: 'معرف الإصدار الأساسي مطلوب' })
   baseVersionId!: string;
 
-  @IsOptional()
-  @IsString()
-  baseRevision?: string;
+  @IsNotEmpty({ message: 'مراجعة الإصدار الأساسية (baseRevision) مطلوبة للتحقق من التحرير المتزامن' })
+  @IsString({ message: 'مراجعة الإصدار الأساسية يجب أن تكون نصاً' })
+  @Matches(/^[a-f0-9]{64}$/i, {
+    message: 'مراجعة الإصدار الأساسية يجب أن تكون تجزئة SHA-256 صالحة بطول 64 حرفاً',
+  })
+  baseRevision!: string;
 
   @IsOptional()
   @IsString()

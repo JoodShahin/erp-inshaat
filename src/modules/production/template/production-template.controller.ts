@@ -1,8 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import { IsNull } from 'typeorm';
 import { AppDataSource } from '../../../database/data-source.js';
 import { ApiResponse } from '../../../common/responses/api-response.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
+import { UnauthorizedError } from '../../../common/errors/unauthorized.error.js';
+import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { ProductionTemplateEntity } from './production-template.entity.js';
 import { ProductionTemplateService, productionTemplateService } from './production-template.service.js';
 import {
   ProductionTemplateVersionService,
@@ -181,15 +186,45 @@ export class ProductionTemplateController {
     }
   };
 
+  previewEditingSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const dto = req.body as CommitTemplateEditingSessionDto;
+      const userId = (req as any).user?.id;
+      const result = await this.editingService.previewEditingSession(id as string, dto, userId);
+      res.status(200).json(ApiResponse.success(result, 'تم فحص ومعاينة التعديلات بنجاح'));
+    } catch (error) {
+      next(error);
+    }
+  };
+
   uploadEditingAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { id } = req.params;
       if (!req.file) {
         throw new BusinessRuleError('الملف مطلوب', 'FILE_REQUIRED');
       }
-      const userId = (req as any).user?.id || 'system';
-      const storageKey = req.file.path.replace(/\\/g, '/');
 
+      const userId = (req as any).user?.id;
+      if (!userId) {
+        if (req.file?.path && fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        throw new UnauthorizedError('يجب تسجيل الدخول لرفع المرفقات', 'AUTH_REQUIRED');
+      }
+
+      const templateRepo = AppDataSource.getRepository(ProductionTemplateEntity);
+      const template = await templateRepo.findOne({
+        where: { id: id as string, deletedAt: IsNull() },
+      });
+      if (!template) {
+        if (req.file?.path && fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        throw new NotFoundError('قالب الإنتاج غير موجود أو تم أرشفته', 'PRODUCTION_TEMPLATE_NOT_FOUND');
+      }
+
+      const storageKey = req.file.path.replace(/\\/g, '/');
       const tokenRepo = AppDataSource.getRepository(ProductionTemplateUploadTokenEntity);
       const token = tokenRepo.create({
         id: crypto.randomUUID(),
@@ -202,7 +237,15 @@ export class ProductionTemplateController {
         expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2 hours
         isUsed: false,
       });
-      await tokenRepo.save(token);
+
+      try {
+        await tokenRepo.save(token);
+      } catch (saveErr) {
+        if (req.file?.path && fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        throw saveErr;
+      }
 
       res.status(200).json(
         ApiResponse.success({

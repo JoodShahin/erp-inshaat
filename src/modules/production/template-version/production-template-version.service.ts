@@ -245,6 +245,7 @@ export class ProductionTemplateVersionService {
 
     const stageIds = stages.map((s) => s.id);
     let stageMats: any[] = [];
+    let stageAtts: any[] = [];
     if (stageIds.length > 0) {
       stageMats = await mgr
         .createQueryBuilder()
@@ -252,13 +253,77 @@ export class ProductionTemplateVersionService {
           'm.id AS id',
           'm.stage_id AS stageId',
           'm.product_id AS productId',
+          'm.product_unit_id AS productUnitId',
           'm.planned_quantity AS plannedQuantity',
         ])
         .from('production_template_stage_material', 'm')
         .where('m.stage_id IN (:...stageIds)', { stageIds })
         .orderBy('m.id', 'ASC')
         .getRawMany();
+
+      stageAtts = await mgr
+        .createQueryBuilder()
+        .select([
+          'a.id AS id',
+          'a.stage_id AS stageId',
+          'a.file_id AS fileId',
+          'a.storage_key AS storageKey',
+          'a.description AS description',
+          'a.sort_order AS sortOrder',
+        ])
+        .from('production_template_stage_attachment', 'a')
+        .where('a.stage_id IN (:...stageIds) AND a.deleted_at IS NULL', { stageIds })
+        .orderBy('a.id', 'ASC')
+        .getRawMany();
     }
+
+    const taskIds = tasks.map((t) => t.id);
+    let taskMats: any[] = [];
+    let taskAtts: any[] = [];
+    if (taskIds.length > 0) {
+      taskMats = await mgr
+        .createQueryBuilder()
+        .select([
+          'tm.id AS id',
+          'tm.task_id AS taskId',
+          'tm.product_id AS productId',
+          'tm.product_unit_id AS productUnitId',
+          'tm.planned_quantity AS plannedQuantity',
+        ])
+        .from('production_template_pattern_option_task_material', 'tm')
+        .where('tm.task_id IN (:...taskIds)', { taskIds })
+        .orderBy('tm.id', 'ASC')
+        .getRawMany();
+
+      taskAtts = await mgr
+        .createQueryBuilder()
+        .select([
+          'ta.id AS id',
+          'ta.task_id AS taskId',
+          'ta.file_id AS fileId',
+          'ta.storage_key AS storageKey',
+          'ta.description AS description',
+          'ta.sort_order AS sortOrder',
+        ])
+        .from('production_template_pattern_option_task_attachment', 'ta')
+        .where('ta.task_id IN (:...taskIds) AND ta.deleted_at IS NULL', { taskIds })
+        .orderBy('ta.id', 'ASC')
+        .getRawMany();
+    }
+
+    const specs = await mgr
+      .createQueryBuilder()
+      .select([
+        'sp.id AS id',
+        'sp.name AS name',
+        'sp.value AS value',
+        'sp.unit AS unit',
+        'sp.sort_order AS sortOrder',
+      ])
+      .from('production_template_specification', 'sp')
+      .where('sp.template_id = :templateId', { templateId })
+      .orderBy('sp.id', 'ASC')
+      .getRawMany();
 
     const payload = {
       templateId,
@@ -266,7 +331,12 @@ export class ProductionTemplateVersionService {
       stages: stages.map((s) => ({
         id: s.id,
         name: s.name,
+        desc: s.description || null,
+        dept: s.departmentId,
         dur: s.estimatedDurationMinutes,
+        durVal: s.estimatedDurationValue != null ? Number(s.estimatedDurationValue) : null,
+        durUnit: s.estimatedDurationUnit || null,
+        cost: s.estimatedCost != null ? Number(s.estimatedCost) : null,
         updated: s.updatedAt?.getTime?.() || null,
       })),
       patterns: patterns.map((p) => ({
@@ -278,6 +348,8 @@ export class ProductionTemplateVersionService {
         id: o.id,
         patternId: o.patternId,
         name: o.name,
+        code: o.code || null,
+        desc: o.description || null,
         sortOrder: o.sortOrder,
         updated: o.updatedAt instanceof Date ? o.updatedAt.getTime() : o.updatedAt,
       })),
@@ -285,15 +357,52 @@ export class ProductionTemplateVersionService {
         id: t.id,
         optionId: t.optionId,
         name: t.name,
+        code: t.code || null,
+        desc: t.description || null,
+        dept: t.departmentId,
         sortOrder: t.sortOrder,
         dur: t.estimatedDurationMinutes,
+        durVal: t.estimatedDurationValue != null ? Number(t.estimatedDurationValue) : null,
+        durUnit: t.estimatedDurationUnit || null,
+        cost: t.estimatedCost != null ? Number(t.estimatedCost) : null,
         updated: t.updatedAt instanceof Date ? t.updatedAt.getTime() : t.updatedAt,
       })),
       stageMats: stageMats.map((m) => ({
         id: m.id,
         stageId: m.stageId,
         productId: m.productId,
-        qty: m.plannedQuantity,
+        productUnitId: m.productUnitId || null,
+        qty: m.plannedQuantity != null ? Number(m.plannedQuantity) : null,
+      })),
+      stageAtts: stageAtts.map((a) => ({
+        id: a.id,
+        stageId: a.stageId,
+        fileId: a.fileId || null,
+        storageKey: a.storageKey,
+        desc: a.description || null,
+        sortOrder: a.sortOrder,
+      })),
+      taskMats: taskMats.map((m) => ({
+        id: m.id,
+        taskId: m.taskId,
+        productId: m.productId,
+        productUnitId: m.productUnitId || null,
+        qty: m.plannedQuantity != null ? Number(m.plannedQuantity) : null,
+      })),
+      taskAtts: taskAtts.map((a) => ({
+        id: a.id,
+        taskId: a.taskId,
+        fileId: a.fileId || null,
+        storageKey: a.storageKey,
+        desc: a.description || null,
+        sortOrder: a.sortOrder,
+      })),
+      specs: specs.map((sp) => ({
+        id: sp.id,
+        name: sp.name,
+        val: sp.value,
+        unit: sp.unit || null,
+        sortOrder: sp.sortOrder,
       })),
       wf: wfItems.map((w) => ({
         id: w.id,

@@ -3863,7 +3863,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnReviewSave = document.getElementById('btnReviewAndSaveSession');
   if (btnReviewSave) {
-    btnReviewSave.addEventListener('click', () => {
+    btnReviewSave.addEventListener('click', async () => {
       const modalEl = document.getElementById('saveSessionModal');
       if (!modalEl) return;
       const count = editingSession.getPendingCount();
@@ -3871,66 +3871,93 @@ document.addEventListener('DOMContentLoaded', () => {
         Swal.fire('تنبيه', 'لا توجد أي تعديلات معلقة لحفظها.', 'info');
         return;
       }
+
+      // Show loading indicator in modal
       const countEl = document.getElementById('modalChangeCountText');
-      if (countEl) countEl.textContent = 'عدد التعديلات المعلقة: ' + count;
-
-      const isStructural = editingSession.operations.some((op) =>
-        [
-          'ADD_STAGE',
-          'DELETE_STAGE',
-          'ADD_PATTERN',
-          'DELETE_PATTERN',
-          'ADD_OPTION',
-          'DELETE_OPTION',
-          'ADD_TASK',
-          'DELETE_TASK',
-          'REORDER_WORKFLOW',
-          'REORDER_PATTERN_OPTIONS',
-          'REORDER_OPTION_TASKS',
-        ].includes(op.type)
-      );
-
+      if (countEl) countEl.textContent = 'جاري تحليل وفحص التعديلات من الخادم...';
       const typeBadge = document.getElementById('modalChangeTypeBadge');
-      const radioOverwrite = document.getElementById('radioDecisionOverwrite');
-      const radioAuto = document.getElementById('radioDecisionAuto');
-
-      if (isStructural) {
-        if (typeBadge) {
-          typeBadge.textContent = 'تعديلات هيكلية (تتطلب إصداراً جديداً)';
-          typeBadge.className = 'badge bg-danger';
-        }
-        if (radioOverwrite) {
-          radioOverwrite.disabled = true;
-          if (radioOverwrite.checked && radioAuto) radioAuto.checked = true;
-        }
-      } else {
-        if (typeBadge) {
-          typeBadge.textContent = 'تعديلات طفيفة (بيانات وصفية)';
-          typeBadge.className = 'badge bg-info text-dark';
-        }
-        if (radioOverwrite) {
-          radioOverwrite.disabled = false;
-        }
+      if (typeBadge) {
+        typeBadge.textContent = 'جاري التحليل...';
+        typeBadge.className = 'badge bg-secondary';
       }
-
-      // Populate reasons list
       const reasonsList = document.getElementById('modalChangeReasonsList');
-      if (reasonsList) {
-        reasonsList.innerHTML = '';
-        editingSession.operations.slice(0, 7).forEach((op) => {
-          const li = document.createElement('li');
-          li.textContent = op.type + (op.payload?.name ? ': ' + op.payload.name : '');
-          reasonsList.appendChild(li);
-        });
-        if (editingSession.operations.length > 7) {
-          const li = document.createElement('li');
-          li.textContent = '... بالإضافة إلى ' + (editingSession.operations.length - 7) + ' تعديلات أخرى';
-          reasonsList.appendChild(li);
-        }
-      }
+      if (reasonsList) reasonsList.innerHTML = '<li class="text-muted">جاري فحص التعديلات من الخادم...</li>';
 
       const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
       modal.show();
+
+      try {
+        const previewPayload = {
+          baseVersionId: currentVersion.id,
+          baseRevision: currentVersion.revision || undefined,
+          commitDecision: 'AUTO',
+          operations: editingSession.operations,
+        };
+
+        const res = await window.erpFetch('/api/production/templates/' + templateId + '/editing/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(previewPayload),
+        });
+
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          const errMsg = extractApiErrorMessage(json, 'فشل في تحليل التعديلات');
+          modal.hide();
+          Swal.fire('خطأ في التحليل', errMsg, 'error');
+          return;
+        }
+
+        const previewData = json.data;
+        const confirmBtn = document.getElementById('btnConfirmCommitSession');
+        const radioOverwrite = document.getElementById('radioDecisionOverwrite');
+        const radioAuto = document.getElementById('radioDecisionAuto');
+
+        if (countEl) {
+          countEl.textContent = 'عدد التغييرات الصافية الفعالة: ' + previewData.effectiveChangesCount;
+        }
+
+        if (previewData.classification === 'NONE') {
+          if (typeBadge) {
+            typeBadge.textContent = 'لا توجد تغييرات مؤثرة';
+            typeBadge.className = 'badge bg-secondary';
+          }
+          if (confirmBtn) confirmBtn.disabled = true;
+          if (radioOverwrite) radioOverwrite.disabled = true;
+          if (radioAuto) radioAuto.disabled = true;
+        } else if (previewData.classification === 'STRUCTURAL') {
+          if (typeBadge) {
+            typeBadge.textContent = 'تعديلات هيكلية (تتطلب إصداراً جديداً)';
+            typeBadge.className = 'badge bg-danger';
+          }
+          if (confirmBtn) confirmBtn.disabled = false;
+          if (radioOverwrite) {
+            radioOverwrite.disabled = true;
+            if (radioOverwrite.checked && radioAuto) radioAuto.checked = true;
+          }
+        } else {
+          // MINOR
+          if (typeBadge) {
+            typeBadge.textContent = 'تعديلات طفيفة (بيانات وصفية)';
+            typeBadge.className = 'badge bg-info text-dark';
+          }
+          if (confirmBtn) confirmBtn.disabled = false;
+          if (radioOverwrite) radioOverwrite.disabled = false;
+        }
+
+        // Render server reasons
+        if (reasonsList) {
+          reasonsList.innerHTML = '';
+          (previewData.reasons || []).forEach((reason) => {
+            const li = document.createElement('li');
+            li.textContent = reason;
+            reasonsList.appendChild(li);
+          });
+        }
+      } catch (err) {
+        modal.hide();
+        Swal.fire('خطأ في الاتصال', 'تعذر الاتصال بالخادم لتحليل التعديلات.', 'error');
+      }
     });
   }
 

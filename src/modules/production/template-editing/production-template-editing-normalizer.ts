@@ -14,6 +14,11 @@ import { ProductionTemplateSpecificationEntity } from '../template-specification
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { resolveTaskDuration } from '../task-duration/task-duration.helper.js';
 
+export interface NormalizedClassificationResult extends ClassificationResult {
+  normalizedOperations: TemplateEditingOperationDto[];
+  hasEffectiveChanges: boolean;
+}
+
 interface InMemStage {
   id: string;
   name: string;
@@ -71,6 +76,7 @@ interface InMemAttachment {
   id: string;
   parentId: string; // stageId or taskId
   parentType: 'STAGE' | 'TASK';
+  fileId?: string;
   storageKey?: string;
   uploadToken?: string;
   description: string | null;
@@ -109,13 +115,15 @@ export class ProductionTemplateEditingNormalizer {
     versionId: string,
     operations: TemplateEditingOperationDto[],
     manager: EntityManager
-  ): Promise<ClassificationResult> {
+  ): Promise<NormalizedClassificationResult> {
     if (!operations || operations.length === 0) {
       return {
         classification: 'NONE',
         reasons: ['لا توجد عمليات تعديل'],
         structuralCount: 0,
         minorCount: 0,
+        normalizedOperations: [],
+        hasEffectiveChanges: false,
       };
     }
 
@@ -614,12 +622,19 @@ export class ProductionTemplateEditingNormalizer {
 
         case 'ADD_STAGE_ATTACHMENT':
         case 'ADD_TASK_ATTACHMENT': {
+          if (op.payload?.storageKey || op.payload?.filePath || op.payload?.path) {
+            throw new BusinessRuleError(
+              'يُحظر تمرير مسار الملف أو storageKey مباشرة من العميل. استخدم uploadToken أو fileId فقط.',
+              'PRODUCTION_TEMPLATE_ATTACHMENT_STORAGE_KEY_FORBIDDEN'
+            );
+          }
           const parentId = resolveRef(op.parentId);
           const tempId = `tmp-att-${attachmentsMap.size + 1}`;
           attachmentsMap.set(tempId, {
             id: tempId,
             parentId,
             parentType: op.type === 'ADD_STAGE_ATTACHMENT' ? 'STAGE' : 'TASK',
+            fileId: op.payload?.fileId,
             storageKey: op.payload?.storageKey,
             uploadToken: op.payload?.uploadToken,
             description: op.payload?.description || null,
@@ -840,29 +855,273 @@ export class ProductionTemplateEditingNormalizer {
       }
     }
 
-    if (structuralCount > 0) {
-      return {
-        classification: 'STRUCTURAL',
-        reasons,
-        structuralCount,
-        minorCount,
-      };
+    const normalizedOperations: TemplateEditingOperationDto[] = [];
+
+    // Stages
+    for (const [id, s] of stagesMap.entries()) {
+      if (s.isNew && !s.isDeleted) {
+        normalizedOperations.push({
+          type: 'ADD_STAGE',
+          tempClientId: s.id,
+          payload: {
+            name: s.name,
+            description: s.description,
+            departmentId: s.departmentId,
+            estimatedDurationMinutes: s.estimatedDurationMinutes,
+            estimatedDurationValue: s.estimatedDurationValue,
+            estimatedDurationUnit: s.estimatedDurationUnit,
+          },
+        });
+      } else if (!s.isNew && !s.isDeleted) {
+        const base = baseStages.find((b) => b.id === id);
+        if (
+          base &&
+          (s.name !== base.name ||
+            s.description !== base.description ||
+            s.departmentId !== base.departmentId ||
+            s.estimatedDurationMinutes !== base.estimatedDurationMinutes ||
+            s.estimatedDurationValue !== base.estimatedDurationValue ||
+            s.estimatedDurationUnit !== base.estimatedDurationUnit)
+        ) {
+          normalizedOperations.push({
+            type: 'UPDATE_STAGE',
+            targetId: s.id,
+            payload: {
+              name: s.name,
+              description: s.description,
+              departmentId: s.departmentId,
+              estimatedDurationMinutes: s.estimatedDurationMinutes,
+              estimatedDurationValue: s.estimatedDurationValue,
+              estimatedDurationUnit: s.estimatedDurationUnit,
+            },
+          });
+        }
+      } else if (!s.isNew && s.isDeleted) {
+        normalizedOperations.push({
+          type: 'DELETE_STAGE',
+          targetId: s.id,
+        });
+      }
     }
 
-    if (minorCount > 0) {
-      return {
-        classification: 'MINOR',
-        reasons,
-        structuralCount,
-        minorCount,
-      };
+    // Patterns
+    for (const [id, p] of patternsMap.entries()) {
+      if (p.isNew && !p.isDeleted) {
+        normalizedOperations.push({
+          type: 'ADD_PATTERN',
+          tempClientId: p.id,
+          payload: { name: p.name },
+        });
+      } else if (!p.isNew && !p.isDeleted) {
+        const base = basePatterns.find((b) => b.id === id);
+        if (base && p.name !== base.name) {
+          normalizedOperations.push({
+            type: 'UPDATE_PATTERN',
+            targetId: p.id,
+            payload: { name: p.name },
+          });
+        }
+      } else if (!p.isNew && p.isDeleted) {
+        normalizedOperations.push({
+          type: 'DELETE_PATTERN',
+          targetId: p.id,
+        });
+      }
+    }
+
+    // Options
+    for (const [id, o] of optionsMap.entries()) {
+      if (o.isNew && !o.isDeleted) {
+        normalizedOperations.push({
+          type: 'ADD_OPTION',
+          parentId: o.patternId,
+          tempClientId: o.id,
+          payload: { name: o.name, sortOrder: o.sortOrder },
+        });
+      } else if (!o.isNew && !o.isDeleted) {
+        const base = baseOptions.find((b) => b.id === id);
+        if (base && (o.name !== base.name || o.sortOrder !== base.sortOrder)) {
+          normalizedOperations.push({
+            type: 'UPDATE_OPTION',
+            targetId: o.id,
+            payload: { name: o.name, sortOrder: o.sortOrder },
+          });
+        }
+      } else if (!o.isNew && o.isDeleted) {
+        normalizedOperations.push({
+          type: 'DELETE_OPTION',
+          targetId: o.id,
+        });
+      }
+    }
+
+    // Tasks
+    for (const [id, t] of tasksMap.entries()) {
+      if (t.isNew && !t.isDeleted) {
+        normalizedOperations.push({
+          type: 'ADD_TASK',
+          parentId: t.optionId,
+          tempClientId: t.id,
+          payload: {
+            name: t.name,
+            description: t.description,
+            departmentId: t.departmentId,
+            sortOrder: t.sortOrder,
+            estimatedDurationMinutes: t.estimatedDurationMinutes,
+            estimatedDurationValue: t.estimatedDurationValue,
+            estimatedDurationUnit: t.estimatedDurationUnit,
+          },
+        });
+      } else if (!t.isNew && !t.isDeleted) {
+        const base = baseTasks.find((b) => b.id === id);
+        if (
+          base &&
+          (t.name !== base.name ||
+            t.description !== base.description ||
+            t.departmentId !== base.departmentId ||
+            t.sortOrder !== base.sortOrder ||
+            t.estimatedDurationMinutes !== base.estimatedDurationMinutes ||
+            t.estimatedDurationValue !== base.estimatedDurationValue ||
+            t.estimatedDurationUnit !== base.estimatedDurationUnit)
+        ) {
+          normalizedOperations.push({
+            type: 'UPDATE_TASK',
+            targetId: t.id,
+            payload: {
+              name: t.name,
+              description: t.description,
+              departmentId: t.departmentId,
+              sortOrder: t.sortOrder,
+              estimatedDurationMinutes: t.estimatedDurationMinutes,
+              estimatedDurationValue: t.estimatedDurationValue,
+              estimatedDurationUnit: t.estimatedDurationUnit,
+            },
+          });
+        }
+      } else if (!t.isNew && t.isDeleted) {
+        normalizedOperations.push({
+          type: 'DELETE_TASK',
+          targetId: t.id,
+        });
+      }
+    }
+
+    // Materials
+    for (const [id, m] of materialsMap.entries()) {
+      if (m.isNew && !m.isDeleted) {
+        normalizedOperations.push({
+          type: m.parentType === 'STAGE' ? 'ADD_STAGE_MATERIAL' : 'ADD_TASK_MATERIAL',
+          parentId: m.parentId,
+          payload: {
+            productId: m.productId,
+            productUnitId: m.productUnitId,
+            plannedQuantity: m.plannedQuantity,
+          },
+        });
+      } else if (!m.isNew && m.isDeleted) {
+        normalizedOperations.push({
+          type: m.parentType === 'STAGE' ? 'DELETE_STAGE_MATERIAL' : 'DELETE_TASK_MATERIAL',
+          targetId: m.id,
+        });
+      }
+    }
+
+    // Attachments
+    for (const [id, a] of attachmentsMap.entries()) {
+      if (a.isNew && !a.isDeleted) {
+        normalizedOperations.push({
+          type: a.parentType === 'STAGE' ? 'ADD_STAGE_ATTACHMENT' : 'ADD_TASK_ATTACHMENT',
+          parentId: a.parentId,
+          payload: {
+            uploadToken: a.uploadToken,
+            fileId: a.fileId,
+            description: a.description,
+            sortOrder: a.sortOrder,
+          },
+        });
+      } else if (!a.isNew && a.isDeleted) {
+        normalizedOperations.push({
+          type: a.parentType === 'STAGE' ? 'DELETE_STAGE_ATTACHMENT' : 'DELETE_TASK_ATTACHMENT',
+          targetId: a.id,
+        });
+      }
+    }
+
+    // Specs
+    for (const [id, s] of specsMap.entries()) {
+      if (s.isNew && !s.isDeleted) {
+        normalizedOperations.push({
+          type: 'ADD_SPEC',
+          payload: {
+            name: s.name,
+            value: s.value,
+            unit: s.unit,
+            sortOrder: s.sortOrder,
+          },
+        });
+      } else if (!s.isNew && !s.isDeleted) {
+        const base = baseSpecs.find((b) => b.id === id);
+        if (base && (s.name !== base.name || s.value !== base.value || s.unit !== base.unit)) {
+          normalizedOperations.push({
+            type: 'UPDATE_SPEC',
+            targetId: s.id,
+            payload: {
+              name: s.name,
+              value: s.value,
+              unit: s.unit,
+            },
+          });
+        }
+      } else if (!s.isNew && s.isDeleted) {
+        normalizedOperations.push({
+          type: 'DELETE_SPEC',
+          targetId: s.id,
+        });
+      }
+    }
+
+    // Workflow Reorder
+    let wfOrderChanged = false;
+    for (const [id, w] of wfMap.entries()) {
+      if (!w.isNew && !w.isDeleted) {
+        const base = baseWf.find((b) => b.id === id);
+        if (base && w.sortOrder !== base.sortOrder) {
+          wfOrderChanged = true;
+          break;
+        }
+      }
+    }
+    if (wfOrderChanged) {
+      const activeWfItems = Array.from(wfMap.values())
+        .filter((w) => !w.isDeleted)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((w) => ({
+          type: w.itemType,
+          id: w.targetId,
+        }));
+      normalizedOperations.push({
+        type: 'REORDER_WORKFLOW',
+        payload: { items: activeWfItems },
+      });
+    }
+
+    const hasEffectiveChanges = normalizedOperations.length > 0;
+    let finalClassification: 'STRUCTURAL' | 'MINOR' | 'NONE' = 'NONE';
+    if (!hasEffectiveChanges) {
+      finalClassification = 'NONE';
+    } else if (structuralCount > 0) {
+      finalClassification = 'STRUCTURAL';
+    } else if (minorCount > 0) {
+      finalClassification = 'MINOR';
     }
 
     return {
-      classification: 'NONE',
-      reasons: ['لا توجد تغييرات مؤثرة'],
-      structuralCount: 0,
-      minorCount: 0,
+      classification: finalClassification,
+      reasons: hasEffectiveChanges ? reasons : ['لا توجد تغييرات مؤثرة'],
+      structuralCount: hasEffectiveChanges ? structuralCount : 0,
+      minorCount: hasEffectiveChanges ? minorCount : 0,
+      normalizedOperations,
+      hasEffectiveChanges,
     };
   }
 }

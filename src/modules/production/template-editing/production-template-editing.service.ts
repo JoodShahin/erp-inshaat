@@ -1,5 +1,7 @@
 import { DataSource, EntityManager, Repository, IsNull, In } from 'typeorm';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { AppDataSource } from '../../../database/data-source.js';
 import {
   CommitTemplateEditingSessionDto,
@@ -33,6 +35,7 @@ import {
   ProductionDepartmentService,
   productionDepartmentService,
 } from '../department/production-department.service.js';
+import { ProductionTemplateStoredFileEntity } from '../template-stored-file/production-template-stored-file.entity.js';
 import { ProductionTemplateStageEntity } from '../template-stage/production-template-stage.entity.js';
 import { ProductionTemplateStageMaterialEntity } from '../template-stage-material/production-template-stage-material.entity.js';
 import { ProductionTemplateStageAttachmentEntity } from '../template-stage-attachment/production-template-stage-attachment.entity.js';
@@ -87,6 +90,7 @@ export class ProductionTemplateEditingService {
   /**
    * Commits an atomic editing session containing multiple operations in a single transaction.
    * Auto-classifies changes as STRUCTURAL vs MINOR and forks a new version if needed.
+   * Executes ONLY normalized net operations and returns cleanly for zero-diff requests.
    */
   async commitEditingSession(
     templateId: string,
@@ -97,6 +101,20 @@ export class ProductionTemplateEditingService {
       // 1. Lock template aggregate root
       const template = await this.guardService.lockMutableTemplate(templateId, manager);
 
+      // Compute request fingerprint hash for safe idempotency
+      const requestFingerprint = {
+        templateId,
+        baseVersionId: dto.baseVersionId,
+        baseRevision: dto.baseRevision,
+        commitDecision: dto.commitDecision || 'AUTO',
+        operations: dto.operations,
+        userId: userId || null,
+      };
+      const requestHash = crypto
+        .createHash('sha256')
+        .update(JSON.stringify(requestFingerprint))
+        .digest('hex');
+
       // 2. Idempotency check FIRST (retries return stored result immediately)
       if (dto.idempotencyKey) {
         const idempotencyRepo = manager.getRepository(ProductionTemplateEditingIdempotencyEntity);
@@ -104,6 +122,18 @@ export class ProductionTemplateEditingService {
           where: { templateId, idempotencyKey: dto.idempotencyKey },
         });
         if (existing) {
+          if (existing.userId && userId && existing.userId !== userId) {
+            throw new BusinessRuleError(
+              'مفتاح عدم التكرار (Idempotency) مرتبط بمستخدم آخر ولا يمكن استخدامه',
+              'IDEMPOTENCY_USER_MISMATCH'
+            );
+          }
+          if (existing.requestHash && existing.requestHash !== requestHash) {
+            throw new BusinessRuleError(
+              'تم استخدام نفس مفتاح عدم التكرار (Idempotency) مع طلب مختلف',
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST'
+            );
+          }
           const isFresh = Date.now() - existing.createdAt.getTime() < 24 * 60 * 60 * 1000;
           if (isFresh) {
             return JSON.parse(existing.responseJson) as CommitEditingSessionResult;
@@ -118,32 +148,65 @@ export class ProductionTemplateEditingService {
         manager
       );
 
-      // 4. Concurrency check: baseRevision
-      if (dto.baseRevision) {
-        const currentRevision = await this.versionService.computeVersionRevision(
-          templateId,
-          baseVersion.id,
-          manager
+      // 4. Mandatory concurrency check: baseRevision
+      if (!dto.baseRevision || typeof dto.baseRevision !== 'string' || !/^[a-f0-9]{64}$/i.test(dto.baseRevision)) {
+        throw new BusinessRuleError(
+          'مراجعة الإصدار الأساسية (baseRevision) مطلوبة ويجب أن تكون تجزئة SHA-256 صالحة',
+          'PRODUCTION_TEMPLATE_REVISION_REQUIRED'
         );
-        if (currentRevision !== dto.baseRevision) {
-          throw new BusinessRuleError(
-            'تم تعديل هذا القالب بواسطة مستخدم آخر أو جلسة أخرى. يرجى تحديث الصفحة والمحاولة مجدداً.',
-            'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT'
-          );
-        }
+      }
+
+      const currentRevision = await this.versionService.computeVersionRevision(
+        templateId,
+        baseVersion.id,
+        manager
+      );
+      if (currentRevision !== dto.baseRevision) {
+        throw new BusinessRuleError(
+          'تم تعديل هذا القالب بواسطة مستخدم آخر أو جلسة أخرى. يرجى تحديث الصفحة والمحاولة مجدداً.',
+          'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT'
+        );
       }
 
       // 5. Semantic diff normalization against baseline
-      const classification = await this.normalizer.normalizeAndClassify(
+      const normResult = await this.normalizer.normalizeAndClassify(
         templateId,
         baseVersion.id,
         dto.operations,
         manager
       );
 
-      // 6. Determine if we must fork a new version
+      // 6. If no effective changes (diff is NONE), return early with clean result (no DB writes, no version, no tokens consumed)
+      if (normResult.classification === 'NONE' || !normResult.hasEffectiveChanges) {
+        const cleanResult: CommitEditingSessionResult = {
+          templateId,
+          targetVersionId: baseVersion.id,
+          targetVersionNumber: baseVersion.version,
+          createdNewVersion: false,
+          changeType: 'NONE',
+          appliedOperationsCount: 0,
+          tempClientMap: {},
+        };
+
+        if (dto.idempotencyKey) {
+          const idempotencyRepo = manager.getRepository(ProductionTemplateEditingIdempotencyEntity);
+          const record = idempotencyRepo.create({
+            id: crypto.randomUUID(),
+            templateId,
+            idempotencyKey: dto.idempotencyKey,
+            requestHash,
+            userId: userId || null,
+            responseJson: JSON.stringify(cleanResult),
+          });
+          await idempotencyRepo.save(record);
+        }
+
+        return cleanResult;
+      }
+
+      // 7. Determine if we must fork a new version
       let shouldCreateNewVersion = false;
-      if (classification.classification === 'STRUCTURAL') {
+      if (normResult.classification === 'STRUCTURAL') {
         if (dto.commitDecision === 'OVERWRITE_CURRENT') {
           throw new BusinessRuleError(
             'التغييرات الهيكلية في بنية القالب تتطلب إنشاء إصدار جديد حتماً ولا يمكن التعديل المباشر على الإصدار الحالي',
@@ -152,16 +215,13 @@ export class ProductionTemplateEditingService {
         }
         // 'AUTO' or 'NEW_VERSION' both fork a new version for STRUCTURAL
         shouldCreateNewVersion = true;
-      } else if (classification.classification === 'MINOR') {
+      } else if (normResult.classification === 'MINOR') {
         if (dto.commitDecision === 'NEW_VERSION') {
           shouldCreateNewVersion = true;
         } else {
           // 'OVERWRITE_CURRENT' or 'AUTO' updates current version in place
           shouldCreateNewVersion = false;
         }
-      } else {
-        // 'NONE'
-        shouldCreateNewVersion = false;
       }
 
       let targetVersionId = baseVersion.id;
@@ -169,7 +229,7 @@ export class ProductionTemplateEditingService {
       const idMap = new Map<string, string>(); // Cloned IDs map: oldId -> newId
       const tempClientMap: Record<string, string> = {}; // Client IDs map: tempClientId -> newDbId
 
-      // 5. Fork new version if required
+      // 8. Fork new version if required
       if (shouldCreateNewVersion) {
         const nextVersionEntity = await this.versionService.createNextVersion(templateId, manager);
         targetVersionId = nextVersionEntity.id;
@@ -196,8 +256,8 @@ export class ProductionTemplateEditingService {
         return idOrTemp;
       };
 
-      // 6. Apply operations sequentially
-      for (const op of dto.operations) {
+      // 9. Apply ONLY normalized operations sequentially
+      for (const op of normResult.normalizedOperations) {
         await this.applySingleOperation(
           templateId,
           targetVersionId,
@@ -209,7 +269,7 @@ export class ProductionTemplateEditingService {
         );
       }
 
-      // 7. Ensure workflow dense compactor on target version
+      // 10. Ensure workflow dense compactor on target version
       await this.ensureWorkflowDenseCompacted(templateId, targetVersionId, manager);
 
       const result: CommitEditingSessionResult = {
@@ -217,18 +277,20 @@ export class ProductionTemplateEditingService {
         targetVersionId,
         targetVersionNumber,
         createdNewVersion: shouldCreateNewVersion,
-        changeType: classification.classification,
-        appliedOperationsCount: dto.operations.length,
+        changeType: normResult.classification,
+        appliedOperationsCount: normResult.normalizedOperations.length,
         tempClientMap,
       };
 
-      // 8. Persist idempotency result if key was provided
+      // 11. Persist idempotency result if key was provided
       if (dto.idempotencyKey) {
         const idempotencyRepo = manager.getRepository(ProductionTemplateEditingIdempotencyEntity);
         const record = idempotencyRepo.create({
           id: crypto.randomUUID(),
           templateId,
           idempotencyKey: dto.idempotencyKey,
+          requestHash,
+          userId: userId || null,
           responseJson: JSON.stringify(result),
         });
         await idempotencyRepo.save(record);
@@ -236,6 +298,74 @@ export class ProductionTemplateEditingService {
 
       return result;
     });
+  }
+
+  /**
+   * Previews an atomic editing session without committing any changes to the database.
+   * Runs the exact same semantic diff normalizer logic used during commit.
+   */
+  async previewEditingSession(
+    templateId: string,
+    dto: CommitTemplateEditingSessionDto,
+    userId?: string
+  ): Promise<{
+    classification: 'STRUCTURAL' | 'MINOR' | 'NONE';
+    effectiveChangesCount: number;
+    summary: string;
+    reasons: string[];
+    isNewVersionMandatory: boolean;
+    allowsOverwrite: boolean;
+    conflicts: string[];
+  }> {
+    const manager = this.dataSource.manager;
+
+    // 1. Verify template exists
+    await this.guardService.requireExistingTemplate(templateId, manager);
+
+    // 2. Assert latest version
+    const baseVersion = await this.versionService.assertIsLatestVersion(
+      templateId,
+      dto.baseVersionId,
+      manager
+    );
+
+    // 3. Concurrency check
+    const currentRevision = await this.versionService.computeVersionRevision(
+      templateId,
+      baseVersion.id,
+      manager
+    );
+    const conflicts: string[] = [];
+    if (dto.baseRevision && currentRevision !== dto.baseRevision) {
+      conflicts.push('تم تعديل هذا القالب بالتزامن من قبل مستخدم آخر');
+    }
+
+    // 4. Normalize and classify
+    const normResult = await this.normalizer.normalizeAndClassify(
+      templateId,
+      baseVersion.id,
+      dto.operations,
+      manager
+    );
+
+    const isNewVersionMandatory = normResult.classification === 'STRUCTURAL';
+    const allowsOverwrite = normResult.classification === 'MINOR';
+    const summary =
+      normResult.classification === 'STRUCTURAL'
+        ? 'تتضمن الجلسة تغييرات هيكلية تتطلب حتماً إنشاء إصدار جديد للقالب'
+        : normResult.classification === 'MINOR'
+        ? 'تتضمن الجلسة تغييرات وصفية طفيفة يمكن حفظها في الإصدار الحالي أو إنشاء إصدار جديد'
+        : 'لا توجد أي تغييرات صافية فعالة في هذه الجلسة';
+
+    return {
+      classification: normResult.classification,
+      effectiveChangesCount: normResult.normalizedOperations.length,
+      summary,
+      reasons: normResult.reasons,
+      isNewVersionMandatory,
+      allowsOverwrite,
+      conflicts,
+    };
   }
 
   /**
@@ -965,20 +1095,44 @@ export class ProductionTemplateEditingService {
     mimeType: string;
     sizeBytes: number;
   }> {
-    let storageKey = payload.storageKey;
-    let originalFileName = payload.originalFileName;
-    let mimeType = payload.mimeType;
-    let sizeBytes = Number(payload.sizeBytes || 0);
+    // 1. Explicitly reject any client-supplied storageKey or raw file paths
+    if (payload.storageKey || payload.filePath || payload.path) {
+      throw new BusinessRuleError(
+        'يُحظر تمرير مسار الملف أو storageKey مباشرة من العميل. استخدم uploadToken أو fileId فقط.',
+        'PRODUCTION_TEMPLATE_ATTACHMENT_STORAGE_KEY_FORBIDDEN'
+      );
+    }
 
+    let fileId: string | undefined;
+    let storageKey: string | undefined;
+    let originalFileName: string | undefined;
+    let mimeType: string | undefined;
+    let sizeBytes = 0;
+
+    // 2. Case A: Uploading a new file via UploadToken
     if (payload.uploadToken) {
+      if (typeof payload.uploadToken !== 'string') {
+        throw new BusinessRuleError(
+          'رمز رفع الملف المؤقت غير صالح',
+          'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_INVALID'
+        );
+      }
       const tokenRepo = manager.getRepository(ProductionTemplateUploadTokenEntity);
       const token = await tokenRepo.findOne({
-        where: { id: payload.uploadToken, templateId, isUsed: false },
+        where: { id: payload.uploadToken },
+        lock: { mode: 'pessimistic_write' },
       });
-      if (!token) {
+
+      if (!token || token.templateId !== templateId) {
         throw new BusinessRuleError(
-          'رمز رفع الملف المؤقت غير صالح أو تم استخدامه مسبقاً',
+          'رمز رفع الملف المؤقت غير موجود أو لا ينتمي لهذا القالب',
           'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_INVALID'
+        );
+      }
+      if (token.isUsed) {
+        throw new BusinessRuleError(
+          'رمز رفع الملف المؤقت تم استخدامه مسبقاً ولا يمكن إعادة استخدامه',
+          'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_ALREADY_USED'
         );
       }
       if (new Date() > token.expiresAt) {
@@ -987,12 +1141,25 @@ export class ProductionTemplateEditingService {
           'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_EXPIRED'
         );
       }
-      if (userId && token.userId && token.userId !== userId && token.userId !== 'system') {
+      if (!userId || (token.userId && token.userId !== userId)) {
         throw new BusinessRuleError(
           'رمز رفع الملف المؤقت لا يخص المستخدم الحالي',
           'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_UNAUTHORIZED'
         );
       }
+
+      // Check that the physical file exists on disk
+      const resolvedAbsPath = path.isAbsolute(token.storageKey)
+        ? token.storageKey
+        : path.resolve(process.cwd(), token.storageKey);
+      if (!fs.existsSync(resolvedAbsPath)) {
+        throw new BusinessRuleError(
+          'الملف الفيزيائي المرتبط بالرمز المؤقت غير موجود على الخادم',
+          'PRODUCTION_TEMPLATE_UPLOAD_PHYSICAL_FILE_MISSING'
+        );
+      }
+
+      // Mark token as used atomically within this transaction
       token.isUsed = true;
       await tokenRepo.save(token);
 
@@ -1000,32 +1167,64 @@ export class ProductionTemplateEditingService {
       originalFileName = token.originalFileName;
       mimeType = token.mimeType;
       sizeBytes = Number(token.sizeBytes);
-    }
 
-    if (!storageKey) {
+      const storedFile = await this.sharedFileService.getOrCreateStoredFile(
+        {
+          templateId,
+          storageKey,
+          originalFileName,
+          mimeType,
+          sizeBytes,
+          createdByUserId: userId || null,
+        },
+        manager
+      );
+      fileId = storedFile.id;
+    }
+    // 3. Case B: Reusing an existing stored file via fileId
+    else if (payload.fileId) {
+      if (typeof payload.fileId !== 'string') {
+        throw new BusinessRuleError(
+          'معرف الملف المعاد استخدامه غير صالح',
+          'PRODUCTION_TEMPLATE_STORED_FILE_INVALID'
+        );
+      }
+      const storedFileRepo = manager.getRepository(ProductionTemplateStoredFileEntity);
+      const storedFile = await storedFileRepo.findOne({
+        where: { id: payload.fileId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!storedFile || storedFile.templateId !== templateId) {
+        throw new BusinessRuleError(
+          'الملف المطلوب غير موجود أو لا ينتمي لهذا القالب',
+          'PRODUCTION_TEMPLATE_STORED_FILE_UNAUTHORIZED'
+        );
+      }
+      if (storedFile.deletedAt) {
+        throw new BusinessRuleError(
+          'الملف المطلوب تم حذفه مسبقاً ولا يمكن ربطه مجدداً',
+          'PRODUCTION_TEMPLATE_STORED_FILE_DELETED'
+        );
+      }
+
+      fileId = storedFile.id;
+      storageKey = storedFile.storageKey;
+      originalFileName = storedFile.originalFileName;
+      mimeType = storedFile.mimeType;
+      sizeBytes = Number(storedFile.sizeBytes);
+    } else {
       throw new BusinessRuleError(
-        'بيانات الملف المرفق غير مكتملة',
-        'PRODUCTION_TEMPLATE_ATTACHMENT_INVALID'
+        'يجب تقديم uploadToken لملف جديد أو fileId لملف موجود مصرح به',
+        'PRODUCTION_TEMPLATE_ATTACHMENT_INPUT_INVALID'
       );
     }
 
-    const storedFile = await this.sharedFileService.getOrCreateStoredFile(
-      {
-        templateId,
-        storageKey,
-        originalFileName: originalFileName || 'attachment',
-        mimeType: mimeType || 'application/octet-stream',
-        sizeBytes,
-        createdByUserId: userId || null,
-      },
-      manager
-    );
-
     return {
-      fileId: storedFile.id,
+      fileId,
       storageKey,
-      originalFileName: originalFileName || storedFile.originalFileName,
-      mimeType: mimeType || storedFile.mimeType,
+      originalFileName,
+      mimeType,
       sizeBytes,
     };
   }

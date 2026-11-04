@@ -1,10 +1,14 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { AppDataSource } from '../src/database/data-source.js';
 import { ProductionTemplateService } from '../src/modules/production/template/production-template.service.js';
 import { ProductionTemplateEditingService } from '../src/modules/production/template-editing/production-template-editing.service.js';
 import { ProductionTemplateVersionService } from '../src/modules/production/template-version/production-template-version.service.js';
 import { ProductionTemplateGuardService } from '../src/modules/production/template/production-template-guard.service.js';
+import { ProductionTemplateSharedFileService } from '../src/modules/production/template/production-template-shared-file.service.js';
 import { ProductionTemplateEntity } from '../src/modules/production/template/production-template.entity.js';
 import { ProductionTemplateVersionEntity } from '../src/modules/production/template-version/production-template-version.entity.js';
 import { ProductionTemplateStageEntity } from '../src/modules/production/template-stage/production-template-stage.entity.js';
@@ -23,8 +27,45 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   let editingService: ProductionTemplateEditingService;
   let versionService: ProductionTemplateVersionService;
   let guardService: ProductionTemplateGuardService;
+  let sharedFileService: ProductionTemplateSharedFileService;
   let testDepartmentId: string;
   let testUserId: string;
+  let otherUserId: string;
+
+  async function getRevision(templateId: string, versionId: string): Promise<string> {
+    return await versionService.computeVersionRevision(templateId, versionId);
+  }
+
+  async function createTestUploadToken(
+    templateId: string,
+    userId: string,
+    filename = 'test-doc.pdf',
+    createPhysical = true
+  ): Promise<string> {
+    const tokenRepo = AppDataSource.getRepository(ProductionTemplateUploadTokenEntity);
+    const uploadsDir = path.resolve(process.cwd(), 'storage/test-uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    const filePath = path.join(uploadsDir, `${Date.now()}-${crypto.randomUUID()}-${filename}`);
+    if (createPhysical) {
+      fs.writeFileSync(filePath, 'dummy content for test attachment');
+    }
+
+    const token = tokenRepo.create({
+      id: crypto.randomUUID(),
+      templateId,
+      userId,
+      storageKey: path.relative(process.cwd(), filePath).replace(/\\/g, '/'),
+      originalFileName: filename,
+      mimeType: 'application/pdf',
+      sizeBytes: 1024,
+      expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+      isUsed: false,
+    });
+    await tokenRepo.save(token);
+    return token.id;
+  }
 
   before(async () => {
     if (!AppDataSource.isInitialized) {
@@ -34,6 +75,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
     editingService = new ProductionTemplateEditingService(AppDataSource);
     versionService = new ProductionTemplateVersionService(AppDataSource);
     guardService = new ProductionTemplateGuardService(AppDataSource);
+    sharedFileService = new ProductionTemplateSharedFileService(AppDataSource);
 
     // Ensure a test department exists
     const deptRepo = AppDataSource.getRepository(ProductionDepartmentEntity);
@@ -41,7 +83,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
     if (!dept) {
       dept = deptRepo.create({
         name: 'قسم الاختبارات الهندسية',
-        code: 'TEST-DEPT',
+        code: 'TEST-DEPT-' + Date.now(),
         isActive: true,
       });
       dept = await deptRepo.save(dept);
@@ -49,18 +91,23 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
     testDepartmentId = dept.id;
 
     const userRepo = AppDataSource.getRepository(UserEntity);
-    let user = await userRepo.findOne({ where: {} });
-    if (!user) {
-      user = userRepo.create({
-        username: 'test_admin_' + Date.now(),
-        email: 'test_admin_' + Date.now() + '@inshaat.local',
+    const existingUsers = await userRepo.find({ take: 2 });
+    if (existingUsers.length > 0) {
+      testUserId = existingUsers[0].id;
+    }
+    if (existingUsers.length > 1) {
+      otherUserId = existingUsers[1].id;
+    } else {
+      const u2 = userRepo.create({
+        fullName: 'المستخدم الإضافي',
+        phone: '9665' + Math.floor(10000000 + Math.random() * 90000000),
         passwordHash: 'dummy',
-        fullName: 'Test Admin',
+        roleId: existingUsers[0].roleId,
         isActive: true,
       });
-      user = await userRepo.save(user);
+      const savedU2 = await userRepo.save(u2);
+      otherUserId = savedU2.id;
     }
-    testUserId = user.id;
   });
 
   after(async () => {
@@ -84,19 +131,19 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.ok(created.id);
       assert.match(created.code, /^PT-\d{6}$/);
 
-      // Verify initial version 1.0 was persisted in DB
-      const versionRepo = AppDataSource.getRepository(ProductionTemplateVersionEntity);
-      const versions = await versionRepo.find({ where: { templateId: created.id } });
-
+      // Verify version 1.0 exists in database
+      const versions = await versionService.listVersions(created.id);
       assert.strictEqual(versions.length, 1);
       assert.strictEqual(versions[0].version, '1.0');
+      assert.strictEqual(versions[0].isLatest, true);
 
-      // Verify template detail returns version info
+      // Verify template detail returns active version summary
       const detail = await templateService.getTemplateById(created.id);
       assert.ok(detail.currentVersion);
       assert.strictEqual(detail.currentVersion.version, '1.0');
       assert.strictEqual(detail.currentVersion.isLatest, true);
-      assert.strictEqual(detail.versions?.length, 1);
+      assert.strictEqual(typeof detail.currentVersion.revision, 'string');
+      assert.strictEqual(detail.currentVersion.revision.length, 64);
     });
   });
 
@@ -105,13 +152,11 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   // ------------------------------------------------------------------------
   describe('2. Version Immutability & Historical Protection', () => {
     it('blocks direct mutations on historical versions when a newer version exists', async () => {
-      // 1. Create a template
       const created = await templateService.createTemplate({
         name: 'قالب الحماية التاريخية',
         isActive: true,
       });
 
-      // 2. Add an initial stage in v1.0
       const v1 = await versionService.getLatestVersion(created.id);
       const stageRepo = AppDataSource.getRepository(ProductionTemplateStageEntity);
       const stage1 = stageRepo.create({
@@ -123,7 +168,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       await stageRepo.save(stage1);
 
-      // 3. Create v1.1
+      // Create v1.1
       await AppDataSource.transaction(async (manager) => {
         await versionService.createNextVersion(created.id, manager);
       });
@@ -141,9 +186,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   });
 
   // ------------------------------------------------------------------------
-  // 3. Atomic Editing Sessions & Auto-Classification
+  // 3. Atomic Editing Sessions, Change Classification & Normalizer Cases
   // ------------------------------------------------------------------------
-  describe('3. Atomic Editing Sessions & Change Classification', () => {
+  describe('3. Atomic Editing Sessions & Semantic Normalizer', () => {
     it('STRUCTURAL operation automatically forks next version (1.0 -> 1.1)', async () => {
       const created = await templateService.createTemplate({
         name: 'قالب التحرير الذري الهيكلي',
@@ -151,31 +196,34 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
 
       const v1 = await versionService.getLatestVersion(created.id);
-      assert.strictEqual(v1.version, '1.0');
+      const rev = await getRevision(created.id, v1.id);
 
-      // Commit session with ADD_STAGE (structural change)
-      const commitRes = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1.id,
-        commitDecision: 'AUTO',
-        operations: [
-          {
-            type: 'ADD_STAGE',
-            tempClientId: 'temp-stage-1',
-            payload: {
-              name: 'مرحلة الصب الخرساني',
-              departmentId: testDepartmentId,
-              estimatedDurationMinutes: 60,
+      const commitRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 'temp-stage-1',
+              payload: {
+                name: 'مرحلة الصب الخرساني',
+                departmentId: testDepartmentId,
+                estimatedDurationMinutes: 60,
+              },
             },
-          },
-        ],
-      });
+          ],
+        },
+        testUserId
+      );
 
       assert.strictEqual(commitRes.createdNewVersion, true);
       assert.strictEqual(commitRes.changeType, 'STRUCTURAL');
       assert.strictEqual(commitRes.targetVersionNumber, '1.1');
       assert.ok(commitRes.tempClientMap['temp-stage-1']);
 
-      // Verify v1.1 has the stage and v1.0 remains untouched
       const detailV1 = await templateService.getTemplateById(created.id, v1.id);
       assert.strictEqual(detailV1.stages.length, 0);
 
@@ -191,28 +239,32 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
 
       const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
 
-      // Commit session with ADD_SPEC (minor change)
-      const commitRes = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1.id,
-        commitDecision: 'AUTO',
-        operations: [
-          {
-            type: 'ADD_SPEC',
-            payload: {
-              name: 'العرض الإجمالي',
-              value: '400',
-              unit: 'cm',
+      const commitRes = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_SPEC',
+              payload: {
+                name: 'العرض الإجمالي',
+                value: '400',
+                unit: 'cm',
+              },
             },
-          },
-        ],
-      });
+          ],
+        },
+        testUserId
+      );
 
       assert.strictEqual(commitRes.createdNewVersion, false);
       assert.strictEqual(commitRes.changeType, 'MINOR');
       assert.strictEqual(commitRes.targetVersionNumber, '1.0');
 
-      // Verify spec added to template
       const detail = await templateService.getTemplateById(created.id);
       assert.strictEqual(detail.specifications.length, 1);
       assert.strictEqual(detail.specifications[0].name, 'العرض الإجمالي');
@@ -225,24 +277,29 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
 
       const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
 
-      // Attempt structural change (ADD_STAGE) with OVERWRITE_CURRENT
       await assert.rejects(
         async () =>
-          editingService.commitEditingSession(created.id, {
-            baseVersionId: v1.id,
-            commitDecision: 'OVERWRITE_CURRENT',
-            operations: [
-              {
-                type: 'ADD_STAGE',
-                tempClientId: 'illegal-stage',
-                payload: {
-                  name: 'مرحلة غير مسموح بها',
-                  departmentId: testDepartmentId,
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'OVERWRITE_CURRENT',
+              operations: [
+                {
+                  type: 'ADD_STAGE',
+                  tempClientId: 'illegal-stage',
+                  payload: {
+                    name: 'مرحلة غير مسموح بها',
+                    departmentId: testDepartmentId,
+                  },
                 },
-              },
-            ],
-          }),
+              ],
+            },
+            testUserId
+          ),
         (err: any) => {
           assert.strictEqual(err instanceof BusinessRuleError, true);
           assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STRUCTURAL_CHANGE_REQUIRES_NEW_VERSION');
@@ -251,89 +308,280 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       );
     });
 
-    it('rejects modifying elements from another version or template (Strict Hierarchy)', async () => {
-      const t1 = await templateService.createTemplate({ name: 'قالب 1', isActive: true });
-      const t2 = await templateService.createTemplate({ name: 'قالب 2', isActive: true });
+    it('Normalizer Case A: cancels opposing add/delete of temporary stage resulting in NONE diff', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب فحص إلغاء التعديل', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
 
-      const v1 = await versionService.getLatestVersion(t1.id);
-      const v2 = await versionService.getLatestVersion(t2.id);
+      const res = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 'temp-stg',
+              payload: { name: 'مرحلة مؤقتة', departmentId: testDepartmentId },
+            },
+            {
+              type: 'DELETE_STAGE',
+              targetId: 'temp-stg',
+            },
+          ],
+        },
+        testUserId
+      );
 
-      // Add stage to template 2
-      const resT2 = await editingService.commitEditingSession(t2.id, {
-        baseVersionId: v2.id,
-        commitDecision: 'AUTO',
-        operations: [
-          {
-            type: 'ADD_STAGE',
-            tempClientId: 't2-stage',
-            payload: { name: 'مرحلة قالب 2', departmentId: testDepartmentId },
-          },
-        ],
-      });
-      const t2StageId = resT2.tempClientMap['t2-stage'];
+      assert.strictEqual(res.changeType, 'NONE');
+      assert.strictEqual(res.createdNewVersion, false);
+      assert.strictEqual(res.appliedOperationsCount, 0);
+      assert.strictEqual(res.targetVersionNumber, '1.0');
 
-      // Attempt to delete t2's stage within t1's editing session
+      // Verify no stages created in database
+      const detail = await templateService.getTemplateById(created.id, v1.id);
+      assert.strictEqual(detail.stages.length, 0);
+    });
+
+    it('Normalizer Case B: mutate name A->B->A results in NONE diff without writing to DB', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب فحص استعادة البيانات', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      // Create an initial spec
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_SPEC',
+              payload: { name: 'المقاومة', value: '350', unit: 'kg' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const detail = await templateService.getTemplateById(created.id);
+      const specId = detail.specifications[0].id;
+      rev = await getRevision(created.id, v1.id);
+
+      // Mutate from 350 to 400 and then back to 350 in same session
+      const res = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'UPDATE_SPEC',
+              targetId: specId,
+              payload: { name: 'المقاومة', value: '400', unit: 'kg' },
+            },
+            {
+              type: 'UPDATE_SPEC',
+              targetId: specId,
+              payload: { name: 'المقاومة', value: '350', unit: 'kg' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(res.changeType, 'NONE');
+      assert.strictEqual(res.createdNewVersion, false);
+      assert.strictEqual(res.appliedOperationsCount, 0);
+    });
+
+    it('Normalizer Case C: add pattern + option + task and mutate task -> creates final state in one go', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب إضافة شجرة نهائية', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+
+      const res = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_PATTERN',
+              tempClientId: 'pat-1',
+              payload: { name: 'النمط أ' },
+            },
+            {
+              type: 'ADD_OPTION',
+              parentId: 'pat-1',
+              tempClientId: 'opt-1',
+              payload: { name: 'الخيار 1' },
+            },
+            {
+              type: 'ADD_TASK',
+              parentId: 'opt-1',
+              tempClientId: 'tsk-1',
+              payload: { name: 'المهمة المبدئية', departmentId: testDepartmentId },
+            },
+            {
+              type: 'UPDATE_TASK',
+              targetId: 'tsk-1',
+              payload: { name: 'المهمة النهائية المعدلة' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(res.createdNewVersion, true);
+      assert.strictEqual(res.targetVersionNumber, '1.1');
+
+      const detail = await templateService.getTemplateById(created.id, res.targetVersionId);
+      assert.strictEqual(detail.patterns.length, 1);
+      assert.strictEqual(detail.patterns[0].options.length, 1);
+      assert.strictEqual(detail.patterns[0].options[0].tasks.length, 1);
+      assert.strictEqual(detail.patterns[0].options[0].tasks[0].name, 'المهمة النهائية المعدلة');
+    });
+
+    it('Normalizer Case E: reorder workflow then revert -> cancels to NONE', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب فحص الترتيب', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      // Create two stages
+      const resInit = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's1',
+              payload: { name: 'مرحلة 1', departmentId: testDepartmentId },
+            },
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's2',
+              payload: { name: 'مرحلة 2', departmentId: testDepartmentId },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const stg1Id = resInit.tempClientMap['s1'];
+      const stg2Id = resInit.tempClientMap['s2'];
+      const vLatest = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, vLatest.id);
+
+      // Reorder s2 before s1, then reorder s1 before s2 (back to original)
+      const resRevert = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'REORDER_WORKFLOW',
+              payload: {
+                items: [
+                  { type: 'STAGE', id: stg2Id },
+                  { type: 'STAGE', id: stg1Id },
+                ],
+              },
+            },
+            {
+              type: 'REORDER_WORKFLOW',
+              payload: {
+                items: [
+                  { type: 'STAGE', id: stg1Id },
+                  { type: 'STAGE', id: stg2Id },
+                ],
+              },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(resRevert.changeType, 'NONE');
+      assert.strictEqual(resRevert.createdNewVersion, false);
+      assert.strictEqual(resRevert.appliedOperationsCount, 0);
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 4. Concurrency & Revision Hardening
+  // ------------------------------------------------------------------------
+  describe('4. Mandatory Revision & Concurrency Hardening', () => {
+    it('throws when baseRevision is missing or invalid', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب المراجعة الإلزامية', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+
+      // Missing baseRevision
       await assert.rejects(
         async () =>
-          editingService.commitEditingSession(t1.id, {
-            baseVersionId: v1.id,
-            commitDecision: 'AUTO',
-            operations: [
-              {
-                type: 'DELETE_STAGE',
-                targetId: t2StageId,
-              },
-            ],
-          }),
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              commitDecision: 'AUTO',
+              operations: [{ type: 'ADD_STAGE', tempClientId: 's', payload: { name: 's', departmentId: testDepartmentId } }],
+            } as any,
+            testUserId
+          ),
         (err: any) => {
           assert.strictEqual(err instanceof BusinessRuleError, true);
-          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_REVISION_REQUIRED');
+          return true;
+        }
+      );
+
+      // Non-64 hex string baseRevision
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: 'invalid-not-sha256',
+              commitDecision: 'AUTO',
+              operations: [{ type: 'ADD_STAGE', tempClientId: 's', payload: { name: 's', departmentId: testDepartmentId } }],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_REVISION_REQUIRED');
           return true;
         }
       );
     });
 
-    it('Normalizer Case A: cancels opposing add/delete of temporary stage resulting in NONE diff', async () => {
-      const created = await templateService.createTemplate({ name: 'قالب فحص إلغاء التعديل', isActive: true });
+    it('Concurrency Conflict: throws when baseRevision is stale', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب تعارض المراجعة', isActive: true });
       const v1 = await versionService.getLatestVersion(created.id);
-      const res = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1.id,
-        commitDecision: 'AUTO',
-        operations: [
-          {
-            type: 'ADD_STAGE',
-            tempClientId: 'temp-stg',
-            payload: { name: 'مرحلة مؤقتة', departmentId: testDepartmentId },
-          },
-          {
-            type: 'DELETE_STAGE',
-            targetId: 'temp-stg',
-          },
-        ],
-      });
-      assert.strictEqual(res.changeType, 'NONE');
-      assert.strictEqual(res.createdNewVersion, false);
-      assert.strictEqual(res.targetVersionNumber, '1.0');
-    });
+      const staleRevision = '0000000000000000000000000000000000000000000000000000000000000000';
 
-    it('Concurrency Conflict: throws when baseRevision does not match current version revision', async () => {
-      const created = await templateService.createTemplate({ name: 'قالب التزامن', isActive: true });
-      const v1 = await versionService.getLatestVersion(created.id);
-      const staleRevision = 'rev_0000000000000000000000000000000000000000000000000000000000000000';
       await assert.rejects(
         async () =>
-          editingService.commitEditingSession(created.id, {
-            baseVersionId: v1.id,
-            baseRevision: staleRevision,
-            commitDecision: 'AUTO',
-            operations: [
-              {
-                type: 'ADD_STAGE',
-                tempClientId: 'stg-1',
-                payload: { name: 'مرحلة 1', departmentId: testDepartmentId },
-              },
-            ],
-          }),
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: staleRevision,
+              commitDecision: 'AUTO',
+              operations: [{ type: 'ADD_STAGE', tempClientId: 's', payload: { name: 's', departmentId: testDepartmentId } }],
+            },
+            testUserId
+          ),
         (err: any) => {
           assert.strictEqual(err instanceof BusinessRuleError, true);
           assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT');
@@ -341,248 +589,524 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         }
       );
     });
+  });
 
-    it('Idempotency: duplicate commit with same idempotencyKey returns stored response', async () => {
-      const created = await templateService.createTemplate({ name: 'قالب التكرار', isActive: true });
+  // ------------------------------------------------------------------------
+  // 5. Idempotency Fingerprint & User Isolation
+  // ------------------------------------------------------------------------
+  describe('5. Idempotency Fingerprint & User Isolation', () => {
+    it('duplicate commit with same key and matching request returns cached result', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب مفتاح التكرار المطابق', isActive: true });
       const v1 = await versionService.getLatestVersion(created.id);
-      const idempKey = 'idemp-session-key-999';
-      const firstRes = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1.id,
-        idempotencyKey: idempKey,
-        commitDecision: 'AUTO',
-        operations: [
-          {
-            type: 'ADD_STAGE',
-            tempClientId: 'stg-idemp',
-            payload: { name: 'مرحلة التكرار', departmentId: testDepartmentId },
-          },
-        ],
-      });
-      assert.strictEqual(firstRes.createdNewVersion, true);
-      assert.strictEqual(firstRes.targetVersionNumber, '1.1');
+      const rev = await getRevision(created.id, v1.id);
+      const idempKey = 'idem-match-' + Date.now();
 
-      // Duplicate request with same idempotencyKey
-      const secondRes = await editingService.commitEditingSession(created.id, {
+      const payload = {
         baseVersionId: v1.id,
+        baseRevision: rev,
         idempotencyKey: idempKey,
-        commitDecision: 'AUTO',
+        commitDecision: 'AUTO' as const,
         operations: [
           {
             type: 'ADD_STAGE',
             tempClientId: 'stg-idemp',
-            payload: { name: 'مرحلة التكرار', departmentId: testDepartmentId },
+            payload: { name: 'مرحلة متكررة', departmentId: testDepartmentId },
           },
         ],
-      });
+      };
+
+      const firstRes = await editingService.commitEditingSession(created.id, payload, testUserId);
+      assert.strictEqual(firstRes.createdNewVersion, true);
+
+      // Re-send with identical payload
+      const secondRes = await editingService.commitEditingSession(created.id, payload, testUserId);
       assert.deepStrictEqual(secondRes, firstRes);
     });
 
-    it('Upload Token: ADD_STAGE_ATTACHMENT consumes uploadToken and rejects reuse', async () => {
-      const created = await templateService.createTemplate({ name: 'قالب فحص الرموز المؤقتة', isActive: true });
+    it('rejects same idempotencyKey with different request payload (fingerprint mismatch)', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب تعارض محتوى التكرار', isActive: true });
       const v1 = await versionService.getLatestVersion(created.id);
-      const tokenRepo = AppDataSource.getRepository(ProductionTemplateUploadTokenEntity);
-      const tokenId = 'tok-' + Date.now();
-      const tokenRecord = tokenRepo.create({
-        id: tokenId,
-        templateId: created.id,
-        userId: testUserId,
-        storageKey: 'storage/templates/test-doc.pdf',
-        originalFileName: 'test-doc.pdf',
-        mimeType: 'application/pdf',
-        sizeBytes: 1024,
-        expiresAt: new Date(Date.now() + 3600000),
-        isUsed: false,
-      });
-      await tokenRepo.save(tokenRecord);
+      const rev = await getRevision(created.id, v1.id);
+      const idempKey = 'idem-diff-' + Date.now();
 
-      // Commit using uploadToken
-      const commitRes = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1.id,
-        commitDecision: 'AUTO',
-        operations: [
-          {
-            type: 'ADD_STAGE',
-            tempClientId: 'stage-tok',
-            payload: { name: 'مرحلة برمز', departmentId: testDepartmentId },
-          },
-          {
-            type: 'ADD_STAGE_ATTACHMENT',
-            parentId: 'stage-tok',
-            payload: {
-              uploadToken: tokenId,
-              description: 'مستند مرفق برمز',
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          idempotencyKey: idempKey,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 'stg-1',
+              payload: { name: 'طلب أولي', departmentId: testDepartmentId },
             },
-          },
-        ],
-      });
-      assert.strictEqual(commitRes.createdNewVersion, true);
+          ],
+        },
+        testUserId
+      );
 
-      // Re-verify token is marked used
-      const updatedToken = await tokenRepo.findOne({ where: { id: tokenId } });
-      assert.strictEqual(updatedToken?.isUsed, true);
-
-      // Reusing token must fail with PRODUCTION_TEMPLATE_UPLOAD_TOKEN_INVALID
-      const vLatest = await versionService.getLatestVersion(created.id);
+      // Re-send same key with DIFFERENT payload
       await assert.rejects(
         async () =>
-          editingService.commitEditingSession(created.id, {
-            baseVersionId: vLatest.id,
-            commitDecision: 'AUTO',
-            operations: [
-              {
-                type: 'ADD_STAGE_ATTACHMENT',
-                parentId: commitRes.tempClientMap['stage-tok'],
-                payload: {
-                  uploadToken: tokenId,
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              idempotencyKey: idempKey,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE',
+                  tempClientId: 'stg-2',
+                  payload: { name: 'طلب مختلف تماماً', departmentId: testDepartmentId },
                 },
-              },
-            ],
-          }),
+              ],
+            },
+            testUserId
+          ),
         (err: any) => {
           assert.strictEqual(err instanceof BusinessRuleError, true);
-          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_INVALID');
+          assert.strictEqual(err.code, 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST');
           return true;
         }
       );
     });
 
-    it('Production Order Line: pins line to templateVersionId and filters patterns accordingly', async () => {
-      const orderService = new ProductionOrderService(AppDataSource);
-      const created = await templateService.createTemplate({ name: 'قالب ربط أمر الإنتاج', isActive: true });
+    it('rejects same idempotencyKey from a different user (user mismatch)', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب عزل مستخدمي التكرار', isActive: true });
       const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+      const idempKey = 'idem-user-' + Date.now();
 
-      // Add pattern to v1.0
-      await editingService.commitEditingSession(created.id, {
+      const payload = {
         baseVersionId: v1.id,
-        commitDecision: 'AUTO',
+        baseRevision: rev,
+        idempotencyKey: idempKey,
+        commitDecision: 'AUTO' as const,
         operations: [
           {
-            type: 'ADD_PATTERN',
-            tempClientId: 'pat-v1',
-            payload: { name: 'نمط الإصدار 1.0' },
-          },
-          {
-            type: 'ADD_OPTION',
-            parentId: 'pat-v1',
-            payload: { name: 'خيار 1.0' },
+            type: 'ADD_STAGE',
+            tempClientId: 'stg-u',
+            payload: { name: 'طلب المستخدم الأول', departmentId: testDepartmentId },
           },
         ],
-      });
+      };
 
-      // Create an order
+      await editingService.commitEditingSession(created.id, payload, testUserId);
+
+      // Attempt to retrieve using otherUserId
+      await assert.rejects(
+        async () => editingService.commitEditingSession(created.id, payload, otherUserId),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'IDEMPOTENCY_USER_MISMATCH');
+          return true;
+        }
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 6. Attachment Input Security & Upload Token Lifecycle
+  // ------------------------------------------------------------------------
+  describe('6. Attachment Input Security & Upload Token Lifecycle', () => {
+    it('rejects client-supplied storageKey with STORAGE_KEY_FORBIDDEN', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب رفض storageKey المباشر', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE',
+                  tempClientId: 's1',
+                  payload: { name: 'مرحلة بمرفق غير موثوق', departmentId: testDepartmentId },
+                },
+                {
+                  type: 'ADD_STAGE_ATTACHMENT',
+                  parentId: 's1',
+                  payload: {
+                    storageKey: 'arbitrary/path/to/server/file.pdf',
+                  },
+                },
+              ],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_ATTACHMENT_STORAGE_KEY_FORBIDDEN');
+          return true;
+        }
+      );
+    });
+
+    it('consumes valid uploadToken and rejects token with missing physical file', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب الرموز والملفات الفيزيائية', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+
+      // Token pointing to non-existent physical file
+      const missingFileTokenId = await createTestUploadToken(created.id, testUserId, 'ghost.pdf', false);
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE',
+                  tempClientId: 's-ghost',
+                  payload: { name: 'مرحلة ملف وهمي', departmentId: testDepartmentId },
+                },
+                {
+                  type: 'ADD_STAGE_ATTACHMENT',
+                  parentId: 's-ghost',
+                  payload: { uploadToken: missingFileTokenId },
+                },
+              ],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_UPLOAD_PHYSICAL_FILE_MISSING');
+          return true;
+        }
+      );
+    });
+
+    it('rejects uploadToken from another user or expired token', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب انتهاء صلاحية الرموز', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+
+      // Token created by other user
+      const otherUserToken = await createTestUploadToken(created.id, otherUserId, 'other.pdf', true);
+
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: v1.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE',
+                  tempClientId: 's',
+                  payload: { name: 'مرحلة', departmentId: testDepartmentId },
+                },
+                {
+                  type: 'ADD_STAGE_ATTACHMENT',
+                  parentId: 's',
+                  payload: { uploadToken: otherUserToken },
+                },
+              ],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_UPLOAD_TOKEN_UNAUTHORIZED');
+          return true;
+        }
+      );
+    });
+
+    it('reusing existing file via fileId works under same template and rejects fileId from other template', async () => {
+      const t1 = await templateService.createTemplate({ name: 'قالب 1 للملفات', isActive: true });
+      const t2 = await templateService.createTemplate({ name: 'قالب 2 للملفات', isActive: true });
+
+      const v1 = await versionService.getLatestVersion(t1.id);
+      const rev1 = await getRevision(t1.id, v1.id);
+
+      // Create a valid attachment in t1
+      const tok1 = await createTestUploadToken(t1.id, testUserId, 'blueprint1.pdf', true);
+      const resT1 = await editingService.commitEditingSession(
+        t1.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev1,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's1',
+              payload: { name: 'مرحلة ت1', departmentId: testDepartmentId },
+            },
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: 's1',
+              payload: { uploadToken: tok1 },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const storedFile = await storedFileRepo.findOne({ where: { templateId: t1.id } });
+      assert.ok(storedFile);
+
+      // 1. Reusing storedFile.id under t1 works!
+      const vLatestT1 = await versionService.getLatestVersion(t1.id);
+      const revLatestT1 = await getRevision(t1.id, vLatestT1.id);
+      const resReuse = await editingService.commitEditingSession(
+        t1.id,
+        {
+          baseVersionId: vLatestT1.id,
+          baseRevision: revLatestT1,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: resT1.tempClientMap['s1'],
+              payload: { fileId: storedFile.id, description: 'إعادة استخدام الملف في نفس القالب' },
+            },
+          ],
+        },
+        testUserId
+      );
+      assert.strictEqual(resReuse.createdNewVersion, false);
+
+      // 2. Attempting to reuse storedFile.id under t2 fails with UNAUTHORIZED
+      const v2 = await versionService.getLatestVersion(t2.id);
+      const rev2 = await getRevision(t2.id, v2.id);
+      await assert.rejects(
+        async () =>
+          editingService.commitEditingSession(
+            t2.id,
+            {
+              baseVersionId: v2.id,
+              baseRevision: rev2,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE',
+                  tempClientId: 's2',
+                  payload: { name: 'مرحلة ت2', departmentId: testDepartmentId },
+                },
+                {
+                  type: 'ADD_STAGE_ATTACHMENT',
+                  parentId: 's2',
+                  payload: { fileId: storedFile.id },
+                },
+              ],
+            },
+            testUserId
+          ),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STORED_FILE_UNAUTHORIZED');
+          return true;
+        }
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 7. Preview Endpoint Verification
+  // ------------------------------------------------------------------------
+  describe('7. Server Preview Endpoint', () => {
+    it('returns classification, effectiveChangesCount, reasons without writing to database', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب فحص المعاينة', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+
+      const previewRes = await editingService.previewEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's-preview',
+              payload: { name: 'مرحلة المعاينة', departmentId: testDepartmentId },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      assert.strictEqual(previewRes.classification, 'STRUCTURAL');
+      assert.strictEqual(previewRes.effectiveChangesCount, 1);
+      assert.strictEqual(previewRes.isNewVersionMandatory, true);
+      assert.strictEqual(previewRes.allowsOverwrite, false);
+      assert.strictEqual(previewRes.conflicts.length, 0);
+
+      // Verify no changes were committed to database
+      const detail = await templateService.getTemplateById(created.id, v1.id);
+      assert.strictEqual(detail.stages.length, 0);
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 8. Safe Shared File Cleanup Protocol
+  // ------------------------------------------------------------------------
+  describe('8. Safe Shared File Storage & Reference Cleanup', () => {
+    it('unreferencing one attachment keeps physical file, unreferencing all deletes safely', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب تنظيف الملفات المشتركة', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      const tok = await createTestUploadToken(created.id, testUserId, 'cleanup-doc.pdf', true);
+      const res = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's1',
+              payload: { name: 'مرحلة التنظيف', departmentId: testDepartmentId },
+            },
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: 's1',
+              payload: { uploadToken: tok },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const storedFile = await storedFileRepo.findOne({ where: { templateId: created.id } });
+      assert.ok(storedFile);
+
+      // Check active references
+      const count1 = await sharedFileService.countActiveReferences(storedFile.id);
+      assert.strictEqual(count1, 1);
+
+      // Add a second reference to the same file
+      const vLatest = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, vLatest.id);
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: res.tempClientMap['s1'],
+              payload: { fileId: storedFile.id },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const count2 = await sharedFileService.countActiveReferences(storedFile.id);
+      assert.strictEqual(count2, 2);
+
+      // Safe delete check: with 2 references, file is NOT deleted
+      const deletedCheck = await sharedFileService.safeDeletePhysicalFileIfUnreferenced(
+        storedFile.id,
+        storedFile.storageKey
+      );
+      assert.strictEqual(deletedCheck, false);
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 9. Production Order Line Compatibility & Logical Latest Versioning
+  // ------------------------------------------------------------------------
+  describe('9. Production Order Line Version Pinning & Logical Latest', () => {
+    it('pins line to explicit templateVersionId and rejects invalid templateVersionId', async () => {
+      const orderService = new ProductionOrderService(AppDataSource);
+      const created = await templateService.createTemplate({ name: 'قالب فحص مذكرات الإنتاج', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+
+      // Add pattern to v1
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_PATTERN',
+              tempClientId: 'pat-1',
+              payload: { name: 'النمط 1' },
+            },
+            {
+              type: 'ADD_OPTION',
+              parentId: 'pat-1',
+              tempClientId: 'opt-1',
+              payload: { name: 'الخيار 1' },
+            },
+          ],
+        },
+        testUserId
+      );
+
       const order = await orderService.createOrder(
         {
-          orderNumber: 'ORD-TEST-' + Date.now(),
+          orderNumber: 'ORD-PIN-' + Date.now(),
           status: ProductionOrderStatus.DRAFT,
           priority: ProductionOrderPriority.MEDIUM,
         },
         testUserId
       );
 
-      // Add line specifying templateId
+      // 1. Valid explicit templateVersionId
+      const vLatest = await versionService.getLatestVersion(created.id);
       const line = await orderService.addLine(order.id, {
         templateId: created.id,
-        quantity: 5,
-      });
+        templateVersionId: vLatest.id,
+        quantity: 10,
+      } as any);
 
-      const vLatest = await versionService.getLatestVersion(created.id);
-      assert.strictEqual(line.templateId, created.id);
       assert.strictEqual(line.templateVersionId, vLatest.id);
-      assert.strictEqual(typeof (line as any).activeConfigurationHash, 'undefined'); // activeConfigurationHash is internal
-    });
 
-  });
-
-  // ------------------------------------------------------------------------
-  // 4. Shared File Storage & Attachment Integrity
-  // ------------------------------------------------------------------------
-  describe('4. Shared File Storage & Attachment Cloner Integrity', () => {
-    it('cloning a version shares stored files and avoids duplicate file entries or storageKey conflicts', async () => {
-      const created = await templateService.createTemplate({
-        name: 'قالب المرفقات المشتركة',
-        isActive: true,
-      });
-
-      const v1 = await versionService.getLatestVersion(created.id);
-
-      // 1. Add a stage with an attachment (structural change forks to v1.1)
-      const v1Fork = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1.id,
-        commitDecision: 'AUTO',
-        operations: [
-          {
-            type: 'ADD_STAGE',
-            tempClientId: 'stage-with-att',
-            payload: {
-              name: 'مرحلة التصميم',
-              departmentId: testDepartmentId,
-            },
-          },
-          {
-            type: 'ADD_STAGE_ATTACHMENT',
-            parentId: 'stage-with-att',
-            payload: {
-              storageKey: `uploads/test-template-${created.id}-drawing.pdf`,
-              originalFileName: 'blueprint.pdf',
-              mimeType: 'application/pdf',
-              sizeBytes: 1048576,
-            },
-          },
-        ],
-      });
-
-      assert.strictEqual(v1Fork.createdNewVersion, true);
-      assert.strictEqual(v1Fork.targetVersionNumber, '1.1');
-
-      // Verify stored file record created
-      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
-      const storedFiles = await storedFileRepo.find({ where: { templateId: created.id } });
-      assert.strictEqual(storedFiles.length, 1);
-      const storedFileId = storedFiles[0].id;
-
-      // 2. Now commit another structural change to fork v1.2
-      const forkRes = await editingService.commitEditingSession(created.id, {
-        baseVersionId: v1Fork.targetVersionId,
-        commitDecision: 'NEW_VERSION',
-        operations: [
-          {
-            type: 'ADD_STAGE',
-            tempClientId: 'stage-v2',
-            payload: {
-              name: 'مرحلة فحص الجودة الإضافية',
-              departmentId: testDepartmentId,
-            },
-          },
-        ],
-      });
-
-      assert.strictEqual(forkRes.createdNewVersion, true);
-      assert.strictEqual(forkRes.targetVersionNumber, '1.2');
-
-      // Verify stored file was NOT duplicated (still exactly 1 stored file for this storageKey)
-      const storedFilesAfter = await storedFileRepo.find({ where: { templateId: created.id } });
-      assert.strictEqual(storedFilesAfter.length, 1);
-
-      // Verify both v1.0 and v1.1 stages reference the exact same file_id
-      const stageAttRepo = AppDataSource.getRepository(ProductionTemplateStageAttachmentEntity);
-      const allAttachments = await stageAttRepo.find({
-        where: { storageKey: `uploads/test-template-${created.id}-drawing.pdf` },
-      });
-
-      // Must have 2 attachment rows (one in v1.0 and one cloned in v1.1)
-      assert.strictEqual(allAttachments.length, 2);
-      assert.strictEqual(allAttachments[0].fileId, storedFileId);
-      assert.strictEqual(allAttachments[1].fileId, storedFileId);
+      // 2. Non-existent templateVersionId throws
+      await assert.rejects(
+        async () =>
+          orderService.addLine(order.id, {
+            templateId: created.id,
+            templateVersionId: '00000000-0000-0000-0000-000000000000',
+            quantity: 5,
+          } as any),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_VERSION_INVALID');
+          return true;
+        }
+      );
     });
   });
 
   // ------------------------------------------------------------------------
-  // 5. Version Sorting & Reuse Prevention
+  // 10. Numerical Version Sorting & Reuse Prevention
   // ------------------------------------------------------------------------
-  describe('5. Numerical Version Sorting & Reuse Prevention', () => {
+  describe('10. Numerical Version Sorting & Reuse Prevention', () => {
     it('sorts versions numerically (1.10 > 1.9) and never reuses deleted version numbers', async () => {
       const created = await templateService.createTemplate({
-        name: 'قالب التحقق من الترقيم',
+        name: 'قالب التحقق من الترقيم العددي',
         isActive: true,
       });
 
@@ -617,9 +1141,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   });
 
   // ------------------------------------------------------------------------
-  // 6. Production Order Line Configuration Hash & Version Pinning
+  // 11. Production Order Line Configuration Hash & Version Pinning
   // ------------------------------------------------------------------------
-  describe('6. Production Order Line Version Pinning & Configuration Hash', () => {
+  describe('11. Production Order Line Configuration Hash & Version Pinning', () => {
     it('canonicalizeLineConfiguration produces deterministic hashes with backward compatibility', () => {
       const templateId = 'tmpl-uuid-1';
       const selections = [

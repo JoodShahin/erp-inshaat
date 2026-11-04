@@ -125,19 +125,33 @@ export class ProductionTemplateSharedFileService {
 
   /**
    * Safely deletes the physical file from disk ONLY IF no active references exist across any versions.
-   * Called post-commit.
+   * Uses transactional locking on the StoredFile row to eliminate race conditions with concurrent reuse.
    */
   async safeDeletePhysicalFileIfUnreferenced(
     fileId: string,
     storageKey: string
   ): Promise<boolean> {
     try {
-      const refCount = await this.countActiveReferences(fileId);
-      if (refCount === 0) {
-        // Soft delete stored file record
-        await this.fileRepo.softDelete(fileId);
+      let shouldUnlink = false;
+      await this.dataSource.transaction(async (manager) => {
+        const fileRepo = manager.getRepository(ProductionTemplateStoredFileEntity);
+        const file = await fileRepo.findOne({
+          where: { id: fileId, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!file) {
+          return;
+        }
 
-        // Remove from physical disk using safe path resolver with path.relative check
+        const refCount = await this.countActiveReferences(fileId, undefined, manager);
+        if (refCount === 0) {
+          file.deletedAt = new Date();
+          await fileRepo.save(file);
+          shouldUnlink = true;
+        }
+      });
+
+      if (shouldUnlink) {
         try {
           await productionTemplateReferenceFileStorageService.deleteStoredFile(storageKey);
         } catch (unlinkErr: any) {
