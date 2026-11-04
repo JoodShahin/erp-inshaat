@@ -63,7 +63,9 @@ import { CreateProductionTemplateStoredFiles1710000000024 } from '../database/mi
 import { AddTemplateVersionToProductionOrderLine1710000000025 } from '../database/migrations/1710000000025-AddTemplateVersionToProductionOrderLine.js';
 import { CreateProductionTemplateEditingIdempotencyAndTokens1710000000026 } from '../database/migrations/1710000000026-CreateProductionTemplateEditingIdempotencyAndTokens.js';
 import { OptimizeProductionTemplateVersioningIndexes1710000000027 } from '../database/migrations/1710000000027-OptimizeProductionTemplateVersioningIndexes.js';
+import { CreateProductionTemplateFileCleanupQueue1710000000028 } from '../database/migrations/1710000000028-CreateProductionTemplateFileCleanupQueue.js';
 import { ProductionTemplateStoredFileEntity } from '../modules/production/template-stored-file/production-template-stored-file.entity.js';
+import { ProductionTemplateFileCleanupQueueEntity } from '../modules/production/template-stored-file/production-template-file-cleanup-queue.entity.js';
 import { ProductionTemplateEditingIdempotencyEntity } from '../modules/production/template-editing/production-template-editing-idempotency.entity.js';
 import { ProductionTemplateUploadTokenEntity } from '../modules/production/template-editing/production-template-upload-token.entity.js';
 
@@ -104,6 +106,7 @@ export const databaseConfig: DataSourceOptions = {
     ProductionTemplatePatternOptionTaskMaterialEntity,
     ProductionTemplatePatternOptionTaskAttachmentEntity,
     ProductionTemplateStoredFileEntity,
+    ProductionTemplateFileCleanupQueueEntity,
     ProductionTemplateEditingIdempotencyEntity,
     ProductionTemplateUploadTokenEntity,
     ProductionOrderSequenceEntity,
@@ -145,6 +148,7 @@ export const databaseConfig: DataSourceOptions = {
     AddTemplateVersionToProductionOrderLine1710000000025,
     CreateProductionTemplateEditingIdempotencyAndTokens1710000000026,
     OptimizeProductionTemplateVersioningIndexes1710000000027,
+    CreateProductionTemplateFileCleanupQueue1710000000028,
   ],
   subscribers: [],
 };

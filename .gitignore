@@ -11,3 +11,4 @@ storage/template-stage-attachments/*
 !storage/template-stage-attachments/.gitkeep
 
 *.docx
+storage/test-uploads/

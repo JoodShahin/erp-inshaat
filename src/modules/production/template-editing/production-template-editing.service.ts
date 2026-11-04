@@ -134,9 +134,13 @@ export class ProductionTemplateEditingService {
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST'
             );
           }
-          const isFresh = Date.now() - existing.createdAt.getTime() < 24 * 60 * 60 * 1000;
-          if (isFresh) {
+          try {
             return JSON.parse(existing.responseJson) as CommitEditingSessionResult;
+          } catch {
+            throw new BusinessRuleError(
+              'الاستجابة المخزنة لمفتاح عدم التكرار تالفة',
+              'IDEMPOTENCY_RESPONSE_CORRUPTED'
+            );
           }
         }
       }

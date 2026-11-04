@@ -20,6 +20,11 @@ import { ProductionOrderStatus, ProductionOrderPriority } from '../src/modules/p
 import { ProductionDepartmentEntity } from '../src/modules/production/department/production-department.entity.js';
 import { UserEntity } from '../src/modules/system/user/user.entity.js';
 import { BusinessRuleError } from '../src/common/errors/business-rule.error.js';
+import { ProductionTemplateFileCleanupQueueEntity, FileCleanupStatus } from '../src/modules/production/template-stored-file/production-template-file-cleanup-queue.entity.js';
+import { ProductionTemplateEditingIdempotencyEntity } from '../src/modules/production/template-editing/production-template-editing-idempotency.entity.js';
+import { productionTemplateApiRouter } from '../src/modules/production/template/production-template.route.js';
+import { productionTemplateReferenceFileStorageService } from '../src/modules/production/template/production-template-reference-file-storage.service.js';
+import { SystemPermission } from '../src/modules/system/permission/constants/system-permission.enum.js';
 import { canonicalizeLineConfiguration, hashLineConfiguration } from '../src/modules/production/order-line/production-order-line-configuration.helper.js';
 
 describe('Production Template Versioning & Atomic Editing Integration Suite', () => {
@@ -1009,6 +1014,78 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         }
       );
     });
+
+    it('replays cached result even past 24 hours without re-executing', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب عدم انتهاء صلاحية التكرار', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+      const idempKey = 'idem-24h-' + Date.now();
+
+      const payload = {
+        baseVersionId: v1.id,
+        baseRevision: rev,
+        idempotencyKey: idempKey,
+        commitDecision: 'AUTO' as const,
+        operations: [
+          {
+            type: 'ADD_STAGE' as const,
+            tempClientId: 'stg-old',
+            payload: { name: 'طلب قديم', departmentId: testDepartmentId },
+          },
+        ],
+      };
+
+      const firstRes = await editingService.commitEditingSession(created.id, payload, testUserId);
+
+      // Artificially age the idempotency record past 24 hours (e.g. 48 hours ago)
+      const idempotencyRepo = AppDataSource.getRepository(ProductionTemplateEditingIdempotencyEntity);
+      const record = await idempotencyRepo.findOneOrFail({ where: { templateId: created.id, idempotencyKey: idempKey } });
+      record.createdAt = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      await idempotencyRepo.save(record);
+
+      // Second call must return the cached result instead of failing on revision mismatch or re-executing
+      const replayRes = await editingService.commitEditingSession(created.id, payload, testUserId);
+      assert.strictEqual(replayRes.targetVersionId, firstRes.targetVersionId);
+      assert.strictEqual(replayRes.targetVersionNumber, firstRes.targetVersionNumber);
+    });
+
+    it('throws IDEMPOTENCY_RESPONSE_CORRUPTED when cached responseJson is corrupted', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب تلف استجابة التكرار', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+      const idempKey = 'idem-corrupt-' + Date.now();
+
+      const payload = {
+        baseVersionId: v1.id,
+        baseRevision: rev,
+        idempotencyKey: idempKey,
+        commitDecision: 'AUTO' as const,
+        operations: [
+          {
+            type: 'ADD_STAGE' as const,
+            tempClientId: 'stg-corrupt',
+            payload: { name: 'طلب سيتعرض للتلف', departmentId: testDepartmentId },
+          },
+        ],
+      };
+
+      await editingService.commitEditingSession(created.id, payload, testUserId);
+
+      // Corrupt responseJson in database
+      const idempotencyRepo = AppDataSource.getRepository(ProductionTemplateEditingIdempotencyEntity);
+      const record = await idempotencyRepo.findOneOrFail({ where: { templateId: created.id, idempotencyKey: idempKey } });
+      record.responseJson = 'INVALID_JSON{{{';
+      await idempotencyRepo.save(record);
+
+      await assert.rejects(
+        async () => editingService.commitEditingSession(created.id, payload, testUserId),
+        (err: any) => {
+          assert.strictEqual(err instanceof BusinessRuleError, true);
+          assert.strictEqual(err.code, 'IDEMPOTENCY_RESPONSE_CORRUPTED');
+          return true;
+        }
+      );
+    });
   });
 
   // ------------------------------------------------------------------------
@@ -1258,6 +1335,37 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const detail = await templateService.getTemplateById(created.id, v1.id);
       assert.strictEqual(detail.stages.length, 0);
     });
+
+    it('requires PRODUCTION_TEMPLATE_UPDATE permission on preview route', async () => {
+      const previewLayer = (productionTemplateApiRouter as any).stack.find(
+        (l: any) => l.route && l.route.path === '/:id/editing/preview' && l.route.methods.post
+      );
+      assert.ok(previewLayer, 'preview route layer must exist');
+
+      const firstHandler = previewLayer.route.stack[0].handle;
+      assert.ok(firstHandler, 'route stack first handler must exist');
+
+      // Intercept authorizationService.hasPermission to inspect requested permission
+      const authzModule = await import('../src/modules/system/authorization/authorization.service.js');
+      const origHasPermission = authzModule.authorizationService.hasPermission;
+
+      let verifiedPermission: string | null = null;
+      authzModule.authorizationService.hasPermission = async (_user: any, perm: string) => {
+        verifiedPermission = perm;
+        return true;
+      };
+
+      try {
+        let nextCalled = false;
+        await firstHandler({ user: { id: testUserId } }, {}, (err?: any) => {
+          if (!err) nextCalled = true;
+        });
+        assert.strictEqual(nextCalled, true);
+        assert.strictEqual(verifiedPermission, SystemPermission.PRODUCTION_TEMPLATE_UPDATE);
+      } finally {
+        authzModule.authorizationService.hasPermission = origHasPermission;
+      }
+    });
   });
 
   // ------------------------------------------------------------------------
@@ -1329,6 +1437,75 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         storedFile.storageKey
       );
       assert.strictEqual(deletedCheck, false);
+    });
+
+    it('records failed physical unlink into file cleanup queue with FAILED status and allows retry', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب طابور تنظيف الملفات', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
+
+      // Create an attachment with a file token that initially has a physical file
+      const tok = await createTestUploadToken(created.id, testUserId, 'ghost-file.pdf', true);
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's1',
+              payload: { name: 'مرحلة الملف الشبح', departmentId: testDepartmentId },
+            },
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: 's1',
+              payload: { uploadToken: tok },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const storedFile = await storedFileRepo.findOneOrFail({ where: { templateId: created.id } });
+
+      // Delete the stage attachment so ref count becomes 0
+      const stageAttRepo = AppDataSource.getRepository(ProductionTemplateStageAttachmentEntity);
+      await stageAttRepo.softDelete({ fileId: storedFile.id });
+
+      // Remove physical file from disk so physical unlink will fail
+      const fullPath = path.resolve(process.cwd(), storedFile.storageKey);
+      if (fs.existsSync(fullPath)) {
+        fs.unlinkSync(fullPath);
+      }
+
+      // Now call safeDeletePhysicalFileIfUnreferenced
+      // Because physical file is missing, unlink will fail and return false
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+      const deletedSuccessfully = await sharedFileService.safeDeletePhysicalFileIfUnreferenced(storedFile.id);
+      assert.strictEqual(deletedSuccessfully, false);
+
+      const queueEntry = await cleanupRepo.findOneOrFail({
+        where: { fileId: storedFile.id },
+        order: { createdAt: 'DESC' },
+      });
+      assert.strictEqual(queueEntry.status, FileCleanupStatus.FAILED);
+      assert.strictEqual(queueEntry.attempts, 1);
+      assert.ok(queueEntry.lastError);
+
+      // Re-create the physical file so retry succeeds!
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'recreated physical content');
+
+      const retryRes = await sharedFileService.retryFileCleanup(queueEntry.id);
+      assert.strictEqual(retryRes, true);
+
+      const updatedQueue = await cleanupRepo.findOneOrFail({ where: { id: queueEntry.id } });
+      assert.strictEqual(updatedQueue.status, FileCleanupStatus.COMPLETED);
+      assert.strictEqual(updatedQueue.attempts, 2);
+      assert.strictEqual(fs.existsSync(fullPath), false);
     });
   });
 

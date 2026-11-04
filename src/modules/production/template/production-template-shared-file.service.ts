@@ -1,11 +1,17 @@
 import { DataSource, EntityManager, Repository, IsNull } from 'typeorm';
 import { AppDataSource } from '../../../database/data-source.js';
 import { ProductionTemplateStoredFileEntity } from '../template-stored-file/production-template-stored-file.entity.js';
+import {
+  ProductionTemplateFileCleanupQueueEntity,
+  FileCleanupStatus,
+} from '../template-stored-file/production-template-file-cleanup-queue.entity.js';
 import { ProductionTemplateStageAttachmentEntity } from '../template-stage-attachment/production-template-stage-attachment.entity.js';
 import { ProductionTemplatePatternOptionTaskAttachmentEntity } from '../template-pattern-option-task-attachment/production-template-pattern-option-task-attachment.entity.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { productionTemplateReferenceFileStorageService } from './production-template-reference-file-storage.service.js';
-import fs from 'node:fs/promises';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 export interface CreateStoredFileDto {
@@ -19,9 +25,11 @@ export interface CreateStoredFileDto {
 
 export class ProductionTemplateSharedFileService {
   private fileRepo: Repository<ProductionTemplateStoredFileEntity>;
+  private cleanupRepo: Repository<ProductionTemplateFileCleanupQueueEntity>;
 
   constructor(private dataSource: DataSource = AppDataSource) {
     this.fileRepo = this.dataSource.getRepository(ProductionTemplateStoredFileEntity);
+    this.cleanupRepo = this.dataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
   }
 
   /**
@@ -43,6 +51,31 @@ export class ProductionTemplateSharedFileService {
 
     if (existing) {
       if (existing.deletedAt) {
+        // Check physical file existence and cleanup status
+        const fullPath = path.resolve(process.cwd(), existing.storageKey);
+        let physicalExists = false;
+        try {
+          await fs.access(fullPath);
+          physicalExists = true;
+        } catch {
+          physicalExists = false;
+        }
+
+        const cleanupRepo = manager
+          ? manager.getRepository(ProductionTemplateFileCleanupQueueEntity)
+          : this.cleanupRepo;
+        const cleanupRecord = await cleanupRepo.findOne({
+          where: { fileId: existing.id },
+          order: { createdAt: 'DESC' },
+        });
+
+        if (!physicalExists || (cleanupRecord && cleanupRecord.status === FileCleanupStatus.COMPLETED)) {
+          throw new BusinessRuleError(
+            'الملف المخزن تم حذفه فيزيائياً أو دخل مرحلة التنظيف النهائي ولا يمكن إعادة استخدامه',
+            'PRODUCTION_TEMPLATE_STORED_FILE_DELETED'
+          );
+        }
+
         existing.deletedAt = null;
         return await repo.save(existing);
       }
@@ -126,13 +159,17 @@ export class ProductionTemplateSharedFileService {
   /**
    * Safely deletes the physical file from disk ONLY IF no active references exist across any versions.
    * Uses transactional locking on the StoredFile row to eliminate race conditions with concurrent reuse.
+   * Persists an entry in the file cleanup queue for auditability and recoverable retries.
    */
   async safeDeletePhysicalFileIfUnreferenced(
     fileId: string,
-    storageKey: string
+    _optionalStorageKey?: string
   ): Promise<boolean> {
     try {
       let shouldUnlink = false;
+      let trustedStorageKey = '';
+      let cleanupQueueId = '';
+
       await this.dataSource.transaction(async (manager) => {
         const fileRepo = manager.getRepository(ProductionTemplateStoredFileEntity);
         const file = await fileRepo.findOne({
@@ -145,23 +182,95 @@ export class ProductionTemplateSharedFileService {
 
         const refCount = await this.countActiveReferences(fileId, undefined, manager);
         if (refCount === 0) {
+          trustedStorageKey = file.storageKey;
           file.deletedAt = new Date();
           await fileRepo.save(file);
+
+          const cleanupRepo = manager.getRepository(ProductionTemplateFileCleanupQueueEntity);
+          const queueItem = cleanupRepo.create({
+            fileId,
+            storageKey: trustedStorageKey,
+            status: FileCleanupStatus.PENDING,
+            attempts: 0,
+          });
+          const savedQueue = await cleanupRepo.save(queueItem);
+          cleanupQueueId = savedQueue.id;
           shouldUnlink = true;
         }
       });
 
-      if (shouldUnlink) {
+      if (shouldUnlink && trustedStorageKey && cleanupQueueId) {
         try {
-          await productionTemplateReferenceFileStorageService.deleteStoredFile(storageKey);
+          const absolutePath = path.resolve(process.cwd(), trustedStorageKey);
+          if (fs.existsSync(absolutePath)) {
+            await fsp.unlink(absolutePath);
+          } else {
+            throw new Error(`الملف الفيزيائي غير موجود على القرص: ${trustedStorageKey}`);
+          }
+          await this.cleanupRepo.update(cleanupQueueId, {
+            status: FileCleanupStatus.COMPLETED,
+            attempts: 1,
+            lastError: null,
+          });
+          return true;
         } catch (unlinkErr: any) {
-          console.warn(`Could not unlink unreferenced file ${storageKey}:`, unlinkErr);
+          console.warn(`Could not unlink unreferenced file ${trustedStorageKey}:`, unlinkErr);
+          await this.cleanupRepo.update(cleanupQueueId, {
+            status: FileCleanupStatus.FAILED,
+            attempts: 1,
+            lastError: unlinkErr?.message || String(unlinkErr),
+            nextRetryAt: new Date(Date.now() + 5 * 60 * 1000),
+          });
+          return false;
         }
-        return true;
       }
       return false;
     } catch (err) {
       console.warn(`Error during safe file deletion check for fileId ${fileId}:`, err);
+      return false;
+    }
+  }
+
+  /**
+   * Retries physical unlink for a failed or pending cleanup queue item.
+   */
+  async retryFileCleanup(cleanupId: string): Promise<boolean> {
+    const queueItem = await this.cleanupRepo.findOne({ where: { id: cleanupId } });
+    if (!queueItem || queueItem.status === FileCleanupStatus.COMPLETED) {
+      return false;
+    }
+
+    // Check if the file was re-referenced in the meantime
+    const refCount = await this.countActiveReferences(queueItem.fileId);
+    if (refCount > 0) {
+      // Re-referenced! Cancel physical cleanup
+      await this.cleanupRepo.update(cleanupId, {
+        status: FileCleanupStatus.COMPLETED,
+        lastError: 'File was re-referenced by active template; cleanup cancelled',
+      });
+      return false;
+    }
+
+    try {
+      const absolutePath = path.resolve(process.cwd(), queueItem.storageKey);
+      if (fs.existsSync(absolutePath)) {
+        await fsp.unlink(absolutePath);
+      } else {
+        throw new Error(`الملف الفيزيائي غير موجود على القرص: ${queueItem.storageKey}`);
+      }
+      await this.cleanupRepo.update(cleanupId, {
+        status: FileCleanupStatus.COMPLETED,
+        attempts: queueItem.attempts + 1,
+        lastError: null,
+      });
+      return true;
+    } catch (err: any) {
+      await this.cleanupRepo.update(cleanupId, {
+        status: FileCleanupStatus.FAILED,
+        attempts: queueItem.attempts + 1,
+        lastError: err?.message || String(err),
+        nextRetryAt: new Date(Date.now() + 15 * 60 * 1000),
+      });
       return false;
     }
   }
