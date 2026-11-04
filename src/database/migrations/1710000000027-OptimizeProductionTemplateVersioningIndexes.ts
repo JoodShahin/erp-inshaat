@@ -208,14 +208,43 @@ export class OptimizeProductionTemplateVersioningIndexes1710000000027 implements
     indexName: string,
     columns: string[]
   ): Promise<void> {
-    const existing: any[] = await queryRunner.query(
+    const existingByName: any[] = await queryRunner.query(
       `SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? LIMIT 1`,
       [table, indexName]
     );
-    if (existing.length === 0) {
-      const colList = columns.map((c) => `\`${c}\``).join(', ');
-      await queryRunner.query(`CREATE INDEX \`${indexName}\` ON \`${table}\` (${colList});`);
+    if (existingByName.length > 0) {
+      return;
     }
+
+    // Fetch existing indexes on this table to prevent functionally redundant indexes
+    const existingStats: any[] = await queryRunner.query(
+      `SELECT INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX 
+       FROM information_schema.STATISTICS 
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? 
+       ORDER BY INDEX_NAME, SEQ_IN_INDEX ASC`,
+      [table]
+    );
+
+    const indexColsMap: Record<string, string[]> = {};
+    for (const row of existingStats) {
+      if (!indexColsMap[row.INDEX_NAME]) {
+        indexColsMap[row.INDEX_NAME] = [];
+      }
+      indexColsMap[row.INDEX_NAME].push(row.COLUMN_NAME);
+    }
+
+    // Check if any existing index already covers `columns` via exact match or leftmost prefix
+    for (const [, cols] of Object.entries(indexColsMap)) {
+      if (cols.length >= columns.length) {
+        const isPrefixCovered = columns.every((col, i) => col.toLowerCase() === cols[i].toLowerCase());
+        if (isPrefixCovered) {
+          return;
+        }
+      }
+    }
+
+    const colList = columns.map((c) => `\`${c}\``).join(', ');
+    await queryRunner.query(`CREATE INDEX \`${indexName}\` ON \`${table}\` (${colList});`);
   }
 
   private async dropIndexIfExists(

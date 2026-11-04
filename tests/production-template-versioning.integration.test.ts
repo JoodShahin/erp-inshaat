@@ -13,6 +13,12 @@ import { ProductionTemplateEntity } from '../src/modules/production/template/pro
 import { ProductionTemplateVersionEntity } from '../src/modules/production/template-version/production-template-version.entity.js';
 import { ProductionTemplateStageEntity } from '../src/modules/production/template-stage/production-template-stage.entity.js';
 import { ProductionTemplateStageAttachmentEntity } from '../src/modules/production/template-stage-attachment/production-template-stage-attachment.entity.js';
+import { ProductionTemplatePatternEntity } from '../src/modules/production/template-pattern/production-template-pattern.entity.js';
+import { ProductionTemplatePatternOptionEntity } from '../src/modules/production/template-pattern-option/production-template-pattern-option.entity.js';
+import { ProductionTemplatePatternOptionTaskEntity } from '../src/modules/production/template-pattern-option-task/production-template-pattern-option-task.entity.js';
+import { ProductionTemplateWorkflowItemEntity } from '../src/modules/production/template-workflow-item/production-template-workflow-item.entity.js';
+import { ProductionTemplateStageMaterialEntity } from '../src/modules/production/template-stage-material/production-template-stage-material.entity.js';
+import { ProductionTemplatePatternOptionTaskMaterialEntity } from '../src/modules/production/template-pattern-option-task-material/production-template-pattern-option-task-material.entity.js';
 import { ProductionTemplateStoredFileEntity } from '../src/modules/production/template-stored-file/production-template-stored-file.entity.js';
 import { ProductionTemplateUploadTokenEntity } from '../src/modules/production/template-editing/production-template-upload-token.entity.js';
 import { ProductionOrderService } from '../src/modules/production/order/production-order.service.js';
@@ -1645,6 +1651,380 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const versionedHash = hashLineConfiguration(templateId, selections, versionId);
       assert.strictEqual(versionedHash.length, 64);
       assert.notStrictEqual(legacyHash, versionedHash);
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 12. Composite Indexes Audit & Redundancy Prevention
+  // ------------------------------------------------------------------------
+  describe('12. Composite Indexes Audit & Redundancy Prevention', () => {
+    it('verifies composite indexes exist and have no redundant duplicate column sets', async () => {
+      const tablesToCheck = [
+        'production_template',
+        'production_template_version',
+        'production_template_stage',
+        'production_template_pattern',
+        'production_template_workflow_item',
+        'production_template_pattern_option',
+        'production_template_pattern_option_task',
+        'production_template_stage_attachment',
+        'production_template_pattern_option_task_attachment',
+        'production_template_upload_token',
+        'production_order_line',
+      ];
+
+      for (const table of tablesToCheck) {
+        const stats: any[] = await AppDataSource.query(
+          `SELECT INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX 
+           FROM information_schema.STATISTICS 
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? 
+           ORDER BY INDEX_NAME, SEQ_IN_INDEX ASC`,
+          [table]
+        );
+
+        const indexMap: Record<string, string[]> = {};
+        for (const row of stats) {
+          if (!indexMap[row.INDEX_NAME]) {
+            indexMap[row.INDEX_NAME] = [];
+          }
+          indexMap[row.INDEX_NAME].push(row.COLUMN_NAME.toLowerCase());
+        }
+
+        // Verify no two different indexes have the exact same list of columns
+        const signatures = new Map<string, string>();
+        for (const [idxName, cols] of Object.entries(indexMap)) {
+          const sig = cols.join(',');
+          if (signatures.has(sig)) {
+            assert.fail(
+              `Redundant index detected on table ${table}: ${idxName} has identical column signature (${sig}) as ${signatures.get(sig)}`
+            );
+          }
+          signatures.set(sig, idxName);
+        }
+      }
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 13. Comprehensive Template Lifecycle & Mutation Roundtrip Verification
+  // ------------------------------------------------------------------------
+  describe('13. Comprehensive Template Lifecycle & Mutation Roundtrip Verification', () => {
+    it('creates complex template (2 stages, 2 patterns, options, tasks, costs, durations, materials, attachments) and mutates roundtrip accurately', async () => {
+      // 1. Fetch valid product and unit for materials
+      const prodRows: any[] = await AppDataSource.query(
+        `SELECT p.id as productId, u.id as unitId 
+         FROM inventory_product p 
+         JOIN inventory_product_unit u ON u.product_id = p.id 
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 
+         LIMIT 1`
+      );
+      assert.ok(prodRows.length > 0, 'Must have at least 1 product and unit for material testing');
+      const { productId, unitId } = prodRows[0];
+
+      // 2. Create base template
+      const template = await templateService.createTemplate({
+        name: 'قالب التحقق الشامل النهائي',
+        description: 'وصف القالب الشامل',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      let rev = await getRevision(template.id, v1.id);
+
+      // Create physical upload tokens for attachments
+      const stageToken = await createTestUploadToken(template.id, testUserId, 'stage-spec.pdf', true);
+      const taskToken = await createTestUploadToken(template.id, testUserId, 'task-guide.pdf', true);
+
+      // 3. Commit initial rich structure on Version 1.0
+      const initialCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            // Stage 1
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 'stg-1',
+              payload: {
+                name: 'مرحلة الصب',
+                departmentId: testDepartmentId,
+                estimatedCost: '500.0000',
+              },
+            },
+            // Stage 1 Material
+            {
+              type: 'ADD_STAGE_MATERIAL',
+              parentId: 'stg-1',
+              payload: {
+                productId,
+                productUnitId: unitId,
+                plannedQuantity: '5.000000',
+              },
+            },
+            // Stage 1 Attachment
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: 'stg-1',
+              payload: {
+                uploadToken: stageToken,
+                title: 'مخطط الصب',
+              },
+            },
+            // Stage 2
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 'stg-2',
+              payload: {
+                name: 'مرحلة التشطيب',
+                departmentId: testDepartmentId,
+                estimatedCost: '800.0000',
+              },
+            },
+            // Pattern 1
+            {
+              type: 'ADD_PATTERN',
+              tempClientId: 'pat-1',
+              payload: { name: 'نمط العزل' },
+            },
+            // Pattern 1 Option 1
+            {
+              type: 'ADD_OPTION',
+              parentId: 'pat-1',
+              tempClientId: 'opt-1-1',
+              payload: { name: 'عزل مائي' },
+            },
+            // Option 1 Task 1
+            {
+              type: 'ADD_TASK',
+              parentId: 'opt-1-1',
+              tempClientId: 'tsk-1-1-1',
+              payload: {
+                name: 'دهان البيتومين',
+                departmentId: testDepartmentId,
+                estimatedDurationValue: 150,
+                estimatedDurationUnit: 'MINUTES',
+                estimatedCost: '150.0000',
+              },
+            },
+            // Task 1 Material
+            {
+              type: 'ADD_TASK_MATERIAL',
+              parentId: 'tsk-1-1-1',
+              payload: {
+                productId,
+                productUnitId: unitId,
+                plannedQuantity: '10.000000',
+              },
+            },
+            // Task 1 Attachment
+            {
+              type: 'ADD_TASK_ATTACHMENT',
+              parentId: 'tsk-1-1-1',
+              payload: {
+                uploadToken: taskToken,
+                title: 'كتالوج العزل',
+              },
+            },
+            // Pattern 1 Option 2
+            {
+              type: 'ADD_OPTION',
+              parentId: 'pat-1',
+              tempClientId: 'opt-1-2',
+              payload: { name: 'عزل حراري' },
+            },
+            // Option 2 Task 1
+            {
+              type: 'ADD_TASK',
+              parentId: 'opt-1-2',
+              tempClientId: 'tsk-1-2-1',
+              payload: {
+                name: 'تركيب ألواح الصوف الصخري',
+                departmentId: testDepartmentId,
+                estimatedDurationValue: 2,
+                estimatedDurationUnit: 'DAYS',
+                estimatedCost: '220.0000',
+              },
+            },
+            // Pattern 2
+            {
+              type: 'ADD_PATTERN',
+              tempClientId: 'pat-2',
+              payload: { name: 'نمط التسليح' },
+            },
+            // Pattern 2 Option 1
+            {
+              type: 'ADD_OPTION',
+              parentId: 'pat-2',
+              tempClientId: 'opt-2-1',
+              payload: { name: 'حديد 16 ملم' },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      // Verify initial commit results (structural additions fork 1.0 -> 1.1)
+      assert.strictEqual(initialCommit.createdNewVersion, true);
+      assert.strictEqual(initialCommit.targetVersionNumber, '1.1');
+      const stage1Id = initialCommit.tempClientMap['stg-1'];
+      const stage2Id = initialCommit.tempClientMap['stg-2'];
+      const pat1Id = initialCommit.tempClientMap['pat-1'];
+      const opt11Id = initialCommit.tempClientMap['opt-1-1'];
+      const opt12Id = initialCommit.tempClientMap['opt-1-2'];
+      const tsk111Id = initialCommit.tempClientMap['tsk-1-1-1'];
+      const pat2Id = initialCommit.tempClientMap['pat-2'];
+      const opt21Id = initialCommit.tempClientMap['opt-2-1'];
+
+      assert.ok(stage1Id && stage2Id && pat1Id && opt11Id && opt12Id && tsk111Id && pat2Id && opt21Id);
+
+      // Check DB state for initial commit (under version 1.1)
+      const initialDetail = await templateService.getTemplateById(template.id, initialCommit.targetVersionId);
+      assert.strictEqual(initialDetail.stages.length, 2);
+      assert.strictEqual(initialDetail.patterns.length, 2);
+      assert.strictEqual(initialDetail.workflowItems.length, 4);
+
+      // Find stage attachment to delete in next session
+      const stageAttRepo = AppDataSource.getRepository(ProductionTemplateStageAttachmentEntity);
+      const initialStageAtt = await stageAttRepo.findOneOrFail({ where: { stageId: stage1Id } });
+
+      // 4. Execute Second Session: Mutations across the whole graph
+      const vLatest = await versionService.getLatestVersion(template.id);
+      rev = await getRevision(template.id, vLatest.id);
+
+      const secondCommit = await editingService.commitEditingSession(
+        template.id,
+        {
+          baseVersionId: vLatest.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            // Structural: Add task to Option 21
+            {
+              type: 'ADD_TASK',
+              parentId: opt21Id,
+              tempClientId: 'tsk-2-1-1',
+              payload: {
+                name: 'قص وثني الحديد',
+                departmentId: testDepartmentId,
+                estimatedDurationValue: 4,
+                estimatedDurationUnit: 'HOURS',
+                estimatedCost: '300.0000',
+              },
+            },
+            // Add Task Material to new task
+            {
+              type: 'ADD_TASK_MATERIAL',
+              parentId: 'tsk-2-1-1',
+              payload: {
+                productId,
+                productUnitId: unitId,
+                plannedQuantity: '2.500000',
+              },
+            },
+            // Reorder Pattern 1 Options: opt-1-2 before opt-1-1
+            {
+              type: 'REORDER_PATTERN_OPTIONS',
+              parentId: pat1Id,
+              payload: {
+                optionIds: [opt12Id, opt11Id],
+              },
+            },
+            // Reorder Workflow Items: reverse order
+            {
+              type: 'REORDER_WORKFLOW',
+              payload: {
+                itemIds: [stage2Id, pat2Id, pat1Id, stage1Id],
+              },
+            },
+            // Delete Stage 1 Attachment
+            {
+              type: 'DELETE_STAGE_ATTACHMENT',
+              targetId: initialStageAtt.id,
+            },
+            // Add Template Specification
+            {
+              type: 'ADD_SPEC',
+              payload: {
+                name: 'مواصفة التحمل النهائي',
+                value: '450 كجم/سم2',
+                unit: 'كجم/سم2',
+                sortOrder: 1,
+              },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      // Verify that structural additions triggered version fork to 1.2
+      assert.strictEqual(secondCommit.createdNewVersion, true);
+      assert.strictEqual(secondCommit.targetVersionNumber, '1.2');
+
+      // 5. Item-by-item verification against actual database state in Version 1.2
+      const finalDetail = await templateService.getTemplateById(template.id, secondCommit.targetVersionId);
+
+      // Verify Stages
+      assert.strictEqual(finalDetail.stages.length, 2);
+      const finalStg1 = finalDetail.stages.find((s) => s.name === 'مرحلة الصب');
+      const finalStg2 = finalDetail.stages.find((s) => s.name === 'مرحلة التشطيب');
+      assert.ok(finalStg1 && finalStg2);
+      assert.strictEqual(Number(finalStg1.estimatedCost), 500);
+      assert.strictEqual(Number(finalStg2.estimatedCost), 800);
+
+      // Verify Stage 1 Material is preserved
+      const stageMatRepo = AppDataSource.getRepository(ProductionTemplateStageMaterialEntity);
+      const stageMats = await stageMatRepo.find({ where: { stageId: finalStg1.id } });
+      assert.strictEqual(stageMats.length, 1);
+      assert.strictEqual(Number(stageMats[0].plannedQuantity), 5);
+
+      // Verify Stage 1 Attachment was deleted in Version 1.1
+      const stageAtts = await stageAttRepo.find({ where: { stageId: finalStg1.id } });
+      assert.strictEqual(stageAtts.length, 0);
+
+      // Verify Patterns & Options
+      assert.strictEqual(finalDetail.patterns.length, 2);
+      const finalPat1 = finalDetail.patterns.find((p) => p.name === 'نمط العزل')!;
+      assert.strictEqual(finalPat1.options.length, 2);
+      // Verify Option Reorder: opt-1-2 is now first (sort_order = 1), opt-1-1 is second (sort_order = 2)
+      assert.strictEqual(finalPat1.options[0].name, 'عزل حراري');
+      assert.strictEqual(finalPat1.options[0].sortOrder, 1);
+      assert.strictEqual(finalPat1.options[1].name, 'عزل مائي');
+      assert.strictEqual(finalPat1.options[1].sortOrder, 2);
+
+      // Verify Pattern 2 & newly added Task
+      const finalPat2 = finalDetail.patterns.find((p) => p.name === 'نمط التسليح')!;
+      assert.strictEqual(finalPat2.options.length, 1);
+      const finalOpt21 = finalPat2.options[0];
+      assert.strictEqual(finalOpt21.tasks.length, 1);
+      assert.strictEqual(finalOpt21.tasks[0].name, 'قص وثني الحديد');
+      assert.strictEqual(finalOpt21.tasks[0].estimatedDurationMinutes, 240);
+      assert.strictEqual(Number(finalOpt21.tasks[0].estimatedCost), 300);
+
+      // Verify newly added Task Material
+      const taskMatRepo = AppDataSource.getRepository(ProductionTemplatePatternOptionTaskMaterialEntity);
+      const taskMats = await taskMatRepo.find({ where: { taskId: finalOpt21.tasks[0].id } });
+      assert.strictEqual(taskMats.length, 1);
+      assert.strictEqual(Number(taskMats[0].plannedQuantity), 2.5);
+
+      // Verify Workflow Items ordering and dense 1..N compaction
+      const wfItems = finalDetail.workflowItems;
+      assert.strictEqual(wfItems.length, 4);
+      assert.strictEqual(wfItems[0].sortOrder, 1);
+      assert.strictEqual(wfItems[1].sortOrder, 2);
+      assert.strictEqual(wfItems[2].sortOrder, 3);
+      assert.strictEqual(wfItems[3].sortOrder, 4);
+      assert.strictEqual(wfItems[0].stage?.name, 'مرحلة التشطيب');
+      assert.strictEqual(wfItems[1].pattern?.name, 'نمط التسليح');
+      assert.strictEqual(wfItems[2].pattern?.name, 'نمط العزل');
+      assert.strictEqual(wfItems[3].stage?.name, 'مرحلة الصب');
+
+      // Verify Template Specification exists at template level
+      const specs = finalDetail.specifications;
+      assert.strictEqual(specs.length, 1);
+      assert.strictEqual(specs[0].name, 'مواصفة التحمل النهائي');
+      assert.strictEqual(specs[0].value, '450 كجم/سم2');
+      assert.strictEqual(specs[0].unit, 'كجم/سم2');
     });
   });
 });

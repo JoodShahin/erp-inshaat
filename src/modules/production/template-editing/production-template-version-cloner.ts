@@ -70,8 +70,10 @@ export class ProductionTemplateVersionCloner {
       // Clone Stage Materials
       const matsForThisStage = sourceStageMaterials.filter((m) => m.stageId === srcStage.id);
       for (const mat of matsForThisStage) {
+        const newMatId = crypto.randomUUID();
+        idMap.set(mat.id, newMatId);
         const newMat = stageMatRepo.create({
-          id: crypto.randomUUID(),
+          id: newMatId,
           stageId: newStageId,
           productId: mat.productId,
           productUnitId: mat.productUnitId,
@@ -83,8 +85,10 @@ export class ProductionTemplateVersionCloner {
       // Clone Stage Attachments (share stored file)
       const attsForThisStage = sourceStageAttachments.filter((a) => a.stageId === srcStage.id);
       for (const att of attsForThisStage) {
+        const newAttId = crypto.randomUUID();
+        idMap.set(att.id, newAttId);
         const newAtt = stageAttRepo.create({
-          id: crypto.randomUUID(),
+          id: newAttId,
           stageId: newStageId,
           fileId: att.fileId || null,
           storageKey: att.storageKey,
@@ -199,8 +203,10 @@ export class ProductionTemplateVersionCloner {
           // Clone Task Materials
           const matsForTask = sourceTaskMaterials.filter((m) => m.taskId === srcTask.id);
           for (const mat of matsForTask) {
+            const newMatId = crypto.randomUUID();
+            idMap.set(mat.id, newMatId);
             const newMat = taskMatRepo.create({
-              id: crypto.randomUUID(),
+              id: newMatId,
               taskId: newTaskId,
               productId: mat.productId,
               productUnitId: mat.productUnitId,
@@ -212,8 +218,10 @@ export class ProductionTemplateVersionCloner {
           // Clone Task Attachments (share stored file)
           const attsForTask = sourceTaskAttachments.filter((a) => a.taskId === srcTask.id);
           for (const att of attsForTask) {
+            const newAttId = crypto.randomUUID();
+            idMap.set(att.id, newAttId);
             const newAtt = taskAttRepo.create({
-              id: crypto.randomUUID(),
+              id: newAttId,
               taskId: newTaskId,
               fileId: att.fileId || null,
               storageKey: att.storageKey,
@@ -264,8 +272,10 @@ export class ProductionTemplateVersionCloner {
         mappedPatternId = idMap.get(item.patternId) || null;
       }
 
+      const newWfItemId = crypto.randomUUID();
+      idMap.set(item.id, newWfItemId);
       const newItem = workflowRepo.create({
-        id: crypto.randomUUID(),
+        id: newWfItemId,
         templateId,
         versionId: targetVersionId,
         itemType: item.itemType,

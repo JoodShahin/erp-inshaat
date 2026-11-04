@@ -53,13 +53,7 @@ export class ProductionTemplateSharedFileService {
       if (existing.deletedAt) {
         // Check physical file existence and cleanup status
         const fullPath = path.resolve(process.cwd(), existing.storageKey);
-        let physicalExists = false;
-        try {
-          await fs.access(fullPath);
-          physicalExists = true;
-        } catch {
-          physicalExists = false;
-        }
+        const physicalExists = fs.existsSync(fullPath);
 
         const cleanupRepo = manager
           ? manager.getRepository(ProductionTemplateFileCleanupQueueEntity)
