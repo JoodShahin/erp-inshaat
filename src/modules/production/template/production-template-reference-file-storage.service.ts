@@ -67,22 +67,32 @@ export class ProductionTemplateReferenceFileStorageService {
 
   /**
    * Deletes a stored file physically from final storage with error logging.
+   * Treats already absent files (ENOENT) safely as completed, but throws on permission (EACCES) or I/O errors.
    */
-  async deleteStoredFile(storageKey: string): Promise<void> {
+  async deleteStoredFile(storageKey: string): Promise<{ wasDeleted: boolean; wasMissing: boolean }> {
+    const p = this.resolveAbsolutePath(storageKey);
+    if (!fs.existsSync(p)) {
+      logger.info(`Physical file already absent at key ${storageKey}`, { path: p });
+      return { wasDeleted: false, wasMissing: true };
+    }
+
     try {
-      const p = this.resolveAbsolutePath(storageKey);
-      if (fs.existsSync(p)) {
-        await fs.promises.unlink(p);
+      await fs.promises.unlink(p);
+      return { wasDeleted: true, wasMissing: false };
+    } catch (unlinkErr: any) {
+      if (unlinkErr?.code === 'ENOENT') {
+        logger.info(`Physical file vanished before unlink at key ${storageKey}`, { path: p });
+        return { wasDeleted: false, wasMissing: true };
       }
-    } catch (err: any) {
-      logger.error(`Failed to delete stored file with key ${storageKey}`, { error: err?.message });
+      logger.error(`Failed to delete stored file with key ${storageKey}`, { error: unlinkErr?.message });
+      throw unlinkErr;
     }
   }
 
   /**
    * Backward-compatible alias for deleteStoredFile.
    */
-  async deleteFile(storageKey: string): Promise<void> {
+  async deleteFile(storageKey: string): Promise<{ wasDeleted: boolean; wasMissing: boolean }> {
     return this.deleteStoredFile(storageKey);
   }
 
@@ -194,11 +204,18 @@ export class ProductionTemplateReferenceFileStorageService {
    * Resolves absolute path of an attachment file with strict path.relative traversal check.
    */
   resolveAbsolutePath(storageKey: string): string {
-    if (!storageKey || storageKey.includes('..') || storageKey.includes('\0')) {
+    if (!storageKey || typeof storageKey !== 'string' || storageKey.includes('..') || storageKey.includes('\0')) {
       throw new BusinessRuleError('مفتاح التخزين غير صالح', 'ATTACHMENT_INVALID_KEY');
     }
 
-    const resolved = path.resolve(this.storageRoot, storageKey);
+    const normalizedKey = storageKey.replace(/\\/g, '/').trim();
+    const rootRel = path.relative(process.cwd(), this.storageRoot).replace(/\\/g, '/');
+    let effectiveKey = normalizedKey;
+    if (effectiveKey.startsWith(rootRel + '/')) {
+      effectiveKey = effectiveKey.slice(rootRel.length + 1);
+    }
+
+    const resolved = path.resolve(this.storageRoot, effectiveKey);
     this.assertPathWithinStorageRoot(resolved, 'ATTACHMENT_PATH_TRAVERSAL');
 
     return resolved;

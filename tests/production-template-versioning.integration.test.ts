@@ -1445,14 +1445,411 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual(deletedCheck, false);
     });
 
-    it('records failed physical unlink into file cleanup queue with FAILED status and allows retry', async () => {
-      const created = await templateService.createTemplate({ name: 'قالب طابور تنظيف الملفات', isActive: true });
-      const v1 = await versionService.getLatestVersion(created.id);
-      const rev = await getRevision(created.id, v1.id);
+    // ------------------------------------------------------------------------
+    // Test 1 — Pending cleanup prevents file reuse
+    // ------------------------------------------------------------------------
+    it('Test 1 — Pending cleanup prevents file reuse', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب منع إعادة استخدام ملف قيد التنظيف', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
 
-      // Create an attachment with a file token that initially has a physical file
-      const tok = await createTestUploadToken(created.id, testUserId, 'ghost-file.pdf', true);
-      await editingService.commitEditingSession(
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-test1.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-test-1');
+
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'test1.pdf',
+          storageKey,
+          sha256: 'sha256-test-1',
+          fileSize: 14,
+          mimeType: 'application/pdf',
+        }));
+
+        await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: stored.id,
+          storageKey: stored.storageKey,
+          status: FileCleanupStatus.PENDING,
+          attempts: 0,
+        }));
+
+        // Attempt reuse via getOrCreateStoredFile -> must throw PRODUCTION_TEMPLATE_STORED_FILE_DELETED
+        await assert.rejects(
+          async () => {
+            await sharedFileService.getOrCreateStoredFile({
+              templateId: created.id,
+              originalFilename: 'test1.pdf',
+              storageKey,
+              sha256: 'sha256-test-1',
+              fileSize: 14,
+              mimeType: 'application/pdf',
+            });
+          },
+          (err: any) => {
+            assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STORED_FILE_DELETED');
+            return true;
+          }
+        );
+      } finally {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 2 — Failed cleanup prevents file reuse
+    // ------------------------------------------------------------------------
+    it('Test 2 — Failed cleanup prevents file reuse', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب منع إعادة استخدام ملف فاشل التنظيف', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-test2.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-test-2');
+
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'test2.pdf',
+          storageKey,
+          sha256: 'sha256-test-2',
+          fileSize: 14,
+          mimeType: 'application/pdf',
+        }));
+
+        await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: stored.id,
+          storageKey: stored.storageKey,
+          status: FileCleanupStatus.FAILED,
+          attempts: 1,
+          lastError: 'Simulated prior failure',
+        }));
+
+        // Attempt reuse via getOrCreateStoredFile -> must throw PRODUCTION_TEMPLATE_STORED_FILE_DELETED
+        await assert.rejects(
+          async () => {
+            await sharedFileService.getOrCreateStoredFile({
+              templateId: created.id,
+              originalFilename: 'test2.pdf',
+              storageKey,
+              sha256: 'sha256-test-2',
+              fileSize: 14,
+              mimeType: 'application/pdf',
+            });
+          },
+          (err: any) => {
+            assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STORED_FILE_DELETED');
+            return true;
+          }
+        );
+      } finally {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 3 — Concurrent cleanup claims execute once
+    // ------------------------------------------------------------------------
+    it('Test 3 — Concurrent cleanup claims execute once', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب ادعاء التنظيف المتزامن', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-test3.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-test-3');
+
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'test3.pdf',
+          storageKey,
+          sha256: 'sha256-test-3',
+          fileSize: 14,
+          mimeType: 'application/pdf',
+        }));
+
+        const queueItem = await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: stored.id,
+          storageKey: stored.storageKey,
+          status: FileCleanupStatus.PENDING,
+          attempts: 0,
+        }));
+
+        // Concurrently run retryFileCleanup on the exact same queueItem.id
+        const [res1, res2] = await Promise.all([
+          sharedFileService.retryFileCleanup(queueItem.id),
+          sharedFileService.retryFileCleanup(queueItem.id),
+        ]);
+
+        // Exactly one worker must claim and succeed
+        assert.strictEqual(Number(res1) + Number(res2), 1, 'Only one worker should claim and execute');
+
+        const finalQueue = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(finalQueue.status, FileCleanupStatus.COMPLETED);
+        assert.strictEqual(finalQueue.attempts, 1);
+        assert.ok(finalQueue.claimId, 'Winning claimId should be recorded');
+        assert.strictEqual(fs.existsSync(fullPath), false, 'Physical file must be unlinked');
+      } finally {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 4 — Reuse and cleanup race
+    // ------------------------------------------------------------------------
+    it('Test 4 — Reuse and cleanup race', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب سباق إعادة الاستخدام والتنظيف', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const stageAttRepo = AppDataSource.getRepository(ProductionTemplateStageAttachmentEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-test4.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-test-4');
+
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'test4.pdf',
+          storageKey,
+          sha256: 'sha256-test-4',
+          fileSize: 14,
+          mimeType: 'application/pdf',
+        }));
+
+        const v1 = await versionService.getLatestVersion(created.id);
+        const stageRepo = AppDataSource.getRepository(ProductionTemplateStageEntity);
+        const stage = await stageRepo.save(stageRepo.create({
+          id: crypto.randomUUID(),
+          templateId: created.id,
+          versionId: v1.id,
+          departmentId: testDepartmentId,
+          name: 'مرحلة سباق الحذف',
+          sortOrder: 1,
+        }));
+
+        // Concurrently attempt cleanup vs reuse via resolveAttachmentFile + attachment creation
+        const cleanupPromise = sharedFileService.safeDeletePhysicalFileIfUnreferenced(stored.id);
+        const reusePromise = AppDataSource.transaction(async (manager) => {
+          const resolved = await (editingService as any).resolveAttachmentFile(
+            created.id,
+            { fileId: stored.id },
+            testUserId,
+            manager
+          );
+          const att = manager.create(ProductionTemplateStageAttachmentEntity, {
+            id: crypto.randomUUID(),
+            stageId: stage.id,
+            fileId: resolved.fileId,
+            originalFilename: resolved.originalFileName,
+            fileSize: resolved.sizeBytes,
+            mimeType: resolved.mimeType,
+          });
+          return await manager.save(att);
+        });
+
+        const [cleanupResult, reuseResult] = await Promise.allSettled([cleanupPromise, reusePromise]);
+
+        // Acceptable invariant:
+        // Case A: Reuse won. Attachment created, cleanupResult is false (refCount >= 1), physical file intact.
+        // Case B: Cleanup won. Stored file soft-deleted, reuse rejected with PRODUCTION_TEMPLATE_STORED_FILE_DELETED.
+        if (reuseResult.status === 'fulfilled') {
+          const refCount = await sharedFileService.countActiveReferences(stored.id);
+          assert.ok(refCount >= 1, 'Active reference count must be >= 1');
+          assert.strictEqual(fs.existsSync(fullPath), true, 'File must NOT be deleted when attachment wins');
+          const freshStored = await storedFileRepo.findOneOrFail({ where: { id: stored.id } });
+          assert.strictEqual(freshStored.deletedAt, null, 'Stored file must not be deleted');
+        } else {
+          assert.strictEqual((reuseResult.reason as any).code, 'PRODUCTION_TEMPLATE_STORED_FILE_DELETED');
+          const finalStored = await storedFileRepo.findOne({ where: { id: stored.id }, withDeleted: true });
+          assert.ok(finalStored?.deletedAt, 'Stored file must be soft deleted if cleanup won');
+        }
+      } finally {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 5 — Cleanup retry after process failure
+    // ------------------------------------------------------------------------
+    it('Test 5 — Cleanup retry after process failure', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب إعادة محاولة التنظيف بعد الفشل', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-test5.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-test-5');
+
+      const originalDelete = productionTemplateReferenceFileStorageService.deleteStoredFile;
+      let failOnce = true;
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'test5.pdf',
+          storageKey,
+          sha256: 'sha256-test-5',
+          fileSize: 14,
+          mimeType: 'application/pdf',
+        }));
+
+        // Stub deleteStoredFile to simulate process/IO failure on first attempt
+        productionTemplateReferenceFileStorageService.deleteStoredFile = async (key: string) => {
+          if (failOnce) {
+            failOnce = false;
+            const err: any = new Error('EACCES: permission denied during unlink');
+            err.code = 'EACCES';
+            throw err;
+          }
+          return originalDelete.call(productionTemplateReferenceFileStorageService, key);
+        };
+
+        const deletedSuccessfully = await sharedFileService.safeDeletePhysicalFileIfUnreferenced(stored.id);
+        assert.strictEqual(deletedSuccessfully, false, 'First attempt must report failure due to simulated IO error');
+
+        const queueEntry = await cleanupRepo.findOneOrFail({
+          where: { fileId: stored.id },
+          order: { createdAt: 'DESC' },
+        });
+        assert.strictEqual(queueEntry.status, FileCleanupStatus.FAILED);
+        assert.strictEqual(queueEntry.attempts, 1);
+        assert.ok(queueEntry.lastError?.includes('EACCES'));
+        assert.strictEqual(fs.existsSync(fullPath), true, 'Physical file must remain when unlink fails');
+
+        // Retry now that the transient failure is gone
+        const retryResult = await sharedFileService.retryFileCleanup(queueEntry.id);
+        assert.strictEqual(retryResult, true, 'Retry must succeed');
+
+        const updatedQueue = await cleanupRepo.findOneOrFail({ where: { id: queueEntry.id } });
+        assert.strictEqual(updatedQueue.status, FileCleanupStatus.COMPLETED);
+        assert.strictEqual(updatedQueue.attempts, 2);
+        assert.strictEqual(fs.existsSync(fullPath), false, 'Physical file must be deleted after retry');
+      } finally {
+        productionTemplateReferenceFileStorageService.deleteStoredFile = originalDelete;
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 6 — Cleanup cannot escape storage root
+    // ------------------------------------------------------------------------
+    it('Test 6 — Cleanup cannot escape storage root', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب منع الهروب من جذر التخزين', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const outsideFile = path.resolve(process.cwd(), `scratch/outside-${Date.now()}.txt`);
+      fs.mkdirSync(path.dirname(outsideFile), { recursive: true });
+      fs.writeFileSync(outsideFile, 'secret outside root content');
+
+      try {
+        const fileId = crypto.randomUUID();
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'outside.txt',
+          storageKey: '../scratch/' + path.basename(outsideFile),
+          sha256: 'sha256-test-6',
+          fileSize: 20,
+          mimeType: 'text/plain',
+        }));
+
+        const queueItem = await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: stored.id,
+          storageKey: stored.storageKey,
+          status: FileCleanupStatus.PENDING,
+          attempts: 0,
+        }));
+
+        const res = await sharedFileService.retryFileCleanup(queueItem.id);
+        assert.strictEqual(res, false, 'Cleanup must reject path traversal outside storage root');
+
+        const updatedQueue = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(updatedQueue.status, FileCleanupStatus.FAILED);
+        assert.ok(
+          updatedQueue.lastError?.includes('ATTACHMENT_PATH_TRAVERSAL') ||
+          updatedQueue.lastError?.includes('مسار الملف غير صالح') ||
+          updatedQueue.lastError?.includes('outside allowed directory') ||
+          updatedQueue.lastError?.includes('ATTACHMENT_INVALID_KEY')
+        );
+        assert.strictEqual(fs.existsSync(outsideFile), true, 'External file outside storage root must NOT be deleted');
+      } finally {
+        if (fs.existsSync(outsideFile)) fs.unlinkSync(outsideFile);
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 7 — Duplicate cleanup scheduling
+    // ------------------------------------------------------------------------
+    it('Test 7 — Duplicate cleanup scheduling', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب منع تكرار مهام التنظيف', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-test7.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-test-7');
+
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'test7.pdf',
+          storageKey,
+          sha256: 'sha256-test-7',
+          fileSize: 14,
+          mimeType: 'application/pdf',
+        }));
+
+        // Concurrently invoke safeDeletePhysicalFileIfUnreferenced twice
+        const [res1, res2] = await Promise.all([
+          sharedFileService.safeDeletePhysicalFileIfUnreferenced(stored.id),
+          sharedFileService.safeDeletePhysicalFileIfUnreferenced(stored.id),
+        ]);
+
+        // At least one executes or returns true, and only 1 queue entry should be created
+        const queueEntries = await cleanupRepo.find({ where: { fileId: stored.id } });
+        assert.strictEqual(queueEntries.length, 1, 'Only one queue entry must be created for the same file');
+        assert.strictEqual(queueEntries[0].status, FileCleanupStatus.COMPLETED);
+        assert.strictEqual(fs.existsSync(fullPath), false, 'Physical file must be deleted');
+      } finally {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 8 — Historical attachment preservation
+    // ------------------------------------------------------------------------
+    it('Test 8 — Historical attachment preservation', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب حماية المرفقات التاريخية', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      const tok = await createTestUploadToken(created.id, testUserId, 'historical-doc.pdf', true);
+      const res = await editingService.commitEditingSession(
         created.id,
         {
           baseVersionId: v1.id,
@@ -1462,7 +1859,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
             {
               type: 'ADD_STAGE',
               tempClientId: 's1',
-              payload: { name: 'مرحلة الملف الشبح', departmentId: testDepartmentId },
+              payload: { name: 'مرحلة تاريخية', departmentId: testDepartmentId },
             },
             {
               type: 'ADD_STAGE_ATTACHMENT',
@@ -1476,42 +1873,135 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
 
       const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
       const storedFile = await storedFileRepo.findOneOrFail({ where: { templateId: created.id } });
+      const physicalPath = path.resolve(process.cwd(), storedFile.storageKey);
+      assert.strictEqual(fs.existsSync(physicalPath), true);
 
-      // Delete the stage attachment so ref count becomes 0
+      // Create version 1.1 by forking with a structural change
+      const v1Current = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, v1Current.id);
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1Current.id,
+          baseRevision: rev,
+          commitDecision: 'FORK',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's2',
+              payload: { name: 'مرحلة ثانية لتفريغ إصدار جديد', departmentId: testDepartmentId },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const vLatest = await versionService.getLatestVersion(created.id);
+      assert.notStrictEqual(vLatest.id, v1.id, 'New version should be created');
+
+      // Both versions now reference the same storedFile
+      const refCount2 = await sharedFileService.countActiveReferences(storedFile.id);
+      assert.strictEqual(refCount2, 2);
+
+      // Now soft-delete attachment in the newer version
       const stageAttRepo = AppDataSource.getRepository(ProductionTemplateStageAttachmentEntity);
-      await stageAttRepo.softDelete({ fileId: storedFile.id });
+      const stageRepo = AppDataSource.getRepository(ProductionTemplateStageEntity);
+      const vLatestStage = await stageRepo.findOneOrFail({ where: { templateId: created.id, versionId: vLatest.id, name: 'مرحلة تاريخية' } });
+      await stageAttRepo.softDelete({ stageId: vLatestStage.id });
 
-      // Remove physical file from disk so physical unlink will fail
-      const fullPath = path.resolve(process.cwd(), storedFile.storageKey);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-      }
+      // Trigger safe delete check
+      const deletedCheck = await sharedFileService.safeDeletePhysicalFileIfUnreferenced(storedFile.id);
+      assert.strictEqual(deletedCheck, false, 'File must NOT be deleted because v1 still references it');
 
-      // Now call safeDeletePhysicalFileIfUnreferenced
-      // Because physical file is missing, unlink will fail and return false
+      // Verify physical file remains intact and accessible for historical v1Current
+      assert.strictEqual(fs.existsSync(physicalPath), true, 'Historical physical file must remain intact');
+      const v1Stage = await stageRepo.findOneOrFail({ where: { templateId: created.id, versionId: v1Current.id, name: 'مرحلة تاريخية' } });
+      const v1Att = await stageAttRepo.findOneOrFail({ where: { stageId: v1Stage.id } });
+      assert.strictEqual(v1Att.deletedAt, null, 'Historical attachment must remain active');
+    });
+
+    // ------------------------------------------------------------------------
+    // Test 9 — Cleanup lease recovery
+    // ------------------------------------------------------------------------
+    it('Test 9 — Cleanup lease recovery', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب استرداد عقد التنظيف المنتهي', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
       const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
-      const deletedSuccessfully = await sharedFileService.safeDeletePhysicalFileIfUnreferenced(storedFile.id);
-      assert.strictEqual(deletedSuccessfully, false);
 
-      const queueEntry = await cleanupRepo.findOneOrFail({
-        where: { fileId: storedFile.id },
-        order: { createdAt: 'DESC' },
-      });
-      assert.strictEqual(queueEntry.status, FileCleanupStatus.FAILED);
-      assert.strictEqual(queueEntry.attempts, 1);
-      assert.ok(queueEntry.lastError);
-
-      // Re-create the physical file so retry succeeds!
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-test9.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-      fs.writeFileSync(fullPath, 'recreated physical content');
+      fs.writeFileSync(fullPath, 'content-test-9');
 
-      const retryRes = await sharedFileService.retryFileCleanup(queueEntry.id);
-      assert.strictEqual(retryRes, true);
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'test9.pdf',
+          storageKey,
+          sha256: 'sha256-test-9',
+          fileSize: 14,
+          mimeType: 'application/pdf',
+        }));
 
-      const updatedQueue = await cleanupRepo.findOneOrFail({ where: { id: queueEntry.id } });
-      assert.strictEqual(updatedQueue.status, FileCleanupStatus.COMPLETED);
-      assert.strictEqual(updatedQueue.attempts, 2);
-      assert.strictEqual(fs.existsSync(fullPath), false);
+        // Simulate a crashed worker with an expired lease
+        const crashedClaimId = 'crashed-worker-uuid-123';
+        const queueItem = await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: stored.id,
+          storageKey: stored.storageKey,
+          status: FileCleanupStatus.PROCESSING,
+          claimId: crashedClaimId,
+          claimedAt: new Date(Date.now() - 10 * 60 * 1000), // 10 minutes ago
+          claimExpiresAt: new Date(Date.now() - 5 * 60 * 1000), // expired 5 minutes ago
+          attempts: 1,
+        }));
+
+        // A new worker attempts to retry/execute the task
+        const reclaimed = await sharedFileService.retryFileCleanup(queueItem.id);
+        assert.strictEqual(reclaimed, true, 'Expired lease must be safely reclaimed by a new worker');
+
+        const updatedQueue = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(updatedQueue.status, FileCleanupStatus.COMPLETED);
+        assert.notStrictEqual(updatedQueue.claimId, crashedClaimId, 'Claim ID must be refreshed to the new worker');
+        assert.strictEqual(updatedQueue.attempts, 2, 'Attempts counter must be incremented');
+        assert.strictEqual(fs.existsSync(fullPath), false, 'Physical file must be unlinked');
+
+        // Test non-expired lease cannot be stolen
+        const unexpiredStorageKey = `storage/template-stage-attachments/${Date.now()}-test9-active.pdf`;
+        const unexpiredPath = path.resolve(process.cwd(), unexpiredStorageKey);
+        fs.writeFileSync(unexpiredPath, 'active-worker-data');
+
+        const storedActive = await storedFileRepo.save(storedFileRepo.create({
+          id: crypto.randomUUID(),
+          templateId: created.id,
+          originalFilename: 'active.pdf',
+          storageKey: unexpiredStorageKey,
+          sha256: 'sha256-test-9-active',
+          fileSize: 18,
+          mimeType: 'application/pdf',
+        }));
+
+        const activeQueue = await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: storedActive.id,
+          storageKey: storedActive.storageKey,
+          status: FileCleanupStatus.PROCESSING,
+          claimId: 'active-worker-uuid',
+          claimedAt: new Date(),
+          claimExpiresAt: new Date(Date.now() + 5 * 60 * 1000), // expires in 5 minutes
+          attempts: 1,
+        }));
+
+        const stolen = await sharedFileService.retryFileCleanup(activeQueue.id);
+        assert.strictEqual(stolen, false, 'Active unexpired lease MUST NOT be stolen by another worker');
+        assert.strictEqual(fs.existsSync(unexpiredPath), true, 'File must remain untouched while worker is active');
+
+        if (fs.existsSync(unexpiredPath)) fs.unlinkSync(unexpiredPath);
+      } finally {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
     });
   });
 

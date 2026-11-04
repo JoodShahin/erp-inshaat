@@ -9,6 +9,7 @@ import {
 
 export enum FileCleanupStatus {
   PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
   FAILED = 'FAILED',
   COMPLETED = 'COMPLETED',
 }
@@ -35,6 +36,16 @@ export class ProductionTemplateFileCleanupQueueEntity {
 
   @Column({ type: 'int', default: 0 })
   attempts!: number;
+
+  @Column({ name: 'claim_id', type: 'varchar', length: 36, nullable: true })
+  claimId!: string | null;
+
+  @Column({ name: 'claimed_at', type: 'datetime', nullable: true })
+  claimedAt!: Date | null;
+
+  @Index('IDX_prod_template_cleanup_claim_expires')
+  @Column({ name: 'claim_expires_at', type: 'datetime', nullable: true })
+  claimExpiresAt!: Date | null;
 
   @Column({ name: 'last_error', type: 'text', nullable: true })
   lastError!: string | null;

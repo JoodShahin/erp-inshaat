@@ -36,6 +36,10 @@ import {
   productionDepartmentService,
 } from '../department/production-department.service.js';
 import { ProductionTemplateStoredFileEntity } from '../template-stored-file/production-template-stored-file.entity.js';
+import {
+  ProductionTemplateFileCleanupQueueEntity,
+  FileCleanupStatus,
+} from '../template-stored-file/production-template-file-cleanup-queue.entity.js';
 import { ProductionTemplateStageEntity } from '../template-stage/production-template-stage.entity.js';
 import { ProductionTemplateStageMaterialEntity } from '../template-stage-material/production-template-stage-material.entity.js';
 import { ProductionTemplateStageAttachmentEntity } from '../template-stage-attachment/production-template-stage-attachment.entity.js';
@@ -1289,6 +1293,7 @@ export class ProductionTemplateEditingService {
       const storedFileRepo = manager.getRepository(ProductionTemplateStoredFileEntity);
       const storedFile = await storedFileRepo.findOne({
         where: { id: payload.fileId },
+        withDeleted: true,
         lock: { mode: 'pessimistic_write' },
       });
 
@@ -1301,6 +1306,26 @@ export class ProductionTemplateEditingService {
       if (storedFile.deletedAt) {
         throw new BusinessRuleError(
           'الملف المطلوب تم حذفه مسبقاً ولا يمكن ربطه مجدداً',
+          'PRODUCTION_TEMPLATE_STORED_FILE_DELETED'
+        );
+      }
+
+      // Check if file has entered cleanup queue (PENDING, PROCESSING, FAILED, COMPLETED)
+      const cleanupRepo = manager.getRepository(ProductionTemplateFileCleanupQueueEntity);
+      const activeCleanup = await cleanupRepo.findOne({
+        where: {
+          fileId: storedFile.id,
+          status: In([
+            FileCleanupStatus.PENDING,
+            FileCleanupStatus.PROCESSING,
+            FileCleanupStatus.FAILED,
+            FileCleanupStatus.COMPLETED,
+          ]),
+        },
+      });
+      if (activeCleanup) {
+        throw new BusinessRuleError(
+          'الملف المطلوب دخل مرحلة التنظيف أو تم حذفه ولا يمكن إعادة ربطه',
           'PRODUCTION_TEMPLATE_STORED_FILE_DELETED'
         );
       }
