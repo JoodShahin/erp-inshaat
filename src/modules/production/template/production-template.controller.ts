@@ -7,6 +7,11 @@ import {
   productionTemplateVersionService,
 } from '../template-version/production-template-version.service.js';
 import {
+  ProductionTemplateEditingService,
+  productionTemplateEditingService,
+} from '../template-editing/production-template-editing.service.js';
+import { CommitTemplateEditingSessionDto } from '../template-editing/dto/commit-template-editing-session.dto.js';
+import {
   ProductionTemplateSpecificationService,
   productionTemplateSpecificationService,
 } from '../template-specification/production-template-specification.service.js';
@@ -86,7 +91,8 @@ export class ProductionTemplateController {
     private taskService: ProductionTemplatePatternOptionTaskService = productionTemplatePatternOptionTaskService,
     private taskMaterialService: ProductionTemplatePatternOptionTaskMaterialService = productionTemplatePatternOptionTaskMaterialService,
     private taskAttachmentService: ProductionTemplatePatternOptionTaskAttachmentService = productionTemplatePatternOptionTaskAttachmentService,
-    private versionService: ProductionTemplateVersionService = productionTemplateVersionService
+    private versionService: ProductionTemplateVersionService = productionTemplateVersionService,
+    private editingService: ProductionTemplateEditingService = productionTemplateEditingService
   ) {}
 
   // ==========================================
@@ -152,6 +158,40 @@ export class ProductionTemplateController {
       const search = typeof req.query.search === 'string' ? req.query.search : undefined;
       const result = await this.templateService.getReferenceOptions({ page, limit, search });
       res.status(200).json(ApiResponse.success(result));
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  commitEditingSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const dto = req.body as CommitTemplateEditingSessionDto;
+      const userId = (req as any).user?.id;
+      const result = await this.editingService.commitEditingSession(id as string, dto, userId);
+      const msg = result.createdNewVersion
+        ? `تم حفظ التعديلات في إصدار جديد (${result.targetVersionNumber}) بنجاح`
+        : 'تم حفظ التعديلات بنجاح';
+      res.status(200).json(ApiResponse.success(result, msg));
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  uploadEditingAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!req.file) {
+        throw new BusinessRuleError('الملف مطلوب', 'FILE_REQUIRED');
+      }
+      const storageKey = req.file.path.replace(/\\/g, '/');
+      res.status(200).json(
+        ApiResponse.success({
+          storageKey,
+          originalFileName: req.file.originalname,
+          mimeType: req.file.mimetype,
+          sizeBytes: req.file.size,
+        }, 'تم رفع الملف بنجاح')
+      );
     } catch (error) {
       next(error);
     }

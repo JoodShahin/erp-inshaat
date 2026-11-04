@@ -33,6 +33,7 @@ import { UpdateTemplatePatternOptionTaskMaterialDto } from '../template-pattern-
 import { UpdatePatternOptionTaskAttachmentDto } from '../template-pattern-option-task-attachment/dto/update-task-attachment.dto.js';
 import { ReorderPatternOptionTaskAttachmentsDto } from '../template-pattern-option-task-attachment/dto/reorder-task-attachments.dto.js';
 import { upload } from '../../../config/multer.config.js';
+import { CommitTemplateEditingSessionDto } from '../template-editing/dto/commit-template-editing-session.dto.js';
 
 const productionTemplateApiRouter: Router = Router();
 
@@ -73,6 +74,24 @@ productionTemplateApiRouter.get(
   ]),
   validateUuidParam('id'),
   productionTemplateController.getOrderConfiguration
+);
+
+// POST /api/production/templates/:id/editing/commit - Commit atomic editing session
+productionTemplateApiRouter.post(
+  '/:id/editing/commit',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_UPDATE),
+  validateUuidParam('id'),
+  validateDto(CommitTemplateEditingSessionDto),
+  productionTemplateController.commitEditingSession
+);
+
+// POST /api/production/templates/:id/editing/upload - Upload file for editing session
+productionTemplateApiRouter.post(
+  '/:id/editing/upload',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_UPDATE),
+  validateUuidParam('id'),
+  upload.single('file'),
+  productionTemplateController.uploadEditingAttachment
 );
 
 // GET /api/production/templates/:id/versions - List template versions
