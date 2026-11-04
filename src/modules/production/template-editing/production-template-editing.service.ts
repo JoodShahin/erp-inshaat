@@ -208,7 +208,6 @@ export class ProductionTemplateEditingService {
           departmentId: payload.departmentId,
           name: (payload.name || '').trim(),
           description: payload.description ? payload.description.trim() : null,
-          sortOrder: payload.sortOrder || 1,
           estimatedDurationValue: duration.estimatedDurationValue,
           estimatedDurationUnit: duration.estimatedDurationUnit,
           estimatedDurationMinutes: duration.estimatedDurationMinutes,

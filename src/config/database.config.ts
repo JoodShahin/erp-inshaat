@@ -60,6 +60,7 @@ import { AddTaskDurationUnitFields1710000000020 } from '../database/migrations/1
 import { MakeProductionUnitOrderNullable1710000000022 } from '../database/migrations/1710000000022-MakeProductionUnitOrderNullable.js';
 import { CreateProductionTemplateVersionAndSequence1710000000023 } from '../database/migrations/1710000000023-CreateProductionTemplateVersionAndSequence.js';
 import { CreateProductionTemplateStoredFiles1710000000024 } from '../database/migrations/1710000000024-CreateProductionTemplateStoredFiles.js';
+import { AddTemplateVersionToProductionOrderLine1710000000025 } from '../database/migrations/1710000000025-AddTemplateVersionToProductionOrderLine.js';
 import { ProductionTemplateStoredFileEntity } from '../modules/production/template-stored-file/production-template-stored-file.entity.js';
 
 export const databaseConfig: DataSourceOptions = {
@@ -135,6 +136,7 @@ export const databaseConfig: DataSourceOptions = {
     MakeProductionUnitOrderNullable1710000000022,
     CreateProductionTemplateVersionAndSequence1710000000023,
     CreateProductionTemplateStoredFiles1710000000024,
+    AddTemplateVersionToProductionOrderLine1710000000025,
   ],
   subscribers: [],
 };
