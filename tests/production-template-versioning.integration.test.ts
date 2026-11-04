@@ -2003,6 +2003,434 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
       }
     });
+
+    // ------------------------------------------------------------------------
+    // Batch A Tests (A-T1 to A-T6)
+    // ------------------------------------------------------------------------
+
+    it('A-T1 — Expired lease and delayed old worker', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب سباق انتهاء العقد', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-at1.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-at1');
+
+      const originalDelete = productionTemplateReferenceFileStorageService.deleteStoredFile;
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFilename: 'at1.pdf',
+          storageKey,
+          sha256: 'sha256-at1',
+          fileSize: 11,
+          mimeType: 'application/pdf',
+          deletedAt: new Date(),
+        }));
+
+        const queueItem = await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: stored.id,
+          storageKey: stored.storageKey,
+          status: FileCleanupStatus.PENDING,
+          attempts: 0,
+        }));
+
+        // Worker A claims the task
+        // We use a controlled barrier: stub deleteStoredFile so Worker A pauses before physical deletion
+        let workerAReachedBarrier;
+        const barrierPromise = new Promise((resolve) => {
+          workerAReachedBarrier = resolve;
+        });
+        let workerACanProceed;
+        const proceedPromise = new Promise((resolve) => {
+          workerACanProceed = resolve;
+        });
+
+        let workerAClaimId = null;
+        let workerACallCount = 0;
+
+        productionTemplateReferenceFileStorageService.deleteStoredFile = async (key) => {
+          workerACallCount++;
+          if (workerACallCount === 1) {
+            // Worker A reached pre-unlink / deletion point
+            workerAReachedBarrier();
+            await proceedPromise; // Wait for Worker B to steal the expired lease
+          }
+          return originalDelete.call(productionTemplateReferenceFileStorageService, key);
+        };
+
+        // Launch Worker A
+        const workerAPromise = sharedFileService.executeCleanupTask(queueItem.id, false);
+
+        // Wait until Worker A claims the task and reaches the deletion barrier
+        await barrierPromise;
+
+        // Verify Worker A claimed it
+        const queueAfterA = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(queueAfterA.status, FileCleanupStatus.PROCESSING);
+        workerAClaimId = queueAfterA.claimId;
+        assert.ok(workerAClaimId);
+
+        // Now simulate lease expiration while Worker A is paused
+        await cleanupRepo.update(queueItem.id, {
+          claimExpiresAt: new Date(Date.now() - 60 * 1000), // expired 1 minute ago
+        });
+
+        // Worker B attempts to claim and execute the expired task
+        const workerBResult = await sharedFileService.executeCleanupTask(queueItem.id, false);
+        assert.strictEqual(workerBResult, true, 'Worker B must successfully claim and execute the expired task');
+
+        // Check DB state after Worker B finishes
+        const queueAfterB = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(queueAfterB.status, FileCleanupStatus.COMPLETED);
+        const workerBClaimId = queueAfterB.claimId;
+        assert.notStrictEqual(workerBClaimId, workerAClaimId, 'Worker B must have a new claimId');
+
+        // Now unblock Worker A so it resumes
+        workerACanProceed();
+        const workerAResult = await workerAPromise;
+
+        // Worker A lost its claim during processing, so it must return false and NOT corrupt Worker B's result
+        assert.strictEqual(workerAResult, false, 'Worker A must fail because it lost ownership of the claim');
+
+        const finalQueue = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(finalQueue.status, FileCleanupStatus.COMPLETED);
+        assert.strictEqual(finalQueue.claimId, workerBClaimId, 'Worker A must not overwrite Worker B claimId');
+        assert.strictEqual(fs.existsSync(fullPath), false, 'File must be safely unlinked');
+      } finally {
+        productionTemplateReferenceFileStorageService.deleteStoredFile = originalDelete;
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    it('A-T2 — Immutable storage identity: cannot reuse storageKey of deleted file', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب ثبات مفتاح التخزين', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-at2.pdf`;
+
+      // 1. Create a soft-deleted stored file
+      const stored = await storedFileRepo.save(storedFileRepo.create({
+        id: fileId,
+        templateId: created.id,
+        originalFileName: 'at2.pdf',
+        storageKey,
+        sha256: 'sha256-at2',
+        sizeBytes: 100,
+        mimeType: 'application/pdf',
+        deletedAt: new Date(),
+      }));
+
+      // 2. Attempt to register a new stored file with the same storageKey
+      await assert.rejects(
+        async () => {
+          await sharedFileService.getOrCreateStoredFile({
+            templateId: created.id,
+            originalFilename: 'at2-alternate.pdf',
+            storageKey,
+            sha256: 'sha256-at2-new',
+            fileSize: 200,
+            mimeType: 'application/pdf',
+          });
+        },
+        (err) => {
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_STORED_FILE_DELETED');
+          return true;
+        }
+      );
+
+      // Verify no alternate record was created in DB
+      const count = await storedFileRepo.count({ where: { storageKey }, withDeleted: true });
+      assert.strictEqual(count, 1, 'No new file record must be created with the same storageKey');
+      const freshStored = await storedFileRepo.findOne({ where: { id: stored.id }, withDeleted: true });
+      assert.strictEqual(freshStored?.originalFileName, 'at2.pdf', 'Existing record must remain unchanged');
+    });
+
+    it('A-T3 — Failed cleanup is reused instead of creating duplicate task', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب إعادة استخدام المهمة الفاشلة', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-at3.pdf`;
+
+      const stored = await storedFileRepo.save(storedFileRepo.create({
+        id: fileId,
+        templateId: created.id,
+        originalFilename: 'at3.pdf',
+        storageKey,
+        sha256: 'sha256-at3',
+        fileSize: 50,
+        mimeType: 'application/pdf',
+        deletedAt: new Date(),
+      }));
+
+      // Existing task with status FAILED and attempts = 1
+      const initialTask = await cleanupRepo.save(cleanupRepo.create({
+        id: crypto.randomUUID(),
+        fileId: stored.id,
+        storageKey,
+        status: FileCleanupStatus.FAILED,
+        attempts: 1,
+        lastError: 'Simulated network glitch',
+        nextRetryAt: new Date(Date.now() + 60 * 1000), // scheduled in the future
+      }));
+
+      // Trigger safeDeletePhysicalFileIfUnreferenced again on the unreferenced file
+      await sharedFileService.safeDeletePhysicalFileIfUnreferenced(stored.id);
+
+      // Verify that NO second queue row was created
+      const allTasks = await cleanupRepo.find({ where: { fileId: stored.id } });
+      assert.strictEqual(allTasks.length, 1, 'Must reuse existing FAILED task without creating duplicate');
+      assert.strictEqual(allTasks[0].id, initialTask.id, 'Task ID must remain identical');
+      assert.strictEqual(allTasks[0].status, FileCleanupStatus.COMPLETED);
+      assert.strictEqual(allTasks[0].attempts, 2, 'Attempts counter must be incremented on the existing record');
+    });
+
+    it('A-T4 — Automatic cleanup batch processes due tasks and ignores unexpired leases', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب المعالجة بالدفعات', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      // Task 1: Due PENDING task
+      const file1 = await storedFileRepo.save(storedFileRepo.create({
+        id: crypto.randomUUID(),
+        templateId: created.id,
+        originalFilename: 'due1.pdf',
+        storageKey: `storage/template-stage-attachments/${Date.now()}-due1.pdf`,
+        sha256: 'hash-due1',
+        fileSize: 10,
+        mimeType: 'application/pdf',
+        deletedAt: new Date(),
+      }));
+      const task1 = await cleanupRepo.save(cleanupRepo.create({
+        id: crypto.randomUUID(),
+        fileId: file1.id,
+        storageKey: file1.storageKey,
+        status: FileCleanupStatus.PENDING,
+        attempts: 0,
+      }));
+
+      // Task 2: PROCESSING task with active unexpired lease (NOT due)
+      const file2 = await storedFileRepo.save(storedFileRepo.create({
+        id: crypto.randomUUID(),
+        templateId: created.id,
+        originalFilename: 'active2.pdf',
+        storageKey: `storage/template-stage-attachments/${Date.now()}-active2.pdf`,
+        sha256: 'hash-active2',
+        fileSize: 10,
+        mimeType: 'application/pdf',
+        deletedAt: new Date(),
+      }));
+      const task2 = await cleanupRepo.save(cleanupRepo.create({
+        id: crypto.randomUUID(),
+        fileId: file2.id,
+        storageKey: file2.storageKey,
+        status: FileCleanupStatus.PROCESSING,
+        claimId: 'active-claim-uuid',
+        claimedAt: new Date(),
+        claimExpiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 mins in future
+        attempts: 1,
+      }));
+
+      // Task 3: FAILED task with nextRetryAt in the past (Due)
+      const file3 = await storedFileRepo.save(storedFileRepo.create({
+        id: crypto.randomUUID(),
+        templateId: created.id,
+        originalFilename: 'due3.pdf',
+        storageKey: `storage/template-stage-attachments/${Date.now()}-due3.pdf`,
+        sha256: 'hash-due3',
+        fileSize: 10,
+        mimeType: 'application/pdf',
+        deletedAt: new Date(),
+      }));
+      const task3 = await cleanupRepo.save(cleanupRepo.create({
+        id: crypto.randomUUID(),
+        fileId: file3.id,
+        storageKey: file3.storageKey,
+        status: FileCleanupStatus.FAILED,
+        nextRetryAt: new Date(Date.now() - 5 * 60 * 1000), // in the past
+        attempts: 1,
+      }));
+
+      // Task 4: FAILED task with nextRetryAt in the future (NOT due)
+      const file4 = await storedFileRepo.save(storedFileRepo.create({
+        id: crypto.randomUUID(),
+        templateId: created.id,
+        originalFilename: 'future4.pdf',
+        storageKey: `storage/template-stage-attachments/${Date.now()}-future4.pdf`,
+        sha256: 'hash-future4',
+        fileSize: 10,
+        mimeType: 'application/pdf',
+        deletedAt: new Date(),
+      }));
+      const task4 = await cleanupRepo.save(cleanupRepo.create({
+        id: crypto.randomUUID(),
+        fileId: file4.id,
+        storageKey: file4.storageKey,
+        status: FileCleanupStatus.FAILED,
+        nextRetryAt: new Date(Date.now() + 30 * 60 * 1000), // 30 mins in future
+        attempts: 1,
+      }));
+
+      // Process batch
+      const summary = await sharedFileService.processDueCleanupTasks(50);
+      assert.ok(summary.processed >= 2, 'Should process at least the 2 due tasks');
+
+      // Verify task1 and task3 are now COMPLETED
+      const fresh1 = await cleanupRepo.findOneOrFail({ where: { id: task1.id } });
+      const fresh3 = await cleanupRepo.findOneOrFail({ where: { id: task3.id } });
+      assert.strictEqual(fresh1.status, FileCleanupStatus.COMPLETED);
+      assert.strictEqual(fresh3.status, FileCleanupStatus.COMPLETED);
+
+      // Verify task2 (active lease) was untouched
+      const fresh2 = await cleanupRepo.findOneOrFail({ where: { id: task2.id } });
+      assert.strictEqual(fresh2.status, FileCleanupStatus.PROCESSING);
+      assert.strictEqual(fresh2.claimId, 'active-claim-uuid');
+
+      // Verify task4 (future retry) was untouched
+      const fresh4 = await cleanupRepo.findOneOrFail({ where: { id: task4.id } });
+      assert.strictEqual(fresh4.status, FileCleanupStatus.FAILED);
+      assert.strictEqual(fresh4.attempts, 1);
+    });
+
+    it('A-T5 — Historical retention prevents deleting files needed by historical versions while allowing orphan cleanup', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب فحص الاحتفاظ التاريخي', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      // 1. Create attachment in version 1.0
+      const tok = await createTestUploadToken(created.id, testUserId, 'hist-retention.pdf', true);
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's1',
+              payload: { name: 'مرحلة تاريخية محتفظ بها', departmentId: testDepartmentId },
+            },
+            {
+              type: 'ADD_STAGE_ATTACHMENT',
+              parentId: 's1',
+              payload: { uploadToken: tok },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const stored = await storedFileRepo.findOneOrFail({ where: { templateId: created.id } });
+      const fullPath = path.resolve(process.cwd(), stored.storageKey);
+
+      // Fork to version 1.1
+      const v1Current = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, v1Current.id);
+      await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1Current.id,
+          baseRevision: rev,
+          commitDecision: 'FORK',
+          operations: [
+            {
+              type: 'ADD_STAGE',
+              tempClientId: 's2',
+              payload: { name: 'مرحلة ثانية لتفريغ النسخة', departmentId: testDepartmentId },
+            },
+          ],
+        },
+        testUserId
+      );
+
+      // In version 1.1, soft delete the attachment
+      const vLatest = await versionService.getLatestVersion(created.id);
+      const stageRepo = AppDataSource.getRepository(ProductionTemplateStageEntity);
+      const stageAttRepo = AppDataSource.getRepository(ProductionTemplateStageAttachmentEntity);
+      const vLatestStage = await stageRepo.findOneOrFail({ where: { templateId: created.id, versionId: vLatest.id, name: 'مرحلة تاريخية محتفظ بها' } });
+      await stageAttRepo.softDelete({ stageId: vLatestStage.id });
+
+      // Even if attachment in v1.1 is deleted, v1Current (historical version) retains it!
+      const hasRetention = await sharedFileService.hasRetentionReferences(stored.id);
+      assert.strictEqual(hasRetention, true, 'hasRetentionReferences must return true for historical version');
+
+      // Attempt safe deletion -> must be blocked
+      const deleteResult = await sharedFileService.safeDeletePhysicalFileIfUnreferenced(stored.id);
+      assert.strictEqual(deleteResult, false, 'Deletion must be blocked when historical retention exists');
+      assert.strictEqual(fs.existsSync(fullPath), true, 'Physical file must remain on disk');
+
+      // Now test an orphaned temporary file: has NO attachments to any stage/task
+      const orphanFile = await storedFileRepo.save(storedFileRepo.create({
+        id: crypto.randomUUID(),
+        templateId: created.id,
+        originalFilename: 'orphan.pdf',
+        storageKey: `storage/template-stage-attachments/${Date.now()}-orphan.pdf`,
+        sha256: 'hash-orphan',
+        fileSize: 15,
+        mimeType: 'application/pdf',
+      }));
+      const orphanPath = path.resolve(process.cwd(), orphanFile.storageKey);
+      fs.writeFileSync(orphanPath, 'orphan data');
+
+      const orphanHasRetention = await sharedFileService.hasRetentionReferences(orphanFile.id);
+      assert.strictEqual(orphanHasRetention, false, 'Orphaned file has no retention references');
+
+      const orphanDeleted = await sharedFileService.safeDeletePhysicalFileIfUnreferenced(orphanFile.id);
+      assert.strictEqual(orphanDeleted, true, 'Orphaned file can be safely deleted');
+      assert.strictEqual(fs.existsSync(orphanPath), false, 'Orphaned physical file must be unlinked');
+    });
+
+    it('A-T6 — ENOENT is idempotent: deleting missing file twice succeeds safely without error', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب حذف مكرر آمن', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-at6.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+
+      const stored = await storedFileRepo.save(storedFileRepo.create({
+        id: fileId,
+        templateId: created.id,
+        originalFilename: 'at6.pdf',
+        storageKey,
+        sha256: 'sha256-at6',
+        fileSize: 12,
+        mimeType: 'application/pdf',
+        deletedAt: new Date(),
+      }));
+
+      const queueItem = await cleanupRepo.save(cleanupRepo.create({
+        id: crypto.randomUUID(),
+        fileId: stored.id,
+        storageKey,
+        status: FileCleanupStatus.PENDING,
+        attempts: 0,
+      }));
+
+      // First execution on missing file -> ENOENT handled as safe completion
+      const res1 = await sharedFileService.executeCleanupTask(queueItem.id, false);
+      assert.strictEqual(res1, true, 'First deletion of missing file must complete safely');
+      const queueAfter1 = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+      assert.strictEqual(queueAfter1.status, FileCleanupStatus.COMPLETED);
+
+      // Second execution on missing file -> idempotent safe success
+      const res2 = await sharedFileService.executeCleanupTask(queueItem.id, true);
+      assert.strictEqual(res2, false, 'Second execution on COMPLETED task returns false (already completed)');
+      const queueAfter2 = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+      assert.strictEqual(queueAfter2.status, FileCleanupStatus.COMPLETED);
+    });
   });
 
   // ------------------------------------------------------------------------

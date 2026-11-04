@@ -1,4 +1,4 @@
-import { DataSource, EntityManager, Repository, IsNull, In, Not } from 'typeorm';
+import { DataSource, EntityManager, Repository, IsNull, In, Brackets } from 'typeorm';
 import { AppDataSource } from '../../../database/data-source.js';
 import { ProductionTemplateStoredFileEntity } from '../template-stored-file/production-template-stored-file.entity.js';
 import {
@@ -7,6 +7,9 @@ import {
 } from '../template-stored-file/production-template-file-cleanup-queue.entity.js';
 import { ProductionTemplateStageAttachmentEntity } from '../template-stage-attachment/production-template-stage-attachment.entity.js';
 import { ProductionTemplatePatternOptionTaskAttachmentEntity } from '../template-pattern-option-task-attachment/production-template-pattern-option-task-attachment.entity.js';
+import { ProductionTemplateVersionEntity } from '../template-version/production-template-version.entity.js';
+import { ProductionOrderLineEntity } from '../order-line/production-order-line.entity.js';
+import { compareVersions } from '../template-version/version-number.helper.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { productionTemplateReferenceFileStorageService } from './production-template-reference-file-storage.service.js';
@@ -34,7 +37,7 @@ export class ProductionTemplateSharedFileService {
   /**
    * Registers a newly uploaded or stored file under a template.
    * If a stored file with the same storageKey already exists, returns it (idempotent registration).
-   * Enforces pessimistic locking and strict cleanup/lifecycle protection.
+   * Enforces pessimistic locking, immutable storage identity, and strict cleanup/lifecycle protection.
    */
   async getOrCreateStoredFile(
     data: CreateStoredFileDto,
@@ -44,7 +47,7 @@ export class ProductionTemplateSharedFileService {
       const repo = txManager.getRepository(ProductionTemplateStoredFileEntity);
       const cleanupRepo = txManager.getRepository(ProductionTemplateFileCleanupQueueEntity);
 
-      // Lock existing record by storageKey with pessimistic_write
+      // Lock existing record by storageKey with pessimistic_write (including soft-deleted)
       const existing = await repo.findOne({
         where: { storageKey: data.storageKey },
         withDeleted: true,
@@ -89,6 +92,17 @@ export class ProductionTemplateSharedFileService {
         }
 
         return existing;
+      }
+
+      // Defense-in-depth: Check if storageKey has ever entered cleanup queue
+      const queueByStorageKey = await cleanupRepo.findOne({
+        where: { storageKey: data.storageKey },
+      });
+      if (queueByStorageKey) {
+        throw new BusinessRuleError(
+          'مفتاح التخزين مخصص لعملية تنظيف أو تم حذفه مسبقاً ولا يمكن إعادة استخدامه',
+          'PRODUCTION_TEMPLATE_STORED_FILE_DELETED'
+        );
       }
 
       // No existing record -> Create a new StoredFile
@@ -174,10 +188,94 @@ export class ProductionTemplateSharedFileService {
   }
 
   /**
+   * Checks whether a stored file has retention references that require keeping the physical file,
+   * including active attachments across versions, attachments belonging to historical template versions,
+   * or versions pinned by production order lines.
+   */
+  async hasRetentionReferences(
+    fileId: string,
+    manager?: EntityManager
+  ): Promise<boolean> {
+    const em = manager || this.dataSource.manager;
+
+    // 1. Any active reference immediately mandates retention
+    const activeRefs = await this.countActiveReferences(fileId, undefined, em);
+    if (activeRefs > 0) {
+      return true;
+    }
+
+    // 2. Query all versions associated with stage attachments for this file (including soft-deleted attachments)
+    const stageVersions = await em
+      .createQueryBuilder(ProductionTemplateStageAttachmentEntity, 'att')
+      .withDeleted()
+      .innerJoin('production_template_stage', 's', 's.id = att.stage_id')
+      .innerJoin('production_template_version', 'v', 'v.id = s.version_id AND v.deleted_at IS NULL')
+      .select('v.id', 'versionId')
+      .addSelect('v.template_id', 'templateId')
+      .addSelect('v.version', 'version')
+      .where('att.file_id = :fileId', { fileId })
+      .getRawMany<{ versionId: string; templateId: string; version: string }>();
+
+    // 3. Query all versions associated with task attachments for this file
+    const taskVersions = await em
+      .createQueryBuilder(ProductionTemplatePatternOptionTaskAttachmentEntity, 'att')
+      .withDeleted()
+      .innerJoin('production_template_pattern_option_task', 't', 't.id = att.task_id')
+      .innerJoin('production_template_pattern_option', 'o', 'o.id = t.option_id')
+      .innerJoin('production_template_pattern', 'p', 'p.id = o.pattern_id')
+      .innerJoin('production_template_version', 'v', 'v.id = p.version_id AND v.deleted_at IS NULL')
+      .select('v.id', 'versionId')
+      .addSelect('v.template_id', 'templateId')
+      .addSelect('v.version', 'version')
+      .where('att.file_id = :fileId', { fileId })
+      .getRawMany<{ versionId: string; templateId: string; version: string }>();
+
+    const allVersionRefs = [...stageVersions, ...taskVersions];
+    if (allVersionRefs.length === 0) {
+      return false;
+    }
+
+    const versionRepo = em.getRepository(ProductionTemplateVersionEntity);
+    const orderLineRepo = em.getRepository(ProductionOrderLineEntity);
+
+    for (const vRef of allVersionRefs) {
+      // Check if pinned by production order line
+      const lineCount = await orderLineRepo.count({
+        where: {
+          templateVersionId: vRef.versionId,
+        },
+      });
+      if (lineCount > 0) {
+        return true;
+      }
+
+      // Check if this version is a historical version (i.e. superseded by a newer version)
+      const templateVersions = await versionRepo.find({
+        where: { templateId: vRef.templateId },
+        order: { createdAt: 'DESC' },
+      });
+
+      if (templateVersions.length > 1) {
+        const sorted = templateVersions.sort((a, b) => compareVersions(b.version, a.version));
+        const latest = sorted[0];
+        // If vRef is not the latest version, it is a historical version and must be retained
+        if (vRef.versionId !== latest.id) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Unified pipeline for executing a cleanup task atomically.
    * Enforces pessimistic lock order (StoredFile -> CleanupQueue),
    * obtains an exclusive lease (PROCESSING + claimId), unlinks via storage service,
    * and finalizes state to COMPLETED or FAILED.
+   *
+   * Physical deletion is at-least-once and idempotent; claimId fences database state
+   * transitions, while immutable storage identity prevents unsafe deletion of another file.
    */
   async executeCleanupTask(cleanupId: string, forceRetry = false): Promise<boolean> {
     let claimResult: {
@@ -211,6 +309,9 @@ export class ProductionTemplateSharedFileService {
         if (!file.deletedAt) {
           const refCount = await this.countActiveReferences(file.id, undefined, manager);
           if (refCount > 0) {
+            return;
+          }
+          if (await this.hasRetentionReferences(file.id, manager)) {
             return;
           }
           file.deletedAt = new Date();
@@ -249,7 +350,16 @@ export class ProductionTemplateSharedFileService {
           // Re-referenced! Cancel physical cleanup safely
           task.status = FileCleanupStatus.COMPLETED;
           task.lastError = 'File was re-referenced by active template; cleanup cancelled';
-          task.claimId = null;
+          task.claimExpiresAt = null;
+          await cleanupRepo.save(task);
+          return;
+        }
+
+        // Conservative policy: check retention references across historical versions
+        const hasRetention = await this.hasRetentionReferences(file.id, manager);
+        if (hasRetention) {
+          task.status = FileCleanupStatus.COMPLETED;
+          task.lastError = 'File is required by historical template version retention; cleanup cancelled';
           task.claimExpiresAt = null;
           await cleanupRepo.save(task);
           return;
@@ -305,7 +415,41 @@ export class ProductionTemplateSharedFileService {
 
     const { trustedStorageKey, claimId } = claimResult;
 
-    // Step 6: Physical Deletion outside MySQL transaction using storage service
+    // Step 5.5: Pre-unlink check: verify task is still PROCESSING, claimId still matches, and file is not re-referenced
+    const preCheckOk = await this.dataSource.transaction(async (manager) => {
+      const cleanupRepo = manager.getRepository(ProductionTemplateFileCleanupQueueEntity);
+      const fileRepo = manager.getRepository(ProductionTemplateStoredFileEntity);
+      const currentTask = await cleanupRepo.findOne({
+        where: { id: cleanupId },
+      });
+      if (!currentTask || currentTask.status !== FileCleanupStatus.PROCESSING || currentTask.claimId !== claimId) {
+        return false;
+      }
+      const file = await fileRepo.findOne({
+        where: { id: currentTask.fileId },
+        withDeleted: true,
+      });
+      if (!file || !file.deletedAt) {
+        return false;
+      }
+      const refCount = await this.countActiveReferences(file.id, undefined, manager);
+      if (refCount > 0) {
+        return false;
+      }
+      if (await this.hasRetentionReferences(file.id, manager)) {
+        return false;
+      }
+      return true;
+    });
+
+    if (!preCheckOk) {
+      logger.warn(`Cleanup pre-check failed for task ${cleanupId}; worker lost claim or file was re-referenced`);
+      return false;
+    }
+
+    // Step 6: Physical Deletion outside MySQL transaction using storage service.
+    // Physical deletion is at-least-once and idempotent; claimId fences database state transitions,
+    // while immutable storage identity prevents unsafe deletion of another file.
     let unlinkSuccess = false;
     let unlinkError: string | null = null;
     try {
@@ -318,6 +462,7 @@ export class ProductionTemplateSharedFileService {
     }
 
     // Step 7: Finalize state within short transaction, verifying claimId ownership
+    let finalized = false;
     try {
       await this.dataSource.transaction(async (manager) => {
         const cleanupRepo = manager.getRepository(ProductionTemplateFileCleanupQueueEntity);
@@ -330,7 +475,7 @@ export class ProductionTemplateSharedFileService {
 
         // Verify we still own the claim (lease was not stolen during long I/O)
         if (task.claimId !== claimId) {
-          logger.warn(`Cleanup claim for task ${cleanupId} was lost during processing`);
+          logger.warn(`Cleanup claim for task ${cleanupId} was lost during processing; ignoring old worker results`);
           return;
         }
 
@@ -341,6 +486,7 @@ export class ProductionTemplateSharedFileService {
           task.claimExpiresAt = null;
           task.nextRetryAt = null;
           await cleanupRepo.save(task);
+          finalized = true;
         } else {
           task.status = FileCleanupStatus.FAILED;
           task.attempts += 1;
@@ -349,6 +495,7 @@ export class ProductionTemplateSharedFileService {
           task.claimExpiresAt = null;
           task.nextRetryAt = new Date(Date.now() + 5 * 60 * 1000);
           await cleanupRepo.save(task);
+          finalized = true;
         }
       });
     } catch (finalizeErr) {
@@ -356,12 +503,12 @@ export class ProductionTemplateSharedFileService {
       return false;
     }
 
-    return unlinkSuccess;
+    return unlinkSuccess && finalized;
   }
 
   /**
    * Safely marks physical file for cleanup ONLY IF no active references exist across any versions.
-   * Locks the StoredFile row, sets deletedAt, creates or reuses an existing PENDING CleanupQueue row,
+   * Locks the StoredFile row, sets deletedAt, creates or reuses an existing PENDING/FAILED CleanupQueue row,
    * and executes the unified cleanup pipeline.
    */
   async safeDeletePhysicalFileIfUnreferenced(
@@ -374,7 +521,8 @@ export class ProductionTemplateSharedFileService {
       await this.dataSource.transaction(async (manager) => {
         const fileRepo = manager.getRepository(ProductionTemplateStoredFileEntity);
         const file = await fileRepo.findOne({
-          where: { id: fileId, deletedAt: IsNull() },
+          where: { id: fileId },
+          withDeleted: true,
           lock: { mode: 'pessimistic_write' },
         });
         if (!file) {
@@ -386,21 +534,35 @@ export class ProductionTemplateSharedFileService {
           return;
         }
 
+        const hasRetention = await this.hasRetentionReferences(fileId, manager);
+        if (hasRetention) {
+          return;
+        }
+
         // Put file in non-reusable state
-        file.deletedAt = new Date();
-        await fileRepo.save(file);
+        if (!file.deletedAt) {
+          file.deletedAt = new Date();
+          await fileRepo.save(file);
+        }
 
         const cleanupRepo = manager.getRepository(ProductionTemplateFileCleanupQueueEntity);
 
-        // Check if an active cleanup task already exists to prevent duplicate scheduling
+        // Check if an existing cleanup task already exists (PENDING, PROCESSING, or FAILED) to prevent duplicates
         let queueItem = await cleanupRepo.findOne({
           where: {
             fileId,
-            status: In([FileCleanupStatus.PENDING, FileCleanupStatus.PROCESSING]),
+            status: In([FileCleanupStatus.PENDING, FileCleanupStatus.PROCESSING, FileCleanupStatus.FAILED]),
           },
+          order: { createdAt: 'DESC' },
         });
 
-        if (!queueItem) {
+        if (queueItem) {
+          // If task was FAILED, reschedule it without losing attempt history
+          if (queueItem.status === FileCleanupStatus.FAILED) {
+            queueItem.nextRetryAt = null;
+            await cleanupRepo.save(queueItem);
+          }
+        } else {
           queueItem = cleanupRepo.create({
             fileId,
             storageKey: file.storageKey,
@@ -427,9 +589,63 @@ export class ProductionTemplateSharedFileService {
 
   /**
    * Retries physical unlink for a failed or pending cleanup queue item.
+   * forceRetry = true bypasses nextRetryAt backoff, but strictly respects
+   * any active, unexpired lease held by another worker.
    */
   async retryFileCleanup(cleanupId: string): Promise<boolean> {
     return await this.executeCleanupTask(cleanupId, true);
+  }
+
+  /**
+   * Processes a batch of due cleanup tasks (PENDING, FAILED with nextRetryAt <= NOW,
+   * or PROCESSING with expired leases).
+   * Note: This is designed to be executed periodically by an external scheduler or CLI command.
+   */
+  async processDueCleanupTasks(
+    batchSize = 50
+  ): Promise<{ processed: number; succeeded: number; failed: number }> {
+    const now = new Date();
+    const tasks = await this.cleanupRepo
+      .createQueryBuilder('q')
+      .where(
+        new Brackets((qb) => {
+          qb.where('q.status = :pending', { pending: FileCleanupStatus.PENDING })
+            .orWhere('q.status = :failed AND (q.nextRetryAt IS NULL OR q.nextRetryAt <= :now)', {
+              failed: FileCleanupStatus.FAILED,
+              now,
+            })
+            .orWhere('q.status = :processing AND q.claimExpiresAt <= :now', {
+              processing: FileCleanupStatus.PROCESSING,
+              now,
+            });
+        })
+      )
+      .orderBy('q.createdAt', 'ASC')
+      .limit(batchSize)
+      .getMany();
+
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const task of tasks) {
+      try {
+        const result = await this.executeCleanupTask(task.id, false);
+        if (result) {
+          succeeded++;
+        } else {
+          failed++;
+        }
+      } catch (err) {
+        logger.error(`Error processing cleanup task ${task.id} in batch:`, err);
+        failed++;
+      }
+    }
+
+    return {
+      processed: tasks.length,
+      succeeded,
+      failed,
+    };
   }
 }
 
