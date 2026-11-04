@@ -22,6 +22,32 @@
             <i class="fa-solid <%= template.isActive ? 'fa-circle-check' : 'fa-circle-xmark' %> me-1"></i>
             <span id="headerStatusText"><%= template.isActive ? 'نشط' : 'معطل' %></span>
           </span>
+          <% if (template.currentVersion) { %>
+            <div class="dropdown">
+              <button class="btn btn-sm btn-outline-secondary dropdown-toggle d-inline-flex align-items-center gap-1 rounded-pill px-3 py-1" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="fa-solid fa-code-branch text-primary me-1"></i>
+                <span>الإصدار <strong><%= template.currentVersion.version %></strong></span>
+                <% if (template.currentVersion.isLatest) { %>
+                  <span class="badge bg-success-subtle text-success rounded-pill ms-1" style="font-size: 0.75rem;">الأحدث</span>
+                <% } else { %>
+                  <span class="badge bg-secondary-subtle text-secondary rounded-pill ms-1" style="font-size: 0.75rem;">تاريخي</span>
+                <% } %>
+              </button>
+              <ul class="dropdown-menu shadow border-0" style="border-radius: 8px;">
+                <li><h6 class="dropdown-header small text-muted">سجل إصدارات القالب</h6></li>
+                <% (template.versions || []).forEach(function(v) { %>
+                  <li>
+                    <a class="dropdown-item d-flex justify-content-between align-items-center py-2 <%= v.id === template.currentVersion.id ? 'active bg-primary text-white' : '' %>" href="/production/templates/<%= template.id %>?versionId=<%= v.id %>">
+                      <span>إصدار <%= v.version %></span>
+                      <% if (v.isLatest) { %>
+                        <span class="badge <%= v.id === template.currentVersion.id ? 'bg-white text-primary' : 'bg-success-subtle text-success' %> rounded-pill ms-2">الأحدث</span>
+                      <% } %>
+                    </a>
+                  </li>
+                <% }); %>
+              </ul>
+            </div>
+          <% } %>
         </div>
         <div class="d-flex flex-wrap align-items-center gap-3 text-muted small mt-2">
           <span><i class="fa-solid fa-barcode me-1 text-secondary"></i> الكود التقني: <strong class="text-dark font-monospace" id="headerTemplateCode"><%= template.code %></strong></span>
@@ -1160,6 +1186,29 @@
           <span>تأكيد الحفظ النهائي</span>
         </button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Floating Editing Session Toolbar -->
+<div id="editingSessionToolbar" class="fixed-bottom bg-dark text-white py-3 px-4 shadow-lg d-none" style="z-index: 1050; border-top: 3px solid #0984E3;">
+  <div class="container-fluid d-flex flex-wrap justify-content-between align-items-center gap-3">
+    <div class="d-flex align-items-center gap-3">
+      <span class="badge bg-warning text-dark px-3 py-2 rounded-pill fw-bold" id="unsavedChangesBadge">
+        <i class="fa-solid fa-pen-ruler me-1"></i> مسودة قيد التحرير
+      </span>
+      <span class="text-white small">
+        يوجد لديك <strong id="unsavedCount" class="text-warning fs-6">0</strong> تعديل غير محفوظ في مساحة العمل
+      </span>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <button type="button" class="btn btn-outline-light btn-sm px-3" id="btnCancelEditingSession">
+        <i class="fa-solid fa-rotate-left me-1"></i> إلغاء التعديلات
+      </button>
+      <button type="button" class="btn btn-primary btn-sm px-4 fw-bold d-inline-flex align-items-center gap-2 shadow" id="btnReviewAndSaveSession" style="background-color: #0984E3; border-color: #0984E3;">
+        <i class="fa-solid fa-cloud-arrow-up"></i>
+        <span>حفظ التعديلات نهائياً</span>
+      </button>
     </div>
   </div>
 </div>

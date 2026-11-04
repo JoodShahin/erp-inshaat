@@ -85,6 +85,160 @@ document.addEventListener('DOMContentLoaded', () => {
   const departmentsMap = new Map();
   (config.departments || []).forEach((d) => departmentsMap.set(d.id, d));
 
+  const currentVersion = config.currentVersion;
+  const isLatestVersion = !currentVersion || Boolean(currentVersion.isLatest);
+
+  // Editing Session Manager for atomic draft workspace
+  const editingSession = {
+    isActive: false,
+    operations: [],
+    tempCounter: 0,
+    sessionId: null,
+
+    getPendingCount() {
+      return this.operations.length;
+    },
+
+    updateCounterUI() {
+      const cnt = this.getPendingCount();
+      const countEl = document.getElementById('unsavedCount');
+      if (countEl) countEl.textContent = cnt;
+      const toolbar = document.getElementById('editingSessionToolbar');
+      if (toolbar) {
+        if (cnt > 0) {
+          toolbar.classList.remove('d-none');
+        } else {
+          toolbar.classList.add('d-none');
+        }
+      }
+      const badge = document.getElementById('unsavedChangesBadge');
+      if (badge) {
+        if (cnt > 0) {
+          badge.classList.remove('bg-secondary');
+          badge.classList.add('bg-warning', 'text-dark');
+        } else {
+          badge.classList.remove('bg-warning', 'text-dark');
+          badge.classList.add('bg-secondary');
+        }
+      }
+    },
+
+    addOperation(op) {
+      this.operations.push(op);
+      this.updateCounterUI();
+    },
+
+    start() {
+      if (!isLatestVersion) return;
+      this.isActive = true;
+      const toolbar = document.getElementById('editingSessionToolbar');
+      if (toolbar) toolbar.classList.remove('d-none');
+      this.updateCounterUI();
+    },
+
+    cancel() {
+      if (this.operations.length > 0) {
+        Swal.fire({
+          title: 'إلغاء التعديلات',
+          text: 'هل أنت متأكد من رغبتك في إلغاء كافة التعديلات غير المحفوظة؟ سيتم استعادة بيانات القالب الأصلية.',
+          icon: 'warning',
+          showCancelButton: true,
+          confirmButtonColor: '#EE5253',
+          cancelButtonColor: '#6B7280',
+          confirmButtonText: 'نعم، إلغاء التعديلات',
+          cancelButtonText: 'متابعة التحرير',
+        }).then((res) => {
+          if (res.isConfirmed) {
+            this.operations = [];
+            window.location.reload();
+          }
+        });
+      } else {
+        this.isActive = false;
+        const toolbar = document.getElementById('editingSessionToolbar');
+        if (toolbar) toolbar.classList.add('d-none');
+      }
+    },
+
+    async commit(decision) {
+      if (!currentVersion) return;
+      const spinner = document.getElementById('commitSessionSpinner');
+      const confirmBtn = document.getElementById('btnConfirmCommitSession');
+      if (spinner) spinner.classList.remove('d-none');
+      if (confirmBtn) confirmBtn.disabled = true;
+
+      try {
+        if (!this.sessionId) {
+          this.sessionId = 'idem-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+        }
+
+        const payload = {
+          baseVersionId: currentVersion.id,
+          baseRevision: currentVersion.revision || undefined,
+          idempotencyKey: this.sessionId,
+          commitDecision: decision || 'AUTO',
+          operations: this.operations,
+        };
+
+        const res = await window.erpFetch('/api/production/templates/' + templateId + '/editing/commit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const json = await res.json();
+        if (res.ok && json.success) {
+          this.operations = [];
+          const modalEl = document.getElementById('saveSessionModal');
+          if (modalEl) {
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+          }
+          const toastMsg = json.data?.createdNewVersion
+            ? 'تم حفظ التعديلات بنجاح في إصدار جديد (' + json.data.targetVersionNumber + ')'
+            : 'تم حفظ كافة تعديلات القالب بنجاح';
+          sessionStorage.setItem('pendingToast', toastMsg);
+          window.location.href = '/production/templates/' + templateId + '?versionId=' + json.data.targetVersionId;
+        } else {
+          if (json.code === 'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT') {
+            Swal.fire({
+              icon: 'warning',
+              title: 'تعارض في التزامن',
+              text: 'تم تعديل هذا القالب بواسطة مستخدم آخر أو جلسة أخرى. يرجى تحديث الصفحة للحصول على أحدث إصدار قبل الحفظ.',
+              confirmButtonText: 'تحديث الصفحة',
+            }).then(() => window.location.reload());
+            return;
+          }
+          const errMsg = extractApiErrorMessage(json, 'فشل في حفظ التعديلات');
+          Swal.fire({
+            icon: 'error',
+            title: 'تعذر حفظ جلسة التحرير',
+            text: errMsg,
+            confirmButtonText: 'حسناً',
+          });
+        }
+      } catch (err) {
+        Swal.fire({
+          icon: 'error',
+          title: 'خطأ في الاتصال',
+          text: 'تعذر الاتصال بالخادم، يرجى التحقق من الشبكة والمحاولة لاحقاً.',
+          confirmButtonText: 'حسناً',
+        });
+      } finally {
+        if (spinner) spinner.classList.add('d-none');
+        if (confirmBtn) confirmBtn.disabled = false;
+      }
+    }
+  };
+
+  function resolveMinutes(val, unit) {
+    if (val == null || isNaN(val)) return null;
+    const num = parseInt(val, 10);
+    if (unit === 'DAYS') return num * 8 * 60;
+    if (unit === 'HOURS') return num * 60;
+    return num;
+  }
+
   let currentWorkflowItems = Array.isArray(config.initialWorkflowItems) ? [...config.initialWorkflowItems] : [];
   let currentPatterns = Array.isArray(config.initialPatterns) ? [...config.initialPatterns] : [];
   let currentStages = Array.isArray(config.initialStages) ? [...config.initialStages] : [];
@@ -698,30 +852,43 @@ document.addEventListener('DOMContentLoaded', () => {
         description,
       };
 
-      try {
-        const res = await window.erpFetch(`/api/production/templates/${templateId}/stages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const wfRes = await window.erpFetch(`/api/production/templates/${templateId}/workflow`);
-          const wfData = await wfRes.json();
-          if (wfRes.ok && wfData.success) {
-            currentWorkflowItems = wfData.data;
-            currentWorkflowItems.sort((a, b) => a.sortOrder - b.sortOrder);
-            currentStages = currentWorkflowItems.filter((w) => w.itemType === 'STAGE').map((w) => w.stage);
-            renderWorkflow();
-          }
-          if (addStageModal) addStageModal.hide();
-          showToast('تمت إضافة المرحلة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر إضافة المرحلة', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-      }
+      editingSession.start();
+      const tempId = 'tmp-stg-' + (++editingSession.tempCounter);
+      const deptObj = departmentsMap.get(departmentId);
+      const newStage = {
+        id: tempId,
+        name,
+        departmentId,
+        departmentName: deptObj ? deptObj.name : '',
+        departmentCode: deptObj ? deptObj.code : '',
+        estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
+        estimatedDurationUnit: durationVal ? durationUnit : null,
+        estimatedDurationMinutes: durationVal ? resolveMinutes(parseInt(durationVal, 10), durationUnit) : null,
+        estimatedCost: costVal ? costVal : null,
+        description: description || null,
+        plannedMaterialsCount: 0,
+        attachmentsCount: 0,
+      };
+      currentStages.push(newStage);
+      const newWfItem = {
+        id: 'tmp-wf-' + editingSession.tempCounter,
+        itemType: 'STAGE',
+        sortOrder: currentWorkflowItems.length + 1,
+        stage: newStage,
+      };
+      currentWorkflowItems.push(newWfItem);
+      currentWorkflowItems.forEach((w, idx) => {
+        w.sortOrder = idx + 1;
+        if (w.stage) w.stage.sortOrder = idx + 1;
+      });
+      editingSession.addOperation({
+        type: 'ADD_STAGE',
+        tempClientId: tempId,
+        payload,
+      });
+      renderWorkflow();
+      if (addStageModal) addStageModal.hide();
+      showToast('تمت إضافة المرحلة إلى المسودة');
     });
   }
 
@@ -745,30 +912,33 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const name = document.getElementById('newPatternName').value.trim();
-      try {
-        const res = await window.erpFetch(`/api/production/templates/${templateId}/patterns`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          currentPatterns.push({ ...data.data, options: [] });
-          const wfRes = await window.erpFetch(`/api/production/templates/${templateId}/workflow`);
-          const wfData = await wfRes.json();
-          if (wfRes.ok && wfData.success) {
-            currentWorkflowItems = wfData.data;
-            currentWorkflowItems.sort((a, b) => a.sortOrder - b.sortOrder);
-            renderWorkflow();
-          }
-          if (addPatternModal) addPatternModal.hide();
-          showToast('تمت إضافة النمط بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر إضافة النمط', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-      }
+      editingSession.start();
+      const tempId = 'tmp-pat-' + (++editingSession.tempCounter);
+      const newPattern = {
+        id: tempId,
+        name,
+        options: [],
+        optionsCount: 0,
+      };
+      currentPatterns.push(newPattern);
+      const newWfItem = {
+        id: 'tmp-wf-' + editingSession.tempCounter,
+        itemType: 'PATTERN',
+        sortOrder: currentWorkflowItems.length + 1,
+        pattern: newPattern,
+      };
+      currentWorkflowItems.push(newWfItem);
+      currentWorkflowItems.forEach((w, idx) => {
+        w.sortOrder = idx + 1;
+      });
+      editingSession.addOperation({
+        type: 'ADD_PATTERN',
+        tempClientId: tempId,
+        payload: { name },
+      });
+      renderWorkflow();
+      if (addPatternModal) addPatternModal.hide();
+      showToast('تمت إضافة النمط إلى المسودة');
     });
   }
 
@@ -784,29 +954,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const patternId = document.getElementById('editPatternId').value;
       const name = document.getElementById('editPatternName').value.trim();
 
-      try {
-        const res = await window.erpFetch(`/api/production/templates/${templateId}/patterns/${patternId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const p = currentPatterns.find((x) => x.id === patternId);
-          if (p) p.name = name;
-          const wfItem = currentWorkflowItems.find(
-            (w) => w.itemType === 'PATTERN' && (w.pattern?.id === patternId || w.patternId === patternId)
-          );
-          if (wfItem && wfItem.pattern) wfItem.pattern.name = name;
-          renderWorkflow();
-          if (editPatternModal) editPatternModal.hide();
-          showToast('تم تحديث النمط بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر تحديث النمط', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-      }
+      editingSession.start();
+      const p = currentPatterns.find((x) => x.id === patternId);
+      if (p) p.name = name;
+      const wfItem = currentWorkflowItems.find(
+        (w) => w.itemType === 'PATTERN' && (w.pattern?.id === patternId || w.patternId === patternId)
+      );
+      if (wfItem && wfItem.pattern) wfItem.pattern.name = name;
+      editingSession.addOperation({
+        type: 'UPDATE_PATTERN',
+        targetId: patternId,
+        payload: { name },
+      });
+      renderWorkflow();
+      if (editPatternModal) editPatternModal.hide();
+      showToast('تم تعديل اسم النمط في المسودة');
     });
   }
 
@@ -822,35 +984,36 @@ document.addEventListener('DOMContentLoaded', () => {
       const patternId = document.getElementById('addOptionPatternId').value;
       const name = document.getElementById('newOptionName').value.trim();
 
-      try {
-        const res = await window.erpFetch(`/api/production/templates/${templateId}/patterns/${patternId}/options`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const pattern = currentPatterns.find((p) => p.id === patternId);
-          if (pattern) {
-            if (!pattern.options) pattern.options = [];
-            pattern.options.push({ ...data.data, tasks: [] });
-            pattern.options.sort((a, b) => a.sortOrder - b.sortOrder);
-          }
-          const wfItem = currentWorkflowItems.find(
-            (w) => w.itemType === 'PATTERN' && (w.pattern?.id === patternId || w.patternId === patternId)
-          );
-          if (wfItem && wfItem.pattern) {
-            wfItem.pattern.optionsCount = (pattern?.options || []).length;
-          }
-          renderWorkflow();
-          if (addOptionModal) addOptionModal.hide();
-          showToast('تمت إضافة الخيار بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر إضافة الخيار', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+      editingSession.start();
+      const pattern = currentPatterns.find((p) => p.id === patternId);
+      const tempId = 'tmp-opt-' + (++editingSession.tempCounter);
+      const newOption = {
+        id: tempId,
+        patternId,
+        name,
+        sortOrder: (pattern?.options?.length || 0) + 1,
+        tasks: [],
+      };
+      if (pattern) {
+        if (!pattern.options) pattern.options = [];
+        pattern.options.push(newOption);
+        pattern.options.sort((a, b) => a.sortOrder - b.sortOrder);
       }
+      const wfItem = currentWorkflowItems.find(
+        (w) => w.itemType === 'PATTERN' && (w.pattern?.id === patternId || w.patternId === patternId)
+      );
+      if (wfItem && wfItem.pattern) {
+        wfItem.pattern.optionsCount = (pattern?.options || []).length;
+      }
+      editingSession.addOperation({
+        type: 'ADD_OPTION',
+        tempClientId: tempId,
+        parentId: patternId,
+        payload: { name },
+      });
+      renderWorkflow();
+      if (addOptionModal) addOptionModal.hide();
+      showToast('تمت إضافة الخيار إلى المسودة');
     });
   }
 
@@ -867,31 +1030,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const optionId = document.getElementById('editOptionId').value;
       const name = document.getElementById('editOptionName').value.trim();
 
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}`,
-          {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const pattern = currentPatterns.find((p) => p.id === patternId);
-          if (pattern && pattern.options) {
-            const opt = pattern.options.find((o) => o.id === optionId);
-            if (opt) opt.name = name;
-          }
-          renderWorkflow();
-          if (editOptionModal) editOptionModal.hide();
-          showToast('تم تحديث الخيار بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر تحديث الخيار', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+      editingSession.start();
+      const pattern = currentPatterns.find((p) => p.id === patternId);
+      if (pattern && pattern.options) {
+        const opt = pattern.options.find((o) => o.id === optionId);
+        if (opt) opt.name = name;
       }
+      editingSession.addOperation({
+        type: 'UPDATE_OPTION',
+        targetId: optionId,
+        payload: { name },
+      });
+      renderWorkflow();
+      if (editOptionModal) editOptionModal.hide();
+      showToast('تم تعديل الخيار في المسودة');
     });
   }
 
@@ -912,48 +1064,53 @@ document.addEventListener('DOMContentLoaded', () => {
       const costVal = document.getElementById('newOptionTaskCost').value.trim();
       const description = document.getElementById('newOptionTaskDescription').value.trim() || undefined;
 
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+      editingSession.start();
+      const pattern = currentPatterns.find((p) => p.id === patternId);
+      if (pattern && pattern.options) {
+        const opt = pattern.options.find((o) => o.id === optionId);
+        if (opt) {
+          if (!opt.tasks) opt.tasks = [];
+          const tempId = 'tmp-tsk-' + (++editingSession.tempCounter);
+          const dept = departmentsMap.get(departmentId);
+          const durationUnit = document.getElementById('newOptionTaskDurationUnit')?.value || 'MINUTES';
+          const newTask = {
+            id: tempId,
+            optionId,
+            departmentId,
+            name,
+            description: description || null,
+            estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
+            estimatedDurationUnit: durationVal ? durationUnit : null,
+            estimatedDurationMinutes: durationVal ? resolveMinutes(parseInt(durationVal, 10), durationUnit) : null,
+            estimatedCost: costVal || null,
+            sortOrder: opt.tasks.length + 1,
+            departmentName: dept ? dept.name : 'قسم غير محدد',
+            departmentCode: dept ? dept.code : 'N/A',
+            plannedMaterialsCount: 0,
+            attachmentsCount: 0,
+            materials: [],
+            attachments: [],
+          };
+          opt.tasks.push(newTask);
+          opt.tasks.sort((a, b) => a.sortOrder - b.sortOrder);
+          editingSession.addOperation({
+            type: 'ADD_TASK',
+            tempClientId: tempId,
+            parentId: optionId,
+            payload: {
               name,
               departmentId,
-              estimatedDurationValue: durationVal ? parseInt(durationVal, 10) : null,
-              estimatedDurationUnit: durationVal ? (document.getElementById('newOptionTaskDurationUnit')?.value || 'MINUTES') : null,
+              estimatedDurationValue: newTask.estimatedDurationValue,
+              estimatedDurationUnit: newTask.estimatedDurationUnit,
               estimatedCost: costVal ? costVal : undefined,
               description,
-            }),
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const pattern = currentPatterns.find((p) => p.id === patternId);
-          if (pattern && pattern.options) {
-            const opt = pattern.options.find((o) => o.id === optionId);
-            if (opt) {
-              if (!opt.tasks) opt.tasks = [];
-              const newTask = data.data;
-              const dept = departmentsMap.get(newTask.departmentId);
-              newTask.departmentName = dept ? dept.name : 'قسم غير محدد';
-              newTask.departmentCode = dept ? dept.code : 'N/A';
-              newTask.plannedMaterialsCount = 0;
-              newTask.attachmentsCount = 0;
-              opt.tasks.push(newTask);
-              opt.tasks.sort((a, b) => a.sortOrder - b.sortOrder);
-            }
-          }
-          renderWorkflow();
-          if (addTaskModal) addTaskModal.hide();
-          showToast('تمت إضافة المهمة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر إضافة المهمة', 'error');
+            },
+          });
         }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
       }
+      renderWorkflow();
+      if (addTaskModal) addTaskModal.hide();
+      showToast('تمت إضافة المهمة إلى المسودة');
     });
   }
 
@@ -1800,24 +1957,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     renderWorkflow();
 
-    const workflowItemIds = currentWorkflowItems.map((w) => w.id);
-    try {
-      const res = await window.erpFetch(`/api/production/templates/${templateId}/workflow/reorder`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflowItemIds }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        currentWorkflowItems = previousOrder;
-        renderWorkflow();
-        Swal.fire('خطأ', data.message || 'تعذر إعادة ترتيب سير العمل', 'error');
-      }
-    } catch {
-      currentWorkflowItems = previousOrder;
-      renderWorkflow();
-      Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-    }
+    editingSession.start();
+    editingSession.addOperation({
+      type: 'REORDER_WORKFLOW',
+      payload: { orderedItemIds: currentWorkflowItems.map((w) => w.id) },
+    });
   }
 
   // Top-Level Workflow Move Up/Down
@@ -1835,24 +1979,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     renderWorkflow();
 
-    const workflowItemIds = currentWorkflowItems.map((w) => w.id);
-    try {
-      const res = await window.erpFetch(`/api/production/templates/${templateId}/workflow/reorder`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflowItemIds }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        currentWorkflowItems = previousOrder;
-        renderWorkflow();
-        Swal.fire('خطأ', data.message || 'تعذر إعادة ترتيب سير العمل', 'error');
-      }
-    } catch {
-      currentWorkflowItems = previousOrder;
-      renderWorkflow();
-      Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-    }
+    editingSession.start();
+    editingSession.addOperation({
+      type: 'REORDER_WORKFLOW',
+      payload: { orderedItemIds: currentWorkflowItems.map((w) => w.id) },
+    });
   }
 
   // Option Move Up/Down
@@ -1868,27 +1999,12 @@ document.addEventListener('DOMContentLoaded', () => {
     pattern.options.forEach((opt, idx) => (opt.sortOrder = idx + 1));
     renderWorkflow();
 
-    const optionIds = pattern.options.map((o) => o.id);
-    try {
-      const res = await window.erpFetch(
-        `/api/production/templates/${templateId}/patterns/${patternId}/options/reorder`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ optionIds }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        pattern.options = previousOrder;
-        renderWorkflow();
-        Swal.fire('خطأ', data.message || 'تعذر إعادة ترتيب الخيارات', 'error');
-      }
-    } catch {
-      pattern.options = previousOrder;
-      renderWorkflow();
-      Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-    }
+    editingSession.start();
+    editingSession.addOperation({
+      type: 'REORDER_PATTERN_OPTIONS',
+      targetId: patternId,
+      payload: { orderedOptionIds: pattern.options.map((o) => o.id) },
+    });
   }
 
   // Option Task Move Up/Down
@@ -1906,27 +2022,12 @@ document.addEventListener('DOMContentLoaded', () => {
     option.tasks.forEach((t, idx) => (t.sortOrder = idx + 1));
     renderWorkflow();
 
-    const taskIds = option.tasks.map((t) => t.id);
-    try {
-      const res = await window.erpFetch(
-        `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/reorder`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskIds }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        option.tasks = previousOrder;
-        renderWorkflow();
-        Swal.fire('خطأ', data.message || 'تعذر إعادة ترتيب المهام', 'error');
-      }
-    } catch {
-      option.tasks = previousOrder;
-      renderWorkflow();
-      Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-    }
+    editingSession.start();
+    editingSession.addOperation({
+      type: 'REORDER_OPTION_TASKS',
+      targetId: optionId,
+      payload: { orderedTaskIds: option.tasks.map((t) => t.id) },
+    });
   }
 
   // Option Task Drop
@@ -1946,27 +2047,12 @@ document.addEventListener('DOMContentLoaded', () => {
     option.tasks.forEach((t, idx) => (t.sortOrder = idx + 1));
     renderWorkflow();
 
-    const taskIds = option.tasks.map((t) => t.id);
-    try {
-      const res = await window.erpFetch(
-        `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/reorder`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskIds }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        option.tasks = previousOrder;
-        renderWorkflow();
-        Swal.fire('خطأ', data.message || 'تعذر إعادة ترتيب المهام', 'error');
-      }
-    } catch {
-      option.tasks = previousOrder;
-      renderWorkflow();
-      Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-    }
+    editingSession.start();
+    editingSession.addOperation({
+      type: 'REORDER_OPTION_TASKS',
+      targetId: optionId,
+      payload: { orderedTaskIds: option.tasks.map((t) => t.id) },
+    });
   }
 
   // Archive Pattern
@@ -1982,35 +2068,25 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (resConfirm.isConfirmed) {
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${pattern.id}`,
-          {
-            method: 'DELETE',
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          currentPatterns = currentPatterns.filter((p) => p.id !== pattern.id);
-          currentWorkflowItems = currentWorkflowItems.filter(
-            (w) =>
-              !(
-                w.itemType === 'PATTERN' &&
-                (w.pattern?.id === pattern.id || w.patternId === pattern.id)
-              )
-          );
-          currentWorkflowItems.forEach((w, idx) => {
-            w.sortOrder = idx + 1;
-            if (w.stage) w.stage.sortOrder = idx + 1;
-          });
-          renderWorkflow();
-          showToast('تمت أرشفة النمط بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر أرشفة النمط', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-      }
+      editingSession.start();
+      currentPatterns = currentPatterns.filter((p) => p.id !== pattern.id);
+      currentWorkflowItems = currentWorkflowItems.filter(
+        (w) =>
+          !(
+            w.itemType === 'PATTERN' &&
+            (w.pattern?.id === pattern.id || w.patternId === pattern.id)
+          )
+      );
+      currentWorkflowItems.forEach((w, idx) => {
+        w.sortOrder = idx + 1;
+        if (w.stage) w.stage.sortOrder = idx + 1;
+      });
+      editingSession.addOperation({
+        type: 'DELETE_PATTERN',
+        targetId: pattern.id,
+      });
+      renderWorkflow();
+      showToast('تمت أرشفة النمط في المسودة');
     }
   }
 
@@ -2027,36 +2103,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (resConfirm.isConfirmed) {
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${option.id}`,
-          {
-            method: 'DELETE',
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const pattern = currentPatterns.find((p) => p.id === patternId);
-          if (pattern && pattern.options) {
-            pattern.options = pattern.options.filter((o) => o.id !== option.id);
-            pattern.options.forEach((o, idx) => (o.sortOrder = idx + 1));
-          }
-          const wfItem = currentWorkflowItems.find(
-            (w) =>
-              w.itemType === 'PATTERN' &&
-              (w.pattern?.id === patternId || w.patternId === patternId)
-          );
-          if (wfItem && wfItem.pattern) {
-            wfItem.pattern.optionsCount = (pattern?.options || []).length;
-          }
-          renderWorkflow();
-          showToast('تمت أرشفة الخيار بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر أرشفة الخيار', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+      editingSession.start();
+      const pattern = currentPatterns.find((p) => p.id === patternId);
+      if (pattern && pattern.options) {
+        pattern.options = pattern.options.filter((o) => o.id !== option.id);
+        pattern.options.forEach((o, idx) => (o.sortOrder = idx + 1));
       }
+      const wfItem = currentWorkflowItems.find(
+        (w) =>
+          w.itemType === 'PATTERN' &&
+          (w.pattern?.id === patternId || w.patternId === patternId)
+      );
+      if (wfItem && wfItem.pattern) {
+        wfItem.pattern.optionsCount = (pattern?.options || []).length;
+      }
+      editingSession.addOperation({
+        type: 'DELETE_OPTION',
+        targetId: option.id,
+      });
+      renderWorkflow();
+      showToast('تمت أرشفة الخيار في المسودة');
     }
   }
 
@@ -2073,34 +2139,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (resConfirm.isConfirmed) {
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/${task.id}`,
-          {
-            method: 'DELETE',
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          const pattern = currentPatterns.find((p) => p.id === patternId);
-          if (pattern && pattern.options) {
-            const opt = pattern.options.find((o) => o.id === optionId);
-            if (opt && opt.tasks) {
-              opt.tasks = opt.tasks.filter((t) => t.id !== task.id);
-              opt.tasks.forEach((t, idx) => (t.sortOrder = idx + 1));
-            }
-          }
-          renderWorkflow();
-          if (activeModalTask && activeModalTask.task.id === task.id && taskModal) {
-            taskModal.hide();
-          }
-          showToast('تمت أرشفة المهمة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر أرشفة المهمة', 'error');
+      editingSession.start();
+      const pattern = currentPatterns.find((p) => p.id === patternId);
+      if (pattern && pattern.options) {
+        const option = pattern.options.find((o) => o.id === optionId);
+        if (option && option.tasks) {
+          option.tasks = option.tasks.filter((t) => t.id !== task.id);
+          option.tasks.forEach((t, idx) => (t.sortOrder = idx + 1));
         }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
       }
+      editingSession.addOperation({
+        type: 'DELETE_TASK',
+        targetId: task.id,
+      });
+      renderWorkflow();
+      if (activeModalTask && activeModalTask.task.id === task.id && taskModal) {
+        taskModal.hide();
+      }
+      showToast('تمت أرشفة المهمة في المسودة');
     }
   }
 
@@ -2117,35 +2173,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (resConfirm.isConfirmed) {
-      try {
-        const res = await window.erpFetch(`/api/production/templates/${templateId}/stages/${stage.id}`, {
-          method: 'DELETE',
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          currentWorkflowItems = currentWorkflowItems.filter(
-            (w) =>
-              !(
-                w.itemType === 'STAGE' &&
-                (w.stage?.id === stage.id || w.stageId === stage.id)
-              )
-          );
-          currentWorkflowItems.forEach((w, idx) => {
-            w.sortOrder = idx + 1;
-            if (w.stage) w.stage.sortOrder = idx + 1;
-          });
-          currentStages = currentWorkflowItems.filter((w) => w.itemType === 'STAGE').map((w) => w.stage);
-          renderWorkflow();
-          if (activeDrawerStage && activeDrawerStage.id === stage.id && stageDrawer) {
-            stageDrawer.hide();
-          }
-          showToast('تمت أرشفة المرحلة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر أرشفة المرحلة', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+      editingSession.start();
+      currentWorkflowItems = currentWorkflowItems.filter(
+        (w) =>
+          !(
+            w.itemType === 'STAGE' &&
+            (w.stage?.id === stage.id || w.stageId === stage.id)
+          )
+      );
+      currentWorkflowItems.forEach((w, idx) => {
+        w.sortOrder = idx + 1;
+        if (w.stage) w.stage.sortOrder = idx + 1;
+      });
+      currentStages = currentWorkflowItems.filter((w) => w.itemType === 'STAGE').map((w) => w.stage);
+      editingSession.addOperation({
+        type: 'DELETE_STAGE',
+        targetId: stage.id,
+      });
+      renderWorkflow();
+      if (activeDrawerStage && activeDrawerStage.id === stage.id && stageDrawer) {
+        stageDrawer.hide();
       }
+      showToast('تمت أرشفة المرحلة في المسودة');
     }
   }
 
@@ -2235,50 +2284,44 @@ document.addEventListener('DOMContentLoaded', () => {
         description: description ? description : null,
       };
 
-      try {
-        const res = await window.erpFetch(`/api/production/templates/${templateId}/stages/${activeDrawerStage.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+      editingSession.start();
+      activeDrawerStage.name = name;
+      activeDrawerStage.departmentId = departmentId;
+      const dept = departmentsMap.get(departmentId);
+      activeDrawerStage.departmentName = dept ? dept.name : 'قسم غير محدد';
+      activeDrawerStage.departmentCode = dept ? dept.code : 'N/A';
+      activeDrawerStage.estimatedDurationValue = durationVal ? parseInt(durationVal, 10) : null;
+      activeDrawerStage.estimatedDurationUnit = durationVal ? durationUnit : null;
+      activeDrawerStage.estimatedDurationMinutes = durationVal ? resolveMinutes(parseInt(durationVal, 10), durationUnit) : null;
+      activeDrawerStage.estimatedCost = costVal ? costVal : null;
+      activeDrawerStage.description = description || null;
+
+      const wfItem = currentWorkflowItems.find((w) => w.stage && w.stage.id === activeDrawerStage.id);
+      if (wfItem && wfItem.stage) {
+        Object.assign(wfItem.stage, {
+          name,
+          departmentId,
+          departmentName: activeDrawerStage.departmentName,
+          departmentCode: activeDrawerStage.departmentCode,
+          estimatedDurationValue: activeDrawerStage.estimatedDurationValue,
+          estimatedDurationUnit: activeDrawerStage.estimatedDurationUnit,
+          estimatedDurationMinutes: activeDrawerStage.estimatedDurationMinutes,
+          estimatedCost: activeDrawerStage.estimatedCost,
+          description: activeDrawerStage.description,
         });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          activeDrawerStage.name = name;
-          activeDrawerStage.departmentId = departmentId;
-          const dept = departmentsMap.get(departmentId);
-          activeDrawerStage.departmentName = dept ? dept.name : 'قسم غير محدد';
-          activeDrawerStage.departmentCode = dept ? dept.code : 'N/A';
-          activeDrawerStage.estimatedDurationValue = durationVal ? parseInt(durationVal, 10) : null;
-          activeDrawerStage.estimatedDurationUnit = durationVal ? durationUnit : null;
-          activeDrawerStage.estimatedDurationMinutes = durationVal ? (durationUnit === 'DAYS' ? parseInt(durationVal, 10) * 1440 : durationUnit === 'HOURS' ? parseInt(durationVal, 10) * 60 : parseInt(durationVal, 10)) : null;
-          activeDrawerStage.estimatedCost = costVal ? costVal : null;
-          activeDrawerStage.description = description || null;
-
-          // Sync currentWorkflowItems so renderWorkflow() reflects updated stage data
-          const wfItem = currentWorkflowItems.find((w) => w.stage && w.stage.id === activeDrawerStage.id);
-          if (wfItem && wfItem.stage) {
-            Object.assign(wfItem.stage, data.data, {
-              departmentName: activeDrawerStage.departmentName,
-              departmentCode: activeDrawerStage.departmentCode,
-              estimatedDurationValue: activeDrawerStage.estimatedDurationValue,
-              estimatedDurationUnit: activeDrawerStage.estimatedDurationUnit,
-              estimatedDurationMinutes: activeDrawerStage.estimatedDurationMinutes,
-              estimatedCost: activeDrawerStage.estimatedCost,
-              description: activeDrawerStage.description,
-            });
-          }
-
-          if (stageDrawerTitle) stageDrawerTitle.textContent = name;
-          if (stageDrawerDeptBadge) stageDrawerDeptBadge.textContent = activeDrawerStage.departmentName;
-
-          renderWorkflow();
-          showToast('تم حفظ تعديلات المرحلة بنجاح');
-        } else {
-          Swal.fire('خطأ', extractApiErrorMessage(data, 'تعذر تعديل المرحلة'), 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
       }
+
+      if (stageDrawerTitle) stageDrawerTitle.textContent = name;
+      if (stageDrawerDeptBadge) stageDrawerDeptBadge.textContent = activeDrawerStage.departmentName;
+
+      editingSession.addOperation({
+        type: 'UPDATE_STAGE',
+        targetId: activeDrawerStage.id,
+        payload,
+      });
+
+      renderWorkflow();
+      showToast('تم تحديث بيانات المرحلة في المسودة');
     });
   }
 
@@ -2397,27 +2440,19 @@ document.addEventListener('DOMContentLoaded', () => {
             cancelButtonText: 'إلغاء',
           });
           if (resConfirm.isConfirmed) {
-            try {
-              const res = await window.erpFetch(
-                `/api/production/templates/${templateId}/stages/${activeDrawerStage.id}/materials/${mat.id}`,
-                { method: 'DELETE' }
-              );
-              const data = await res.json();
-              if (res.ok && data.success) {
-                if (activeDrawerStage && Array.isArray(activeDrawerStage.plannedMaterials)) {
-                  activeDrawerStage.plannedMaterials = activeDrawerStage.plannedMaterials.filter((m) => m.id !== mat.id);
-                  activeDrawerStage.plannedMaterialsCount = activeDrawerStage.plannedMaterials.length;
-                  if (drawerTabMaterialsBadge) drawerTabMaterialsBadge.textContent = activeDrawerStage.plannedMaterialsCount;
-                  updateStageCardCounts(activeDrawerStage.id);
-                  renderDrawerMaterialsTable(activeDrawerStage.plannedMaterials);
-                }
-                showToast('تم حذف المادة المخططة بنجاح');
-              } else {
-                Swal.fire('خطأ', data.message || 'تعذر حذف المادة', 'error');
-              }
-            } catch {
-              Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+            editingSession.start();
+            if (activeDrawerStage && Array.isArray(activeDrawerStage.plannedMaterials)) {
+              activeDrawerStage.plannedMaterials = activeDrawerStage.plannedMaterials.filter((m) => m.id !== mat.id);
+              activeDrawerStage.plannedMaterialsCount = activeDrawerStage.plannedMaterials.length;
+              if (drawerTabMaterialsBadge) drawerTabMaterialsBadge.textContent = activeDrawerStage.plannedMaterialsCount;
+              updateStageCardCounts(activeDrawerStage.id);
+              renderDrawerMaterialsTable(activeDrawerStage.plannedMaterials);
             }
+            editingSession.addOperation({
+              type: 'DELETE_STAGE_MATERIAL',
+              targetId: mat.id,
+            });
+            showToast('تم حذف المادة المخططة في المسودة');
           }
         });
         tdActions.appendChild(btnDel);
@@ -2630,29 +2665,34 @@ document.addEventListener('DOMContentLoaded', () => {
       const productUnitId = drawerMaterialUnitSelect.value;
       const plannedQuantity = drawerMaterialQuantityInput.value.trim();
 
-      try {
-        const res = await window.erpFetch(`/api/production/templates/${templateId}/stages/${activeDrawerStage.id}/materials`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ productId, productUnitId, plannedQuantity }),
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          if (!activeDrawerStage.plannedMaterials) activeDrawerStage.plannedMaterials = [];
-          activeDrawerStage.plannedMaterials.push(data.data);
-          activeDrawerStage.plannedMaterialsCount = activeDrawerStage.plannedMaterials.length;
-          if (drawerTabMaterialsBadge) drawerTabMaterialsBadge.textContent = activeDrawerStage.plannedMaterialsCount;
-          updateStageCardCounts(activeDrawerStage.id);
+      editingSession.start();
+      const tempMatId = 'tmp-mat-' + (++editingSession.tempCounter);
+      const newMat = {
+        id: tempMatId,
+        stageId: activeDrawerStage.id,
+        productId,
+        productName: selectedCatalogProduct.name,
+        productCode: selectedCatalogProduct.code,
+        productUnitId,
+        unitName: drawerMaterialUnitSelect.options[drawerMaterialUnitSelect.selectedIndex]?.text || '',
+        plannedQuantity,
+      };
+      if (!activeDrawerStage.plannedMaterials) activeDrawerStage.plannedMaterials = [];
+      activeDrawerStage.plannedMaterials.push(newMat);
+      activeDrawerStage.plannedMaterialsCount = activeDrawerStage.plannedMaterials.length;
+      if (drawerTabMaterialsBadge) drawerTabMaterialsBadge.textContent = activeDrawerStage.plannedMaterialsCount;
+      updateStageCardCounts(activeDrawerStage.id);
 
-          renderDrawerMaterialsTable(activeDrawerStage.plannedMaterials);
-          deselectCatalogProduct();
-          showToast('تمت إضافة المادة المخططة للمرحلة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر إضافة المادة', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-      }
+      editingSession.addOperation({
+        type: 'ADD_STAGE_MATERIAL',
+        tempClientId: tempMatId,
+        parentId: activeDrawerStage.id,
+        payload: { productId, productUnitId, plannedQuantity },
+      });
+
+      renderDrawerMaterialsTable(activeDrawerStage.plannedMaterials);
+      deselectCatalogProduct();
+      showToast('تمت إضافة المادة المخططة إلى المسودة');
     });
   }
 
@@ -2817,30 +2857,22 @@ document.addEventListener('DOMContentLoaded', () => {
             cancelButtonText: 'إلغاء',
           });
           if (resConfirm.isConfirmed) {
-            try {
-              const res = await window.erpFetch(
-                `/api/production/templates/${templateId}/stages/${activeDrawerStage.id}/attachments/${att.id}`,
-                { method: 'DELETE' }
-              );
-              const data = await res.json();
-              if (res.ok && data.success) {
-                if (activeDrawerStage && Array.isArray(activeDrawerStage.attachments)) {
-                  activeDrawerStage.attachments = activeDrawerStage.attachments.filter((a) => a.id !== att.id);
-                  activeDrawerStage.attachments.forEach((a, idx) => {
-                    a.sortOrder = idx + 1;
-                  });
-                  activeDrawerStage.attachmentsCount = activeDrawerStage.attachments.length;
-                  if (drawerTabAttachmentsBadge) drawerTabAttachmentsBadge.textContent = activeDrawerStage.attachmentsCount;
-                  updateStageCardCounts(activeDrawerStage.id);
-                  renderDrawerAttachmentsList(activeDrawerStage.attachments);
-                }
-                showToast('تم حذف الوثيقة بنجاح');
-              } else {
-                Swal.fire('خطأ', data.message || 'تعذر حذف الوثيقة', 'error');
-              }
-            } catch {
-              Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+            editingSession.start();
+            if (activeDrawerStage && Array.isArray(activeDrawerStage.attachments)) {
+              activeDrawerStage.attachments = activeDrawerStage.attachments.filter((a) => a.id !== att.id);
+              activeDrawerStage.attachments.forEach((a, idx) => {
+                a.sortOrder = idx + 1;
+              });
+              activeDrawerStage.attachmentsCount = activeDrawerStage.attachments.length;
+              if (drawerTabAttachmentsBadge) drawerTabAttachmentsBadge.textContent = activeDrawerStage.attachmentsCount;
+              updateStageCardCounts(activeDrawerStage.id);
+              renderDrawerAttachmentsList(activeDrawerStage.attachments);
             }
+            editingSession.addOperation({
+              type: 'DELETE_STAGE_ATTACHMENT',
+              targetId: att.id,
+            });
+            showToast('تم حذف الوثيقة في المسودة');
           }
         });
         actionsDiv.appendChild(btnDel);
@@ -2865,31 +2897,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     renderDrawerAttachmentsList(activeDrawerStage.attachments);
 
-    const attachmentIds = activeDrawerStage.attachments.map((a) => a.id);
-    try {
-      const res = await window.erpFetch(
-        `/api/production/templates/${templateId}/stages/${activeDrawerStage.id}/attachments/reorder`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ attachmentIds }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        activeDrawerStage.attachments = previousOrder;
-        renderDrawerAttachmentsList(activeDrawerStage.attachments);
-        Swal.fire('خطأ', data.message || 'تعذر إعادة ترتيب الوثائق', 'error');
-      }
-    } catch {
-      activeDrawerStage.attachments = previousOrder;
-      renderDrawerAttachmentsList(activeDrawerStage.attachments);
-      Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-    }
-  }
-
-  // Upload Reference Document
-  if (drawerUploadAttachmentForm) {
+    // Sort order updated in draft workspace
+    renderDrawerAttachmentsList(activeDrawerStage.attachments);
     drawerUploadAttachmentForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!activeDrawerStage) return;
@@ -2920,7 +2929,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       try {
         const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/stages/${activeDrawerStage.id}/attachments`,
+          `/api/production/templates/${templateId}/editing/upload`,
           {
             method: 'POST',
             body: formData,
@@ -2928,16 +2937,39 @@ document.addEventListener('DOMContentLoaded', () => {
         );
         const data = await res.json();
         if (res.ok && data.success) {
+          const uploadInfo = data.data;
+          editingSession.start();
+          const tempAttId = 'tmp-att-' + (++editingSession.tempCounter);
+          const newAtt = {
+            id: tempAttId,
+            stageId: activeDrawerStage.id,
+            originalFileName: uploadInfo.originalFileName,
+            mimeType: uploadInfo.mimeType,
+            sizeBytes: uploadInfo.sizeBytes,
+            description: desc || null,
+            sortOrder: (activeDrawerStage.attachments || []).length + 1,
+          };
           if (!activeDrawerStage.attachments) activeDrawerStage.attachments = [];
-          activeDrawerStage.attachments.push(data.data);
+          activeDrawerStage.attachments.push(newAtt);
           activeDrawerStage.attachmentsCount = activeDrawerStage.attachments.length;
           if (drawerTabAttachmentsBadge) drawerTabAttachmentsBadge.textContent = activeDrawerStage.attachmentsCount;
           updateStageCardCounts(activeDrawerStage.id);
 
+          editingSession.addOperation({
+            type: 'ADD_STAGE_ATTACHMENT',
+            tempClientId: tempAttId,
+            parentId: activeDrawerStage.id,
+            payload: {
+              uploadToken: uploadInfo.uploadToken,
+              description: desc || null,
+              sortOrder: newAtt.sortOrder,
+            },
+          });
+
           renderDrawerAttachmentsList(activeDrawerStage.attachments);
           drawerUploadAttachmentForm.reset();
           drawerUploadAttachmentForm.classList.remove('was-validated');
-          showToast('تم رفع الوثيقة المرجعية بنجاح');
+          showToast('تم رفع الملف وإضافته إلى المسودة');
         } else {
           Swal.fire('خطأ', data.message || 'تعذر رفع الوثيقة', 'error');
         }
@@ -3076,49 +3108,41 @@ document.addEventListener('DOMContentLoaded', () => {
         description: description ? description : null,
       };
 
-      try {
-        const { patternId, optionId, task } = activeModalTask;
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/${task.id}`,
-          {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+      editingSession.start();
+      const { patternId, optionId, task } = activeModalTask;
+      Object.assign(task, payload);
+      const dept = departmentsMap.get(task.departmentId);
+      task.departmentName = dept ? dept.name : 'قسم غير محدد';
+      task.departmentCode = dept ? dept.code : 'N/A';
+      task.estimatedDurationMinutes = payload.estimatedDurationValue ? resolveMinutes(payload.estimatedDurationValue, payload.estimatedDurationUnit) : null;
+
+      const targetPattern = currentPatterns.find((p) => p.id === patternId);
+      if (targetPattern && Array.isArray(targetPattern.options)) {
+        const targetOption = targetPattern.options.find((o) => o.id === optionId);
+        if (targetOption && Array.isArray(targetOption.tasks)) {
+          const targetTask = targetOption.tasks.find((t) => t.id === task.id);
+          if (targetTask) {
+            Object.assign(targetTask, {
+              ...payload,
+              departmentName: task.departmentName,
+              departmentCode: task.departmentCode,
+              estimatedDurationMinutes: task.estimatedDurationMinutes,
+            });
           }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          Object.assign(task, data.data);
-          const dept = departmentsMap.get(task.departmentId);
-          task.departmentName = dept ? dept.name : 'قسم غير محدد';
-          task.departmentCode = dept ? dept.code : 'N/A';
-
-          // Sync task in currentPatterns so renderWorkflow() reflects updated task data
-          const targetPattern = currentPatterns.find((p) => p.id === patternId);
-          if (targetPattern && Array.isArray(targetPattern.options)) {
-            const targetOption = targetPattern.options.find((o) => o.id === optionId);
-            if (targetOption && Array.isArray(targetOption.tasks)) {
-              const targetTask = targetOption.tasks.find((t) => t.id === task.id);
-              if (targetTask) {
-                Object.assign(targetTask, data.data, {
-                  departmentName: task.departmentName,
-                  departmentCode: task.departmentCode,
-                });
-              }
-            }
-          }
-
-          if (taskModalTitle) taskModalTitle.textContent = task.name;
-          if (taskModalDeptBadge) taskModalDeptBadge.textContent = task.departmentName;
-
-          renderWorkflow();
-          showToast('تم حفظ تعديلات المهمة بنجاح');
-        } else {
-          Swal.fire('خطأ', extractApiErrorMessage(data, 'تعذر تعديل المهمة'), 'error');
         }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
       }
+
+      if (taskModalTitle) taskModalTitle.textContent = task.name;
+      if (taskModalDeptBadge) taskModalDeptBadge.textContent = task.departmentName;
+
+      editingSession.addOperation({
+        type: 'UPDATE_TASK',
+        targetId: task.id,
+        payload,
+      });
+
+      renderWorkflow();
+      showToast('تم تحديث بيانات المهمة في المسودة');
     });
   }
 
@@ -3408,32 +3432,35 @@ document.addEventListener('DOMContentLoaded', () => {
       const plannedQuantity = taskMaterialQuantityInput.value.trim();
 
       const { patternId, optionId, task } = activeModalTask;
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/${task.id}/materials`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ productId, productUnitId, plannedQuantity }),
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          if (!task.materials) task.materials = [];
-          task.materials.push(data.data);
-          task.plannedMaterialsCount = task.materials.length;
-          if (taskTabMaterialsBadge) taskTabMaterialsBadge.textContent = task.plannedMaterialsCount;
-          renderTaskMaterialsTable(task.materials);
-          renderWorkflow();
-          deselectTaskCatalogProduct();
-          taskAddMaterialForm.classList.remove('was-validated');
-          showToast('تمت إضافة المادة للمهمة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر إضافة المادة', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-      }
+      editingSession.start();
+      const tempMatId = 'tmp-mat-' + (++editingSession.tempCounter);
+      const newMat = {
+        id: tempMatId,
+        taskId: task.id,
+        productId,
+        productName: selectedTaskCatalogProduct.name,
+        productCode: selectedTaskCatalogProduct.code,
+        productUnitId,
+        unitName: taskMaterialUnitSelect.options[taskMaterialUnitSelect.selectedIndex]?.text || '',
+        plannedQuantity,
+      };
+      if (!task.materials) task.materials = [];
+      task.materials.push(newMat);
+      task.plannedMaterialsCount = task.materials.length;
+      if (taskTabMaterialsBadge) taskTabMaterialsBadge.textContent = task.plannedMaterialsCount;
+
+      editingSession.addOperation({
+        type: 'ADD_TASK_MATERIAL',
+        tempClientId: tempMatId,
+        parentId: task.id,
+        payload: { productId, productUnitId, plannedQuantity },
+      });
+
+      renderTaskMaterialsTable(task.materials);
+      renderWorkflow();
+      deselectTaskCatalogProduct();
+      taskAddMaterialForm.classList.remove('was-validated');
+      showToast('تمت إضافة المادة للمهمة في المسودة');
     });
   }
 
@@ -3452,29 +3479,19 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (resConfirm.isConfirmed) {
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/${task.id}/materials/${materialId}`,
-          {
-            method: 'DELETE',
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          if (task.materials) {
-            task.materials = task.materials.filter((m) => m.id !== materialId);
-            task.plannedMaterialsCount = task.materials.length;
-          }
-          if (taskTabMaterialsBadge) taskTabMaterialsBadge.textContent = task.plannedMaterialsCount || 0;
-          renderTaskMaterialsTable(task.materials);
-          renderWorkflow();
-          showToast('تمت إزالة المادة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر إزالة المادة', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+      editingSession.start();
+      if (task.materials) {
+        task.materials = task.materials.filter((m) => m.id !== materialId);
+        task.plannedMaterialsCount = task.materials.length;
       }
+      if (taskTabMaterialsBadge) taskTabMaterialsBadge.textContent = task.plannedMaterialsCount || 0;
+      editingSession.addOperation({
+        type: 'DELETE_TASK_MATERIAL',
+        targetId: materialId,
+      });
+      renderTaskMaterialsTable(task.materials);
+      renderWorkflow();
+      showToast('تمت إزالة المادة في المسودة');
     }
   }
 
@@ -3642,26 +3659,8 @@ document.addEventListener('DOMContentLoaded', () => {
     renderTaskAttachmentsList(task.attachments);
 
     const attachmentIds = task.attachments.map((a) => a.id);
-    try {
-      const res = await window.erpFetch(
-        `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/${task.id}/attachments/reorder`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ attachmentIds }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        task.attachments = previousOrder;
-        renderTaskAttachmentsList(task.attachments);
-        Swal.fire('خطأ', data.message || 'تعذر إعادة ترتيب الوثائق', 'error');
-      }
-    } catch {
-      task.attachments = previousOrder;
-      renderTaskAttachmentsList(task.attachments);
-      Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
-    }
+    // Sort order updated in draft workspace
+    renderTaskAttachmentsList(task.attachments);
   }
 
   // Upload Task Attachment
@@ -3697,7 +3696,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       try {
         const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/${task.id}/attachments`,
+          `/api/production/templates/${templateId}/editing/upload`,
           {
             method: 'POST',
             body: formData,
@@ -3705,16 +3704,39 @@ document.addEventListener('DOMContentLoaded', () => {
         );
         const data = await res.json();
         if (res.ok && data.success) {
+          const uploadInfo = data.data;
+          editingSession.start();
+          const tempAttId = 'tmp-att-' + (++editingSession.tempCounter);
+          const newAtt = {
+            id: tempAttId,
+            taskId: task.id,
+            originalFileName: uploadInfo.originalFileName,
+            mimeType: uploadInfo.mimeType,
+            sizeBytes: uploadInfo.sizeBytes,
+            description: desc || null,
+            sortOrder: (task.attachments || []).length + 1,
+          };
           if (!task.attachments) task.attachments = [];
-          task.attachments.push(data.data);
+          task.attachments.push(newAtt);
           task.attachmentsCount = task.attachments.length;
           if (taskTabAttachmentsBadge) taskTabAttachmentsBadge.textContent = task.attachmentsCount;
+
+          editingSession.addOperation({
+            type: 'ADD_TASK_ATTACHMENT',
+            tempClientId: tempAttId,
+            parentId: task.id,
+            payload: {
+              uploadToken: uploadInfo.uploadToken,
+              description: desc || null,
+              sortOrder: newAtt.sortOrder,
+            },
+          });
+
           renderTaskAttachmentsList(task.attachments);
           renderWorkflow();
-
           taskUploadAttachmentForm.reset();
           taskUploadAttachmentForm.classList.remove('was-validated');
-          showToast('تم رفع الوثيقة المرجعية بنجاح');
+          showToast('تم رفع الملف وإضافته إلى المسودة');
         } else {
           Swal.fire('خطأ', data.message || 'تعذر رفع الوثيقة', 'error');
         }
@@ -3742,32 +3764,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (resConfirm.isConfirmed) {
-      try {
-        const res = await window.erpFetch(
-          `/api/production/templates/${templateId}/patterns/${patternId}/options/${optionId}/tasks/${task.id}/attachments/${attachmentId}`,
-          {
-            method: 'DELETE',
-          }
-        );
-        const data = await res.json();
-        if (res.ok && data.success) {
-          if (task.attachments) {
-            task.attachments = task.attachments.filter((a) => a.id !== attachmentId);
-            task.attachments.forEach((a, idx) => {
-              a.sortOrder = idx + 1;
-            });
-            task.attachmentsCount = task.attachments.length;
-          }
-          if (taskTabAttachmentsBadge) taskTabAttachmentsBadge.textContent = task.attachmentsCount || 0;
-          renderTaskAttachmentsList(task.attachments);
-          renderWorkflow();
-          showToast('تم حذف الوثيقة بنجاح');
-        } else {
-          Swal.fire('خطأ', data.message || 'تعذر حذف الوثيقة', 'error');
-        }
-      } catch {
-        Swal.fire('خطأ', 'تعذر الاتصال بالخادم', 'error');
+      editingSession.start();
+      if (task.attachments) {
+        task.attachments = task.attachments.filter((a) => a.id !== attachmentId);
+        task.attachments.forEach((a, idx) => {
+          a.sortOrder = idx + 1;
+        });
+        task.attachmentsCount = task.attachments.length;
       }
+      if (taskTabAttachmentsBadge) taskTabAttachmentsBadge.textContent = task.attachmentsCount || 0;
+      editingSession.addOperation({
+        type: 'DELETE_TASK_ATTACHMENT',
+        targetId: attachmentId,
+      });
+      renderTaskAttachmentsList(task.attachments);
+      renderWorkflow();
+      showToast('تم حذف الوثيقة في المسودة');
     }
   }
 
@@ -3819,11 +3831,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ========================================================
-  // 8.5. VERSION SELECTOR & EDITING SESSION MANAGER
   // ========================================================
-  const currentVersion = config.currentVersion;
-  const isLatestVersion = !currentVersion || Boolean(currentVersion.isLatest);
-
+  // 8.5. VERSION SELECTOR
+  // ========================================================
   // 1. Version Switcher
   const versionSelect = document.getElementById('templateVersionSelect');
   if (versionSelect) {
@@ -3839,131 +3849,6 @@ document.addEventListener('DOMContentLoaded', () => {
       window.location.href = '/production/templates/' + templateId;
     });
   }
-
-  // 2. Editing Session Manager
-  const editingSession = {
-    isActive: false,
-    operations: [],
-    tempCounter: 1,
-
-    getPendingCount() {
-      return this.operations.length;
-    },
-
-    updateCounterUI() {
-      const cnt = this.getPendingCount();
-      const countEl = document.getElementById('unsavedCount');
-      if (countEl) countEl.textContent = cnt;
-      const badge = document.getElementById('unsavedChangesBadge');
-      if (badge) {
-        if (cnt > 0) {
-          badge.classList.remove('bg-secondary');
-          badge.classList.add('bg-warning', 'text-dark');
-        } else {
-          badge.classList.remove('bg-warning', 'text-dark');
-          badge.classList.add('bg-secondary');
-        }
-      }
-    },
-
-    addOperation(op) {
-      this.operations.push(op);
-      this.updateCounterUI();
-    },
-
-    start() {
-      if (!isLatestVersion) return;
-      this.isActive = true;
-      const toolbar = document.getElementById('editingSessionToolbar');
-      if (toolbar) toolbar.classList.remove('d-none');
-      const startBtn = document.getElementById('btnStartEditingSession');
-      if (startBtn) startBtn.classList.add('d-none');
-      document.querySelectorAll('.editing-mode-control').forEach((el) => el.classList.remove('d-none'));
-      this.updateCounterUI();
-    },
-
-    cancel() {
-      if (this.operations.length > 0) {
-        Swal.fire({
-          title: 'إلغاء التعديلات',
-          text: 'هل أنت متأكد من رغبتك في إلغاء كافة التعديلات غير المحفوظة؟ سيتم استعادة بيانات القالب الأصلية.',
-          icon: 'warning',
-          showCancelButton: true,
-          confirmButtonColor: '#EE5253',
-          cancelButtonColor: '#6B7280',
-          confirmButtonText: 'نعم، إلغاء التعديلات',
-          cancelButtonText: 'متابعة التحرير',
-        }).then((res) => {
-          if (res.isConfirmed) {
-            this.operations = [];
-            window.location.reload();
-          }
-        });
-      } else {
-        this.isActive = false;
-        const toolbar = document.getElementById('editingSessionToolbar');
-        if (toolbar) toolbar.classList.add('d-none');
-        const startBtn = document.getElementById('btnStartEditingSession');
-        if (startBtn) startBtn.classList.remove('d-none');
-        document.querySelectorAll('.editing-mode-control').forEach((el) => el.classList.add('d-none'));
-      }
-    },
-
-    async commit(decision) {
-      if (!currentVersion) return;
-      const spinner = document.getElementById('commitSessionSpinner');
-      const confirmBtn = document.getElementById('btnConfirmCommitSession');
-      if (spinner) spinner.classList.remove('d-none');
-      if (confirmBtn) confirmBtn.disabled = true;
-
-      try {
-        const payload = {
-          baseVersionId: currentVersion.id,
-          commitDecision: decision || 'AUTO',
-          operations: this.operations,
-        };
-
-        const res = await window.erpFetch('/api/production/templates/' + templateId + '/editing/commit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-
-        const json = await res.json();
-        if (res.ok && json.success) {
-          this.operations = []; // Clear unsaved
-          const modalEl = document.getElementById('saveSessionModal');
-          if (modalEl) {
-            const modal = bootstrap.Modal.getInstance(modalEl);
-            if (modal) modal.hide();
-          }
-          const toastMsg = json.data?.createdNewVersion
-            ? 'تم حفظ التعديلات بنجاح في إصدار جديد (' + json.data.targetVersionNumber + ')'
-            : 'تم حفظ كافة تعديلات القالب بنجاح';
-          sessionStorage.setItem('pendingToast', toastMsg);
-          window.location.href = '/production/templates/' + templateId + '?versionId=' + json.data.targetVersionId;
-        } else {
-          const errMsg = extractApiErrorMessage(json, 'فشل في حفظ التعديلات');
-          Swal.fire({
-            icon: 'error',
-            title: 'تعذر حفظ جلسة التحرير',
-            text: errMsg,
-            confirmButtonText: 'حسناً',
-          });
-        }
-      } catch (err) {
-        Swal.fire({
-          icon: 'error',
-          title: 'خطأ في الاتصال',
-          text: 'تعذر الاتصال بالخادم، يرجى التحقق من الشبكة والمحاولة لاحقاً.',
-          confirmButtonText: 'حسناً',
-        });
-      } finally {
-        if (spinner) spinner.classList.add('d-none');
-        if (confirmBtn) confirmBtn.disabled = false;
-      }
-    }
-  };
 
   // Bind Toolbar Buttons
   const btnStartSession = document.getElementById('btnStartEditingSession');
@@ -3982,28 +3867,65 @@ document.addEventListener('DOMContentLoaded', () => {
       const modalEl = document.getElementById('saveSessionModal');
       if (!modalEl) return;
       const count = editingSession.getPendingCount();
+      if (count === 0) {
+        Swal.fire('تنبيه', 'لا توجد أي تعديلات معلقة لحفظها.', 'info');
+        return;
+      }
       const countEl = document.getElementById('modalChangeCountText');
       if (countEl) countEl.textContent = 'عدد التعديلات المعلقة: ' + count;
+
+      const isStructural = editingSession.operations.some((op) =>
+        [
+          'ADD_STAGE',
+          'DELETE_STAGE',
+          'ADD_PATTERN',
+          'DELETE_PATTERN',
+          'ADD_OPTION',
+          'DELETE_OPTION',
+          'ADD_TASK',
+          'DELETE_TASK',
+          'REORDER_WORKFLOW',
+          'REORDER_PATTERN_OPTIONS',
+          'REORDER_OPTION_TASKS',
+        ].includes(op.type)
+      );
+
+      const typeBadge = document.getElementById('modalChangeTypeBadge');
+      const radioOverwrite = document.getElementById('radioDecisionOverwrite');
+      const radioAuto = document.getElementById('radioDecisionAuto');
+
+      if (isStructural) {
+        if (typeBadge) {
+          typeBadge.textContent = 'تعديلات هيكلية (تتطلب إصداراً جديداً)';
+          typeBadge.className = 'badge bg-danger';
+        }
+        if (radioOverwrite) {
+          radioOverwrite.disabled = true;
+          if (radioOverwrite.checked && radioAuto) radioAuto.checked = true;
+        }
+      } else {
+        if (typeBadge) {
+          typeBadge.textContent = 'تعديلات طفيفة (بيانات وصفية)';
+          typeBadge.className = 'badge bg-info text-dark';
+        }
+        if (radioOverwrite) {
+          radioOverwrite.disabled = false;
+        }
+      }
 
       // Populate reasons list
       const reasonsList = document.getElementById('modalChangeReasonsList');
       if (reasonsList) {
         reasonsList.innerHTML = '';
-        if (count === 0) {
+        editingSession.operations.slice(0, 7).forEach((op) => {
           const li = document.createElement('li');
-          li.textContent = 'لا توجد أي تعديلات معلقة حالياً.';
+          li.textContent = op.type + (op.payload?.name ? ': ' + op.payload.name : '');
           reasonsList.appendChild(li);
-        } else {
-          editingSession.operations.slice(0, 5).forEach((op) => {
-            const li = document.createElement('li');
-            li.textContent = op.type + (op.payload?.name ? ': ' + op.payload.name : '');
-            reasonsList.appendChild(li);
-          });
-          if (editingSession.operations.length > 5) {
-            const li = document.createElement('li');
-            li.textContent = '... بالإضافة إلى ' + (editingSession.operations.length - 5) + ' تعديلات أخرى';
-            reasonsList.appendChild(li);
-          }
+        });
+        if (editingSession.operations.length > 7) {
+          const li = document.createElement('li');
+          li.textContent = '... بالإضافة إلى ' + (editingSession.operations.length - 7) + ' تعديلات أخرى';
+          reasonsList.appendChild(li);
         }
       }
 
