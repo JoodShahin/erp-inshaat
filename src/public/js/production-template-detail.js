@@ -3944,6 +3944,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const confirmBtn = document.getElementById('btnConfirmCommitSession');
         const radioOverwrite = document.getElementById('radioDecisionOverwrite');
         const radioAuto = document.getElementById('radioDecisionAuto');
+        const radioNewVersion = document.getElementById('radioDecisionNewVersion');
+        const templateHasRoom = Boolean(previewData.isTemplateUsedByRoom);
+        // A template cannot generate a new version before its first room exists,
+        // even if the user manually selects the NEW_VERSION decision.
+        if (radioNewVersion) radioNewVersion.disabled = !templateHasRoom;
+        if (!templateHasRoom && radioAuto) radioAuto.checked = true;
 
         if (countEl) {
           countEl.textContent = 'عدد التغييرات الصافية الفعالة: ' + previewData.effectiveChangesCount;
@@ -3983,6 +3989,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Render server reasons
         if (reasonsList) {
           reasonsList.innerHTML = '';
+          if (!templateHasRoom) {
+            const note = document.createElement('li');
+            note.textContent = 'لم يرتبط القالب بغرفة إنتاج؛ كل التعديلات ستُحفظ في الإصدار الحالي.';
+            reasonsList.appendChild(note);
+          }
           (previewData.reasons || []).forEach((reason) => {
             const li = document.createElement('li');
             li.textContent = reason;
