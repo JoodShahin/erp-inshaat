@@ -24,6 +24,7 @@ import { QueryFailedError, In } from 'typeorm';
 describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurrency & Security', () => {
   let testUser1Id: string;
   let testUser2Id: string;
+  let createdSecondTestUserId: string | null = null;
   let testDeptAId: string;
   let testDeptBId: string;
   let testYardAId: string;
@@ -55,7 +56,22 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
       throw new Error('No system users found in database for integration test foreign keys');
     }
     testUser1Id = existingUsers[0].id;
-    testUser2Id = existingUsers.length > 1 ? existingUsers[1].id : existingUsers[0].id;
+    // A scoped engineer must be different from the creator of the foreign-department event.
+    // The clean test database's initial seed may contain only one user.
+    if (existingUsers.length > 1) {
+      testUser2Id = existingUsers[1].id;
+    } else {
+      const secondUser = await userRepo.save(userRepo.create({
+        fullName: 'مستخدم اختبار الأحداث المعزولة',
+        phone: '9665' + Math.floor(10000000 + Math.random() * 90000000),
+        passwordHash: 'integration-test-only',
+        roleId: existingUsers[0].roleId,
+        isActive: true,
+      }));
+      testUser2Id = secondUser.id;
+      createdSecondTestUserId = secondUser.id;
+    }
+    assert.notEqual(testUser1Id, testUser2Id, 'Security event actors must be distinct');
 
     // 1. Create Test Departments
     testDeptAId = randomUUID();
@@ -206,6 +222,9 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
       await yardRepo.delete({ departmentId: In([testDeptAId, testDeptBId]) });
       await deptRepo.delete({ id: testDeptAId });
       await deptRepo.delete({ id: testDeptBId });
+      if (createdSecondTestUserId) {
+        await AppDataSource.getRepository(UserEntity).delete({ id: createdSecondTestUserId });
+      }
     } catch (e: any) {
       console.warn('Cleanup error in integration tests:', e.message);
     } finally {
