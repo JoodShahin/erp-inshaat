@@ -53,7 +53,6 @@ import { ProductionTemplatePatternOptionTaskMaterialEntity } from '../template-p
 import { ProductionTemplatePatternOptionTaskAttachmentEntity } from '../template-pattern-option-task-attachment/production-template-pattern-option-task-attachment.entity.js';
 import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
 import { ProductionTemplateSpecificationEntity } from '../template-specification/production-template-specification.entity.js';
-import { ProductionOrderLineEntity } from '../order-line/production-order-line.entity.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { resolveTaskDuration } from '../task-duration/task-duration.helper.js';
 
@@ -351,6 +350,7 @@ export class ProductionTemplateEditingService {
     reasons: string[];
     isNewVersionMandatory: boolean;
     allowsOverwrite: boolean;
+    isTemplateUsedByRoom: boolean;
     conflicts: string[];
   }> {
     const manager = this.dataSource.manager;
@@ -402,6 +402,7 @@ export class ProductionTemplateEditingService {
       reasons: normResult.reasons,
       isNewVersionMandatory,
       allowsOverwrite,
+      isTemplateUsedByRoom: linkedToRoom,
       conflicts,
     };
   }
