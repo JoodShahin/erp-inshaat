@@ -103,9 +103,9 @@ export class ProductionTemplateEditingService {
    * Production units are tied to their source template through their
    * execution plan (production_unit.plan_id -> production_execution_plan.template_id).
    */
-  private async hasEverBeenAssignedToProductionUnit(
+  async hasEverBeenAssignedToProductionUnit(
     templateId: string,
-    manager: EntityManager
+    manager: EntityManager = this.dataSource.manager
   ): Promise<boolean> {
     const rows: Array<{ linked: number }> = await manager.query(
       `SELECT 1 AS linked
