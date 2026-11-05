@@ -25,6 +25,10 @@ import { InventoryProductUnitEntity } from '../src/modules/inventory/product/inv
 import { ProductionTemplateUploadTokenEntity } from '../src/modules/production/template-editing/production-template-upload-token.entity.js';
 import { ProductionOrderService } from '../src/modules/production/order/production-order.service.js';
 import { ProductionOrderStatus, ProductionOrderPriority } from '../src/modules/production/order/production-order.entity.js';
+import { ProductionOrderEntity } from '../src/modules/production/order/production-order.entity.js';
+import { ProductionOrderLineEntity } from '../src/modules/production/order-line/production-order-line.entity.js';
+import { ProductionExecutionPlanEntity } from '../src/modules/production/execution-plan/production-execution-plan.entity.js';
+import { ProductionUnitEntity, ProductionUnitStatus } from '../src/modules/production/unit/production-unit.entity.js';
 import { ProductionDepartmentEntity } from '../src/modules/production/department/production-department.entity.js';
 import { UserEntity } from '../src/modules/system/user/user.entity.js';
 import { BusinessRuleError } from '../src/common/errors/business-rule.error.js';
@@ -50,6 +54,50 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   let testUserId: string;
   let otherUserId: string;
   let materialTestProductId: string;
+
+  // Create genuine production references for version-boundary tests.
+  // A memorandum/order line alone must NOT freeze a template; only a room does.
+  async function linkTemplateToRoom(templateId: string, createRoom = true): Promise<string | null> {
+    const version = await versionService.getLatestVersion(templateId);
+    const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 18);
+    const order = await AppDataSource.getRepository(ProductionOrderEntity).save({
+      id: crypto.randomUUID(),
+      orderNumber: 'IT-VER-' + suffix,
+      status: ProductionOrderStatus.DRAFT,
+      createdByUserId: testUserId,
+    });
+    const line = await AppDataSource.getRepository(ProductionOrderLineEntity).save({
+      id: crypto.randomUUID(),
+      orderId: order.id,
+      templateId,
+      templateVersionId: version.id,
+      quantity: 1,
+      sortOrder: 1,
+      activeConfigurationHash: null,
+    });
+    if (!createRoom) return null;
+    const template = await AppDataSource.getRepository(ProductionTemplateEntity).findOneByOrFail({ id: templateId });
+    const plan = await AppDataSource.getRepository(ProductionExecutionPlanEntity).save({
+      id: crypto.randomUUID(),
+      orderId: order.id,
+      orderLineId: line.id,
+      templateId,
+      templateName: template.name,
+      templateCode: template.code,
+      lineQuantity: 1,
+      configurationHash: '1'.repeat(64),
+    });
+    const unit = await AppDataSource.getRepository(ProductionUnitEntity).save({
+      id: crypto.randomUUID(),
+      orderId: order.id,
+      orderLineId: line.id,
+      planId: plan.id,
+      unitSequence: 1,
+      unitNumber: 'IT-' + suffix,
+      status: ProductionUnitStatus.CREATED,
+    });
+    return unit.id;
+  }
 
   async function getRevision(templateId: string, versionId: string): Promise<string> {
     return await versionService.computeVersionRevision(templateId, versionId);
