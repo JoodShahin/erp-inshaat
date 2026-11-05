@@ -17,7 +17,7 @@ export class CreateProductionTemplateEditingIdempotencyAndTokens1710000000026 im
         KEY \`IDX_template_editing_idempotency_template\` (\`template_id\`),
         CONSTRAINT \`FK_editing_idempotency_template\` FOREIGN KEY (\`template_id\`)
           REFERENCES \`production_template\` (\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
     // 2. Create production_template_upload_token
@@ -41,7 +41,7 @@ export class CreateProductionTemplateEditingIdempotencyAndTokens1710000000026 im
           REFERENCES \`production_template\` (\`id\`) ON DELETE CASCADE ON UPDATE CASCADE,
         CONSTRAINT \`FK_upload_token_user\` FOREIGN KEY (\`user_id\`)
           REFERENCES \`system_user\` (\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
   }
 
