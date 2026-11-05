@@ -27,7 +27,7 @@ describe('Template version navigation and historical mode regression', () => {
     assert.match(controller, /canDeleteTemplate: canDeleteTemplate && Boolean\(template\.currentVersion\?\.isLatest\)/);
     assert.match(script, /const canUpdate = Boolean\(config\.canUpdateTemplate\) && !isHistoricalView/);
     assert.match(script, /if \(!canUpdate\) return;/);
-    assert.match(view, /#stageModal button:not\(\[data-bs-dismiss\]\)/);
-    assert.match(view, /#taskModal button:not\(\[data-bs-dismiss\]\)/);
+    assert.match(view, /#stageModal button\[type="submit"\]/);
+    assert.match(view, /#taskModal button\[type="submit"\]/);
   });
 });
