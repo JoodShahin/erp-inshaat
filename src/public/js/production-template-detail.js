@@ -3936,14 +3936,17 @@ document.addEventListener('DOMContentLoaded', () => {
           if (radioOverwrite) radioOverwrite.disabled = true;
           if (radioAuto) radioAuto.disabled = true;
         } else if (previewData.classification === 'STRUCTURAL') {
+          const requiresVersion = Boolean(previewData.isNewVersionMandatory);
           if (typeBadge) {
-            typeBadge.textContent = 'تعديلات هيكلية (تتطلب إصداراً جديداً)';
-            typeBadge.className = 'badge bg-danger';
+            typeBadge.textContent = requiresVersion
+              ? 'تعديلات هيكلية (تتطلب إصداراً جديداً)'
+              : 'الإنشاء الأولي للقالب (سيُحفظ في 1.0)';
+            typeBadge.className = requiresVersion ? 'badge bg-danger' : 'badge bg-success';
           }
           if (confirmBtn) confirmBtn.disabled = false;
           if (radioOverwrite) {
-            radioOverwrite.disabled = true;
-            if (radioOverwrite.checked && radioAuto) radioAuto.checked = true;
+            radioOverwrite.disabled = requiresVersion;
+            if (requiresVersion && radioOverwrite.checked && radioAuto) radioAuto.checked = true;
           }
         } else {
           // MINOR
