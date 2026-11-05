@@ -208,7 +208,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? 'تم حفظ التعديلات بنجاح في إصدار جديد (' + json.data.targetVersionNumber + ')'
             : 'تم حفظ كافة تعديلات القالب بنجاح';
           sessionStorage.setItem('pendingToast', toastMsg);
-          window.location.href = '/production/templates/' + templateId + '?versionId=' + encodeURIComponent(json.data.targetVersionId) + '#workflow';
+          window.location.href = '/production/templates/' + templateId + '?versionId=' + encodeURIComponent(json.data.targetVersionId) + currentWorkspaceHash();
         } else {
           if (json.code === 'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT') {
             Swal.fire({
@@ -3844,19 +3844,41 @@ document.addEventListener('DOMContentLoaded', () => {
   // ========================================================
   // 8.5. VERSION SELECTOR
   // ========================================================
+  // Keep the currently visible workspace tab when changing template versions.
+  // URL fragments do not reach the server; each page loads the chosen version
+  // and the existing hash synchronization opens the matching tab.
+  function currentWorkspaceHash() {
+    const selected = document.querySelector('#templateWorkspaceTabs button.active[data-bs-target]');
+    const pane = selected?.getAttribute('data-bs-target');
+    if (pane === '#pane-template-workflow') return '#workflow';
+    if (pane === '#pane-template-specifications') return '#specifications';
+    return '#info';
+  }
+
+  document.querySelectorAll('a.template-version-link').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      if (editingSession.getPendingCount() > 0) {
+        event.preventDefault();
+        Swal.fire('تعديلات غير محفوظة', 'احفظ التعديلات أو ألغها قبل تغيير الإصدار.', 'warning');
+        return;
+      }
+      link.href = link.href.split('#')[0] + currentWorkspaceHash();
+    });
+  });
+
   // 1. Version Switcher
   const versionSelect = document.getElementById('templateVersionSelect');
   if (versionSelect) {
     versionSelect.addEventListener('change', (e) => {
       const selectedVerId = e.target.value;
-      window.location.href = '/production/templates/' + templateId + '?versionId=' + encodeURIComponent(selectedVerId) + '#workflow';
+      window.location.href = '/production/templates/' + templateId + '?versionId=' + encodeURIComponent(selectedVerId) + currentWorkspaceHash();
     });
   }
 
   const btnSwitchToLatest = document.getElementById('btnSwitchToLatestVersion');
   if (btnSwitchToLatest) {
     btnSwitchToLatest.addEventListener('click', () => {
-      window.location.href = '/production/templates/' + templateId + '#workflow';
+      window.location.href = '/production/templates/' + templateId + currentWorkspaceHash();
     });
   }
 
