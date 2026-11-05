@@ -43,8 +43,8 @@ describe('Template version navigation and historical mode regression', () => {
     assert.match(routes, /productionTemplateApiRouter\.use\('\/:id', async \(req, _res, next\)/);
     assert.match(routes, /hasEverBeenAssignedToProductionUnit\(templateId\)/);
     assert.match(routes, /PRODUCTION_TEMPLATE_VERSIONED_EDIT_REQUIRED/);
-    assert.ok(routes.indexOf("'/\:id/editing/commit'") < routes.indexOf("productionTemplateApiRouter.use('/:id'"));
-    assert.ok(routes.indexOf("productionTemplateApiRouter.use('/:id'") < routes.indexOf("'/\:id/stages'"));
+    assert.ok(routes.indexOf("'/:id/editing/commit'") < routes.indexOf("productionTemplateApiRouter.use('/:id'"));
+    assert.ok(routes.indexOf("productionTemplateApiRouter.use('/:id'") < routes.indexOf("'/:id/stages'"));
   });
 
   it('does not display the historical warning on the latest version', () => {
