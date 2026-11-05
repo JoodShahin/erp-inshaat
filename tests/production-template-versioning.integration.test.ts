@@ -2905,6 +2905,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       // Create physical upload tokens for attachments
       const stageToken = await createTestUploadToken(template.id, testUserId, 'stage-spec.pdf', true);
@@ -3215,6 +3217,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3288,6 +3292,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3360,6 +3366,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3414,6 +3422,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3477,6 +3487,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3540,6 +3552,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3602,6 +3616,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3656,6 +3672,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3708,6 +3726,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3760,6 +3780,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -3824,6 +3846,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       // Add stage with initial material
       const initCommit = await editingService.commitEditingSession(
@@ -3902,6 +3926,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -4075,6 +4101,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       // Add stage first
       const initCommit = await editingService.commitEditingSession(
@@ -4144,6 +4172,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const initCommit = await editingService.commitEditingSession(
         template.id,
@@ -4241,6 +4271,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
       const v1 = await versionService.getLatestVersion(template.id);
       let rev = await getRevision(template.id, v1.id);
+      // This suite exercises version cloning after a room has used the template.
+      await linkTemplateToRoom(template.id);
 
       const stage1AttToken = await createTestUploadToken(template.id, testUserId, 'spec-stage1.pdf', true);
       const task1AttToken = await createTestUploadToken(template.id, testUserId, 'spec-task1.pdf', true);
