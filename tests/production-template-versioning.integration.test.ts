@@ -352,23 +352,46 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual(detailV1.stages[0].name, 'مرحلة الصب الخرساني');
       assert.strictEqual((await versionService.listVersions(created.id)).length, 1);
 
+      // Referencing a template in a memorandum/order does not freeze it.
+      await linkTemplateToRoom(created.id, false);
       const nextRevision = await getRevision(created.id, v1.id);
       const second = await editingService.commitEditingSession(
         created.id,
         {
           baseVersionId: v1.id,
           baseRevision: nextRevision,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [{ type: 'ADD_STAGE', tempClientId: 'second-stage', payload: {
             name: 'مرحلة لاحقة', departmentId: testDepartmentId,
           } }],
         },
         testUserId
       );
-      assert.strictEqual(second.createdNewVersion, true);
-      assert.strictEqual(second.targetVersionNumber, '1.1');
-      assert.strictEqual((await templateService.getTemplateById(created.id, v1.id)).stages.length, 1);
-      assert.strictEqual((await templateService.getTemplateById(created.id, second.targetVersionId)).stages.length, 2);
+      assert.strictEqual(second.createdNewVersion, false);
+      assert.strictEqual(second.targetVersionNumber, '1.0');
+      assert.strictEqual((await versionService.listVersions(created.id)).length, 1);
+      assert.strictEqual((await templateService.getTemplateById(created.id, v1.id)).stages.length, 2);
+
+      // The first real room freezes the old state; later structural edits fork.
+      const roomId = await linkTemplateToRoom(created.id);
+      assert.ok(roomId);
+      const frozenRevision = await getRevision(created.id, v1.id);
+      const third = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: frozenRevision,
+          commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'third-stage', payload: {
+            name: 'مرحلة بعد أول غرفة', departmentId: testDepartmentId,
+          } }],
+        },
+        testUserId
+      );
+      assert.strictEqual(third.createdNewVersion, true);
+      assert.strictEqual(third.targetVersionNumber, '1.1');
+      assert.strictEqual((await templateService.getTemplateById(created.id, v1.id)).stages.length, 2);
+      assert.strictEqual((await templateService.getTemplateById(created.id, third.targetVersionId)).stages.length, 3);
     });
 
     it('MINOR operation with AUTO decision updates in-place on current version', async () => {
@@ -436,6 +459,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       );
       assert.strictEqual(initialCommit.createdNewVersion, false);
       assert.strictEqual(initialCommit.targetVersionId, v1.id);
+      await linkTemplateToRoom(created.id);
       const rev = await getRevision(created.id, v1.id);
 
       await assert.rejects(
@@ -1506,6 +1530,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         testUserId
       );
       assert.strictEqual(first.targetVersionNumber, '1.0');
+      await linkTemplateToRoom(created.id);
       const populatedRevision = await getRevision(created.id, v1.id);
       const previewAfterFirstSave = await editingService.previewEditingSession(
         created.id,
