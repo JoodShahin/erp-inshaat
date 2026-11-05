@@ -394,6 +394,69 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual((await templateService.getTemplateById(created.id, third.targetVersionId)).stages.length, 3);
     });
 
+    it('keeps OVERWRITE_CURRENT and multiple structural edits in 1.0 until an archived room has used the template', async () => {
+      const template = await templateService.createTemplate({ name: 'قالب الاختبار قبل وبعد الغرفة', isActive: true });
+      const v1 = await versionService.getLatestVersion(template.id);
+      const firstRevision = await getRevision(template.id, v1.id);
+      const initial = await editingService.commitEditingSession(
+        template.id,
+        { baseVersionId: v1.id, baseRevision: firstRevision, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'pre-room-1',
+            payload: { name: 'مرحلة أولى', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(initial.targetVersionNumber, '1.0');
+
+      const secondRevision = await getRevision(template.id, v1.id);
+      const beforeRoom = await editingService.previewEditingSession(
+        template.id,
+        { baseVersionId: v1.id, baseRevision: secondRevision, commitDecision: 'OVERWRITE_CURRENT',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'pre-room-2',
+            payload: { name: 'مرحلة ثانية', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(beforeRoom.isTemplateUsedByRoom, false);
+      assert.strictEqual(beforeRoom.isNewVersionMandatory, false);
+      assert.strictEqual(beforeRoom.allowsOverwrite, true);
+      const second = await editingService.commitEditingSession(
+        template.id,
+        { baseVersionId: v1.id, baseRevision: secondRevision, commitDecision: 'OVERWRITE_CURRENT',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'pre-room-2',
+            payload: { name: 'مرحلة ثانية', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(second.createdNewVersion, false);
+      assert.strictEqual((await versionService.listVersions(template.id)).length, 1);
+
+      // Archived rooms still count as used; deleting their active record must
+      // not permit changing a historical snapshot in place.
+      const unitId = await linkTemplateToRoom(template.id);
+      assert.ok(unitId);
+      await AppDataSource.getRepository(ProductionUnitEntity).softDelete({ id: unitId! });
+      const frozenRevision = await getRevision(template.id, v1.id);
+      const afterRoom = await editingService.previewEditingSession(
+        template.id,
+        { baseVersionId: v1.id, baseRevision: frozenRevision, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'post-room-3',
+            payload: { name: 'مرحلة ثالثة', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(afterRoom.isTemplateUsedByRoom, true);
+      assert.strictEqual(afterRoom.isNewVersionMandatory, true);
+      assert.strictEqual(afterRoom.allowsOverwrite, false);
+      const third = await editingService.commitEditingSession(
+        template.id,
+        { baseVersionId: v1.id, baseRevision: frozenRevision, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'post-room-3',
+            payload: { name: 'مرحلة ثالثة', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(third.createdNewVersion, true);
+      assert.strictEqual(third.targetVersionNumber, '1.1');
+      assert.strictEqual((await templateService.getTemplateById(template.id, v1.id)).stages.length, 2);
+      assert.strictEqual((await templateService.getTemplateById(template.id, third.targetVersionId)).stages.length, 3);
+    });
+
     it('MINOR operation with AUTO decision updates in-place on current version', async () => {
       const created = await templateService.createTemplate({
         name: 'قالب التحرير الطفيف',
