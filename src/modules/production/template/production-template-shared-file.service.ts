@@ -29,6 +29,9 @@ export class ProductionTemplateSharedFileService {
   private fileRepo: Repository<ProductionTemplateStoredFileEntity>;
   private cleanupRepo: Repository<ProductionTemplateFileCleanupQueueEntity>;
 
+  /** Optional test hook to pause execution right before pre-unlink check (e.g. Test A-T1b) */
+  public _testPreUnlinkBarrier?: () => Promise<void>;
+
   constructor(private dataSource: DataSource = AppDataSource) {
     this.fileRepo = this.dataSource.getRepository(ProductionTemplateStoredFileEntity);
     this.cleanupRepo = this.dataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
@@ -414,6 +417,11 @@ export class ProductionTemplateSharedFileService {
     }
 
     const { trustedStorageKey, claimId } = claimResult;
+
+    // Optional test hook: barrier before pre-unlink check (e.g. Test A-T1b)
+    if (this._testPreUnlinkBarrier) {
+      await this._testPreUnlinkBarrier();
+    }
 
     // Step 5.5: Pre-unlink check: verify task is still PROCESSING, claimId still matches, and file is not re-referenced
     const preCheckOk = await this.dataSource.transaction(async (manager) => {

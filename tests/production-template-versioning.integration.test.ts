@@ -32,7 +32,11 @@ import { productionTemplateApiRouter } from '../src/modules/production/template/
 import { productionTemplateReferenceFileStorageService } from '../src/modules/production/template/production-template-reference-file-storage.service.js';
 import { SystemPermission } from '../src/modules/system/permission/constants/system-permission.enum.js';
 import { canonicalizeLineConfiguration, hashLineConfiguration } from '../src/modules/production/order-line/production-order-line-configuration.helper.js';
-import { areDecimalQuantitiesEqual } from '../src/modules/production/template-editing/production-template-editing-normalizer.js';
+import {
+  normalizeDecimal,
+  areDecimalQuantitiesEqual,
+  validateAndNormalizePlannedQuantity,
+} from '../src/modules/production/template-editing/production-template-editing-normalizer.js';
 
 describe('Production Template Versioning & Atomic Editing Integration Suite', () => {
   let templateService: ProductionTemplateService;
@@ -1464,10 +1468,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'test1.pdf',
+          originalFileName: 'test1.pdf',
           storageKey,
-          sha256: 'sha256-test-1',
-          fileSize: 14,
+          sizeBytes: 14,
           mimeType: 'application/pdf',
         }));
 
@@ -1484,10 +1487,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
           async () => {
             await sharedFileService.getOrCreateStoredFile({
               templateId: created.id,
-              originalFilename: 'test1.pdf',
+              originalFileName: 'test1.pdf',
               storageKey,
-              sha256: 'sha256-test-1',
-              fileSize: 14,
+              sizeBytes: 14,
               mimeType: 'application/pdf',
             });
           },
@@ -1519,10 +1521,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'test2.pdf',
+          originalFileName: 'test2.pdf',
           storageKey,
-          sha256: 'sha256-test-2',
-          fileSize: 14,
+          sizeBytes: 14,
           mimeType: 'application/pdf',
         }));
 
@@ -1540,10 +1541,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
           async () => {
             await sharedFileService.getOrCreateStoredFile({
               templateId: created.id,
-              originalFilename: 'test2.pdf',
+              originalFileName: 'test2.pdf',
               storageKey,
-              sha256: 'sha256-test-2',
-              fileSize: 14,
+              sizeBytes: 14,
               mimeType: 'application/pdf',
             });
           },
@@ -1575,10 +1575,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'test3.pdf',
+          originalFileName: 'test3.pdf',
           storageKey,
-          sha256: 'sha256-test-3',
-          fileSize: 14,
+          sizeBytes: 14,
           mimeType: 'application/pdf',
         }));
 
@@ -1628,10 +1627,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'test4.pdf',
+          originalFileName: 'test4.pdf',
           storageKey,
-          sha256: 'sha256-test-4',
-          fileSize: 14,
+          sizeBytes: 14,
           mimeType: 'application/pdf',
         }));
 
@@ -1659,8 +1657,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
             id: crypto.randomUUID(),
             stageId: stage.id,
             fileId: resolved.fileId,
-            originalFilename: resolved.originalFileName,
-            fileSize: resolved.sizeBytes,
+            storageKey: resolved.storageKey,
+            originalFileName: resolved.originalFileName,
+            sizeBytes: resolved.sizeBytes,
             mimeType: resolved.mimeType,
           });
           return await manager.save(att);
@@ -1707,10 +1706,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'test5.pdf',
+          originalFileName: 'test5.pdf',
           storageKey,
-          sha256: 'sha256-test-5',
-          fileSize: 14,
+          sizeBytes: 14,
           mimeType: 'application/pdf',
         }));
 
@@ -1768,10 +1766,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'outside.txt',
+          originalFileName: 'outside.txt',
           storageKey: '../scratch/' + path.basename(outsideFile),
-          sha256: 'sha256-test-6',
-          fileSize: 20,
+          sizeBytes: 20,
           mimeType: 'text/plain',
         }));
 
@@ -1818,10 +1815,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'test7.pdf',
+          originalFileName: 'test7.pdf',
           storageKey,
-          sha256: 'sha256-test-7',
-          fileSize: 14,
+          sizeBytes: 14,
           mimeType: 'application/pdf',
         }));
 
@@ -1939,10 +1935,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'test9.pdf',
+          originalFileName: 'test9.pdf',
           storageKey,
-          sha256: 'sha256-test-9',
-          fileSize: 14,
+          sizeBytes: 14,
           mimeType: 'application/pdf',
         }));
 
@@ -1977,10 +1972,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const storedActive = await storedFileRepo.save(storedFileRepo.create({
           id: crypto.randomUUID(),
           templateId: created.id,
-          originalFilename: 'active.pdf',
+          originalFileName: 'active.pdf',
           storageKey: unexpiredStorageKey,
-          sha256: 'sha256-test-9-active',
-          fileSize: 18,
+          sizeBytes: 18,
           mimeType: 'application/pdf',
         }));
 
@@ -2025,11 +2019,11 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         const stored = await storedFileRepo.save(storedFileRepo.create({
           id: fileId,
           templateId: created.id,
-          originalFilename: 'at1.pdf',
+          originalFileName: 'at1.pdf',
           storageKey,
-          sha256: 'sha256-at1',
-          fileSize: 11,
+          sizeBytes: 11,
           mimeType: 'application/pdf',
+          createdByUserId: null,
           deletedAt: new Date(),
         }));
 
@@ -2109,6 +2103,97 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       }
     });
 
+    it('A-T1b — Expired claim before pre-unlink prevents stale worker deletion', async () => {
+      const created = await templateService.createTemplate({ name: 'قالب سباق انتهاء العقد قبل التحقق', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-at1b.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'content-at1b');
+
+      try {
+        const stored = await storedFileRepo.save(storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFileName: 'at1b.pdf',
+          storageKey,
+          sizeBytes: 12,
+          mimeType: 'application/pdf',
+          createdByUserId: null,
+          deletedAt: new Date(),
+        }));
+
+        const queueItem = await cleanupRepo.save(cleanupRepo.create({
+          id: crypto.randomUUID(),
+          fileId: stored.id,
+          storageKey: stored.storageKey,
+          status: FileCleanupStatus.PENDING,
+          attempts: 0,
+        }));
+
+        // Set up barrier before pre-unlink check for Worker A
+        let workerAReachedBarrier!: () => void;
+        const barrierPromise = new Promise<void>((resolve) => {
+          workerAReachedBarrier = resolve;
+        });
+        let workerACanProceed!: () => void;
+        const proceedPromise = new Promise<void>((resolve) => {
+          workerACanProceed = resolve;
+        });
+
+        sharedFileService._testPreUnlinkBarrier = async () => {
+          workerAReachedBarrier();
+          await proceedPromise;
+        };
+
+        // Launch Worker A
+        const workerAPromise = sharedFileService.executeCleanupTask(queueItem.id, false);
+
+        // Wait until Worker A has claimed the task and hit the pre-unlink barrier
+        await barrierPromise;
+
+        // Verify Worker A claimed it
+        const queueAfterA = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(queueAfterA.status, FileCleanupStatus.PROCESSING);
+        const workerAClaimId = queueAfterA.claimId;
+        assert.ok(workerAClaimId);
+
+        // Simulate lease expiration for Worker A
+        await cleanupRepo.update(queueItem.id, {
+          claimExpiresAt: new Date(Date.now() - 60 * 1000), // expired 1 min ago
+        });
+
+        // Worker B claims and processes the task to completion
+        // Remove test barrier for Worker B
+        sharedFileService._testPreUnlinkBarrier = undefined;
+        const workerBResult = await sharedFileService.executeCleanupTask(queueItem.id, false);
+        assert.strictEqual(workerBResult, true, 'Worker B must successfully claim and execute the expired task');
+
+        const queueAfterB = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(queueAfterB.status, FileCleanupStatus.COMPLETED);
+        const workerBClaimId = queueAfterB.claimId;
+        assert.notStrictEqual(workerBClaimId, workerAClaimId, 'Worker B must have a distinct claimId');
+
+        // Unblock Worker A to proceed into Step 5.5 pre-unlink check
+        workerACanProceed();
+        const workerAResult = await workerAPromise;
+
+        // Worker A must fail pre-unlink check and return false
+        assert.strictEqual(workerAResult, false, 'Worker A must fail pre-unlink check because claim was lost');
+
+        const finalQueue = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(finalQueue.status, FileCleanupStatus.COMPLETED);
+        assert.strictEqual(finalQueue.claimId, workerBClaimId, 'Worker A must not overwrite Worker B claimId');
+        assert.strictEqual(fs.existsSync(fullPath), false, 'Physical file must be unlinked');
+      } finally {
+        sharedFileService._testPreUnlinkBarrier = undefined;
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
     it('A-T2 — Immutable storage identity: cannot reuse storageKey of deleted file', async () => {
       const created = await templateService.createTemplate({ name: 'قالب ثبات مفتاح التخزين', isActive: true });
       const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
@@ -2122,7 +2207,6 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         templateId: created.id,
         originalFileName: 'at2.pdf',
         storageKey,
-        sha256: 'sha256-at2',
         sizeBytes: 100,
         mimeType: 'application/pdf',
         deletedAt: new Date(),
@@ -2133,10 +2217,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         async () => {
           await sharedFileService.getOrCreateStoredFile({
             templateId: created.id,
-            originalFilename: 'at2-alternate.pdf',
+            originalFileName: 'at2-alternate.pdf',
             storageKey,
-            sha256: 'sha256-at2-new',
-            fileSize: 200,
+            sizeBytes: 200,
             mimeType: 'application/pdf',
           });
         },
@@ -2164,10 +2247,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const stored = await storedFileRepo.save(storedFileRepo.create({
         id: fileId,
         templateId: created.id,
-        originalFilename: 'at3.pdf',
+        originalFileName: 'at3.pdf',
         storageKey,
-        sha256: 'sha256-at3',
-        fileSize: 50,
+        sizeBytes: 50,
         mimeType: 'application/pdf',
         deletedAt: new Date(),
       }));
@@ -2203,10 +2285,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const file1 = await storedFileRepo.save(storedFileRepo.create({
         id: crypto.randomUUID(),
         templateId: created.id,
-        originalFilename: 'due1.pdf',
+        originalFileName: 'due1.pdf',
         storageKey: `storage/template-stage-attachments/${Date.now()}-due1.pdf`,
-        sha256: 'hash-due1',
-        fileSize: 10,
+        sizeBytes: 10,
         mimeType: 'application/pdf',
         deletedAt: new Date(),
       }));
@@ -2222,10 +2303,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const file2 = await storedFileRepo.save(storedFileRepo.create({
         id: crypto.randomUUID(),
         templateId: created.id,
-        originalFilename: 'active2.pdf',
+        originalFileName: 'active2.pdf',
         storageKey: `storage/template-stage-attachments/${Date.now()}-active2.pdf`,
-        sha256: 'hash-active2',
-        fileSize: 10,
+        sizeBytes: 10,
         mimeType: 'application/pdf',
         deletedAt: new Date(),
       }));
@@ -2244,10 +2324,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const file3 = await storedFileRepo.save(storedFileRepo.create({
         id: crypto.randomUUID(),
         templateId: created.id,
-        originalFilename: 'due3.pdf',
+        originalFileName: 'due3.pdf',
         storageKey: `storage/template-stage-attachments/${Date.now()}-due3.pdf`,
-        sha256: 'hash-due3',
-        fileSize: 10,
+        sizeBytes: 10,
         mimeType: 'application/pdf',
         deletedAt: new Date(),
       }));
@@ -2264,10 +2343,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const file4 = await storedFileRepo.save(storedFileRepo.create({
         id: crypto.randomUUID(),
         templateId: created.id,
-        originalFilename: 'future4.pdf',
+        originalFileName: 'future4.pdf',
         storageKey: `storage/template-stage-attachments/${Date.now()}-future4.pdf`,
-        sha256: 'hash-future4',
-        fileSize: 10,
+        sizeBytes: 10,
         mimeType: 'application/pdf',
         deletedAt: new Date(),
       }));
@@ -2374,10 +2452,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const orphanFile = await storedFileRepo.save(storedFileRepo.create({
         id: crypto.randomUUID(),
         templateId: created.id,
-        originalFilename: 'orphan.pdf',
+        originalFileName: 'orphan.pdf',
         storageKey: `storage/template-stage-attachments/${Date.now()}-orphan.pdf`,
-        sha256: 'hash-orphan',
-        fileSize: 15,
+        sizeBytes: 15,
         mimeType: 'application/pdf',
       }));
       const orphanPath = path.resolve(process.cwd(), orphanFile.storageKey);
@@ -2404,10 +2481,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const stored = await storedFileRepo.save(storedFileRepo.create({
         id: fileId,
         templateId: created.id,
-        originalFilename: 'at6.pdf',
+        originalFileName: 'at6.pdf',
         storageKey,
-        sha256: 'sha256-at6',
-        fileSize: 12,
+        sizeBytes: 12,
         mimeType: 'application/pdf',
         deletedAt: new Date(),
       }));
@@ -4109,6 +4185,568 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual(finalWf[2].sortOrder, 3);
       assert.strictEqual(finalWf[3].stage?.name, 'المرحلة 1: التجهيز');
       assert.strictEqual(finalWf[3].sortOrder, 4);
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // 15. Final Precision, Quantity Validation & Schema Verification (Tests F1 to F9)
+  // ------------------------------------------------------------------------
+  describe('15. Final Precision, Quantity Validation & Schema Verification (Tests F1 to F9)', () => {
+    it('Test F1 — A-T1 uses valid StoredFile entity properties', async () => {
+      const meta = AppDataSource.getMetadata(ProductionTemplateStoredFileEntity);
+      const colProps = meta.columns.map((c) => c.propertyName);
+      assert.ok(colProps.includes('originalFileName'), 'Entity must have originalFileName property');
+      assert.ok(colProps.includes('sizeBytes'), 'Entity must have sizeBytes property');
+      assert.ok(colProps.includes('storageKey'), 'Entity must have storageKey property');
+      assert.ok(colProps.includes('mimeType'), 'Entity must have mimeType property');
+      assert.ok(!colProps.includes('originalFilename'), 'Entity must NOT have originalFilename property');
+      assert.ok(!colProps.includes('fileSize'), 'Entity must NOT have fileSize property');
+      assert.ok(!colProps.includes('sha256'), 'Entity must NOT have sha256 property');
+
+      // Verify saving a stored file with exact properties succeeds on live DB
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const created = await templateService.createTemplate({ name: 'قالب التحقق من خصائص الملف F1', isActive: true });
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-f1.pdf`;
+
+      const saved = await storedFileRepo.save(
+        storedFileRepo.create({
+          id: fileId,
+          templateId: created.id,
+          originalFileName: 'f1.pdf',
+          storageKey,
+          sizeBytes: 1024,
+          mimeType: 'application/pdf',
+          createdByUserId: null,
+        })
+      );
+      assert.strictEqual(saved.originalFileName, 'f1.pdf');
+      assert.strictEqual(Number(saved.sizeBytes), 1024);
+      assert.strictEqual(saved.storageKey, storageKey);
+    });
+
+    it('Test F2 — Expired lease before pre-unlink check', async () => {
+      // Re-verifies A-T1b contract: a worker losing claim before pre-unlink returns false and cannot delete
+      const created = await templateService.createTemplate({ name: 'قالب التحقق F2 انتهاء العقد قبل التحقق', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-f2.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'f2-content');
+
+      try {
+        const stored = await storedFileRepo.save(
+          storedFileRepo.create({
+            id: fileId,
+            templateId: created.id,
+            originalFileName: 'f2.pdf',
+            storageKey,
+            sizeBytes: 10,
+            mimeType: 'application/pdf',
+            deletedAt: new Date(),
+          })
+        );
+
+        const queueItem = await cleanupRepo.save(
+          cleanupRepo.create({
+            id: crypto.randomUUID(),
+            fileId: stored.id,
+            storageKey: stored.storageKey,
+            status: FileCleanupStatus.PENDING,
+            attempts: 0,
+          })
+        );
+
+        let reachedBarrier!: () => void;
+        const barrierPromise = new Promise<void>((resolve) => {
+          reachedBarrier = resolve;
+        });
+        let canProceed!: () => void;
+        const proceedPromise = new Promise<void>((resolve) => {
+          canProceed = resolve;
+        });
+
+        sharedFileService._testPreUnlinkBarrier = async () => {
+          reachedBarrier();
+          await proceedPromise;
+        };
+
+        const workerAPromise = sharedFileService.executeCleanupTask(queueItem.id, false);
+        await barrierPromise;
+
+        // Expire lease
+        await cleanupRepo.update(queueItem.id, {
+          claimExpiresAt: new Date(Date.now() - 60 * 1000),
+        });
+
+        // Worker B steals and completes
+        sharedFileService._testPreUnlinkBarrier = undefined;
+        const resB = await sharedFileService.executeCleanupTask(queueItem.id, false);
+        assert.strictEqual(resB, true);
+
+        // Resume Worker A -> must fail pre-unlink
+        canProceed();
+        const resA = await workerAPromise;
+        assert.strictEqual(resA, false, 'Worker A must fail pre-unlink check due to expired claim');
+
+        const queueFinal = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(queueFinal.status, FileCleanupStatus.COMPLETED);
+      } finally {
+        sharedFileService._testPreUnlinkBarrier = undefined;
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    it('Test F3 — Expired lease after pre-unlink check', async () => {
+      // Re-verifies A-T1 contract: Worker A pauses at physical delete, Worker B completes task,
+      // Worker A physical delete executes idempotently without crashing or altering Worker B's completion state
+      const created = await templateService.createTemplate({ name: 'قالب التحقق F3 انتهاء العقد بعد التحقق', isActive: true });
+      const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
+      const cleanupRepo = AppDataSource.getRepository(ProductionTemplateFileCleanupQueueEntity);
+
+      const fileId = crypto.randomUUID();
+      const storageKey = `storage/template-stage-attachments/${Date.now()}-f3.pdf`;
+      const fullPath = path.resolve(process.cwd(), storageKey);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, 'f3-content');
+
+      const originalDelete = productionTemplateReferenceFileStorageService.deleteStoredFile;
+      try {
+        const stored = await storedFileRepo.save(
+          storedFileRepo.create({
+            id: fileId,
+            templateId: created.id,
+            originalFileName: 'f3.pdf',
+            storageKey,
+            sizeBytes: 10,
+            mimeType: 'application/pdf',
+            deletedAt: new Date(),
+          })
+        );
+
+        const queueItem = await cleanupRepo.save(
+          cleanupRepo.create({
+            id: crypto.randomUUID(),
+            fileId: stored.id,
+            storageKey: stored.storageKey,
+            status: FileCleanupStatus.PENDING,
+            attempts: 0,
+          })
+        );
+
+        let reachedDelete!: () => void;
+        const deleteBarrier = new Promise<void>((resolve) => {
+          reachedDelete = resolve;
+        });
+        let canDelete!: () => void;
+        const deleteProceed = new Promise<void>((resolve) => {
+          canDelete = resolve;
+        });
+
+        let callCount = 0;
+        productionTemplateReferenceFileStorageService.deleteStoredFile = async (key) => {
+          callCount++;
+          if (callCount === 1) {
+            reachedDelete();
+            await deleteProceed;
+          }
+          return originalDelete.call(productionTemplateReferenceFileStorageService, key);
+        };
+
+        const workerAPromise = sharedFileService.executeCleanupTask(queueItem.id, false);
+        await deleteBarrier;
+
+        // Expire lease
+        await cleanupRepo.update(queueItem.id, {
+          claimExpiresAt: new Date(Date.now() - 60 * 1000),
+        });
+
+        // Worker B executes
+        const resB = await sharedFileService.executeCleanupTask(queueItem.id, false);
+        assert.strictEqual(resB, true);
+        const queueAfterB = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(queueAfterB.status, FileCleanupStatus.COMPLETED);
+
+        // Resume Worker A
+        canDelete();
+        const resA = await workerAPromise;
+        assert.strictEqual(resA, false, 'Worker A must report false because its claim was lost in post-unlink check');
+
+        const queueFinal = await cleanupRepo.findOneOrFail({ where: { id: queueItem.id } });
+        assert.strictEqual(queueFinal.status, FileCleanupStatus.COMPLETED);
+        assert.strictEqual(queueFinal.claimId, queueAfterB.claimId);
+        assert.strictEqual(fs.existsSync(fullPath), false);
+      } finally {
+        productionTemplateReferenceFileStorageService.deleteStoredFile = originalDelete;
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+    });
+
+    it('Test F4 — DECIMAL normalization accepts equivalent precision', () => {
+      // Inputs: 12.5, 12.500000, 012.500000, 12.5000000
+      assert.strictEqual(normalizeDecimal('12.5', 6), '12.500000');
+      assert.strictEqual(normalizeDecimal('12.500000', 6), '12.500000');
+      assert.strictEqual(normalizeDecimal('012.500000', 6), '12.500000');
+      assert.strictEqual(normalizeDecimal('12.5000000', 6), '12.500000');
+
+      // Equality checks
+      assert.strictEqual(areDecimalQuantitiesEqual('12.5', '12.500000'), true);
+      assert.strictEqual(areDecimalQuantitiesEqual('012.500000', '12.5000000'), true);
+      assert.strictEqual(areDecimalQuantitiesEqual('12.500001', '12.500000'), false);
+
+      // validateAndNormalizePlannedQuantity checks
+      assert.strictEqual(validateAndNormalizePlannedQuantity('12.5'), '12.500000');
+      assert.strictEqual(validateAndNormalizePlannedQuantity('12.5000000'), '12.500000');
+      assert.strictEqual(validateAndNormalizePlannedQuantity('012.500000'), '12.500000');
+    });
+
+    it('Test F5 — DECIMAL normalization rejects nonzero extra precision', () => {
+      // Nonzero excess decimals
+      assert.throws(
+        () => normalizeDecimal('12.5000009', 6),
+        (err: any) => err.code === 'DECIMAL_PRECISION_OVERFLOW'
+      );
+      assert.throws(
+        () => normalizeDecimal('12.1234567', 6),
+        (err: any) => err.code === 'DECIMAL_PRECISION_OVERFLOW'
+      );
+
+      // Non-numeric, NaN, Infinity, scientific notation
+      assert.throws(
+        () => normalizeDecimal('abc', 6),
+        (err: any) => err.code === 'DECIMAL_FORMAT_INVALID'
+      );
+      assert.throws(
+        () => normalizeDecimal('NaN', 6),
+        (err: any) => err.code === 'DECIMAL_FORMAT_INVALID'
+      );
+      assert.throws(
+        () => normalizeDecimal('Infinity', 6),
+        (err: any) => err.code === 'DECIMAL_FORMAT_INVALID'
+      );
+      assert.throws(
+        () => normalizeDecimal('1e3', 6),
+        (err: any) => err.code === 'DECIMAL_FORMAT_INVALID'
+      );
+
+      // Integer digits overflow (>12 digits for DECIMAL(18,6))
+      assert.throws(
+        () => normalizeDecimal('1234567890123.5', 6),
+        (err: any) => err.code === 'DECIMAL_INTEGER_OVERFLOW'
+      );
+
+      // areDecimalQuantitiesEqual rejects invalid decimal
+      assert.throws(
+        () => areDecimalQuantitiesEqual('12.5000009', '12.500000'),
+        (err: any) => err.code === 'DECIMAL_PRECISION_OVERFLOW'
+      );
+
+      // validateAndNormalizePlannedQuantity rejects invalid / zero / negative
+      assert.throws(
+        () => validateAndNormalizePlannedQuantity('12.5000009'),
+        (err: any) => err.code === 'DECIMAL_PRECISION_OVERFLOW'
+      );
+      assert.throws(
+        () => validateAndNormalizePlannedQuantity('-1'),
+        (err: any) => err.code === 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID'
+      );
+      assert.throws(
+        () => validateAndNormalizePlannedQuantity('0'),
+        (err: any) => err.code === 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID'
+      );
+      assert.throws(
+        () => validateAndNormalizePlannedQuantity('0.000000'),
+        (err: any) => err.code === 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID'
+      );
+    });
+
+    it('Test F6 — Material creation rejects invalid decimal', async () => {
+      const prodRows: any[] = await AppDataSource.query(
+        `SELECT p.id as productId, u.id as unitId 
+         FROM inventory_product p 
+         JOIN inventory_product_unit u ON u.product_id = p.id 
+         WHERE p.deleted_at IS NULL AND u.deleted_at IS NULL 
+         LIMIT 1`
+      );
+      assert.ok(prodRows.length > 0, 'Must have at least 1 product and unit for material testing');
+      const { productId, unitId } = prodRows[0];
+
+      const created = await templateService.createTemplate({ name: 'قالب التحقق F6 رفض الكميات العشرية', isActive: true });
+      const v1 = await versionService.getLatestVersion(created.id);
+      let rev = await getRevision(created.id, v1.id);
+
+      const setupCommit = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [
+            { type: 'ADD_STAGE', tempClientId: 'stg-f6', payload: { name: 'مرحلة F6', departmentId: testDepartmentId } },
+            { type: 'ADD_PATTERN', tempClientId: 'pat-f6', payload: { name: 'نمط F6' } },
+            { type: 'ADD_OPTION', parentId: 'pat-f6', tempClientId: 'opt-f6', payload: { name: 'خيار F6' } },
+            { type: 'ADD_TASK', parentId: 'opt-f6', tempClientId: 'tsk-f6', payload: { name: 'مهمة F6', departmentId: testDepartmentId } },
+          ],
+        },
+        testUserId
+      );
+
+      const stgId = setupCommit.tempClientMap['stg-f6'];
+      const tskId = setupCommit.tempClientMap['tsk-f6'];
+      const vLatest = await versionService.getLatestVersion(created.id);
+      rev = await getRevision(created.id, vLatest.id);
+
+      // 1. ADD_STAGE_MATERIAL with non-zero excess decimal: 12.5000009
+      await assert.rejects(
+        async () => {
+          await editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: vLatest.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE_MATERIAL',
+                  parentId: stgId,
+                  payload: {
+                    productId,
+                    productUnitId: unitId,
+                    plannedQuantity: '12.5000009',
+                  },
+                },
+              ],
+            },
+            testUserId
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'DECIMAL_PRECISION_OVERFLOW');
+          return true;
+        }
+      );
+
+      // 2. ADD_STAGE_MATERIAL with negative quantity: -5
+      await assert.rejects(
+        async () => {
+          await editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: vLatest.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE_MATERIAL',
+                  parentId: stgId,
+                  payload: {
+                    productId,
+                    productUnitId: unitId,
+                    plannedQuantity: '-5',
+                  },
+                },
+              ],
+            },
+            testUserId
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID');
+          return true;
+        }
+      );
+
+      // 3. ADD_STAGE_MATERIAL with zero quantity: 0
+      await assert.rejects(
+        async () => {
+          await editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: vLatest.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_STAGE_MATERIAL',
+                  parentId: stgId,
+                  payload: {
+                    productId,
+                    productUnitId: unitId,
+                    plannedQuantity: '0',
+                  },
+                },
+              ],
+            },
+            testUserId
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID');
+          return true;
+        }
+      );
+
+      // 4. ADD_TASK_MATERIAL with excess decimal: 12.1234567
+      await assert.rejects(
+        async () => {
+          await editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: vLatest.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_TASK_MATERIAL',
+                  parentId: tskId,
+                  payload: {
+                    productId,
+                    productUnitId: unitId,
+                    plannedQuantity: '12.1234567',
+                  },
+                },
+              ],
+            },
+            testUserId
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'DECIMAL_PRECISION_OVERFLOW');
+          return true;
+        }
+      );
+
+      // 5. ADD_TASK_MATERIAL with negative quantity: -1
+      await assert.rejects(
+        async () => {
+          await editingService.commitEditingSession(
+            created.id,
+            {
+              baseVersionId: vLatest.id,
+              baseRevision: rev,
+              commitDecision: 'AUTO',
+              operations: [
+                {
+                  type: 'ADD_TASK_MATERIAL',
+                  parentId: tskId,
+                  payload: {
+                    productId,
+                    productUnitId: unitId,
+                    plannedQuantity: '-1',
+                  },
+                },
+              ],
+            },
+            testUserId
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID');
+          return true;
+        }
+      );
+
+      // Verify no rows saved in MySQL
+      const stageMatRepo = AppDataSource.getRepository(ProductionTemplateStageMaterialEntity);
+      const taskMatRepo = AppDataSource.getRepository(ProductionTemplatePatternOptionTaskMaterialEntity);
+      const stageCount = await stageMatRepo.count({ where: { stageId: stgId } });
+      const taskCount = await taskMatRepo.count({ where: { taskId: tskId } });
+      assert.strictEqual(stageCount, 0, 'No stage materials must be saved for rejected quantities');
+      assert.strictEqual(taskCount, 0, 'No task materials must be saved for rejected quantities');
+    });
+
+    it('Test F7 — Indexes are present without unnecessary duplicates', async () => {
+      const tables = [
+        'production_template_version',
+        'production_template_stage',
+        'production_template_pattern',
+        'production_template_workflow_item',
+        'production_template_pattern_option',
+        'production_template_pattern_option_task',
+        'production_order_line',
+      ];
+
+      for (const table of tables) {
+        const stats: any[] = await AppDataSource.query(
+          `SELECT INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX 
+           FROM information_schema.STATISTICS 
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? 
+           ORDER BY INDEX_NAME, SEQ_IN_INDEX ASC`,
+          [table]
+        );
+
+        assert.ok(stats.length > 0, `Table ${table} must have indexes`);
+        const indexMap: Record<string, string[]> = {};
+        for (const row of stats) {
+          if (!indexMap[row.INDEX_NAME]) {
+            indexMap[row.INDEX_NAME] = [];
+          }
+          indexMap[row.INDEX_NAME].push(row.COLUMN_NAME.toLowerCase());
+        }
+
+        const signatures = new Map<string, string>();
+        for (const [idxName, cols] of Object.entries(indexMap)) {
+          const sig = cols.join(',');
+          if (signatures.has(sig)) {
+            assert.fail(
+              `Redundant index detected on table ${table}: ${idxName} has identical column signature (${sig}) as ${signatures.get(sig)}`
+            );
+          }
+          signatures.set(sig, idxName);
+        }
+      }
+    });
+
+    it('Test F8 — Migration compatibility', async () => {
+      // 1. Verify Migration 27 is recorded in migrations table
+      const migrationRows: any[] = await AppDataSource.query(
+        `SELECT * FROM migrations WHERE name LIKE '%OptimizeProductionTemplateVersioningIndexes%'`
+      );
+      assert.ok(migrationRows.length > 0, 'Migration 27 must be recorded in migrations table');
+
+      // 2. Verify request_hash and user_id exist in production_template_editing_idempotency
+      const columns: any[] = await AppDataSource.query(
+        `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE 
+         FROM information_schema.COLUMNS 
+         WHERE TABLE_SCHEMA = DATABASE() 
+           AND TABLE_NAME = 'production_template_editing_idempotency' 
+           AND COLUMN_NAME IN ('request_hash', 'user_id')`
+      );
+      const colMap = new Map(columns.map((c) => [c.COLUMN_NAME, c]));
+      assert.ok(colMap.has('request_hash'), 'request_hash column must exist');
+      assert.ok(colMap.has('user_id'), 'user_id column must exist');
+
+      // 3. Verify Foreign Key constraint FK_template_editing_idempotency_user
+      const fks: any[] = await AppDataSource.query(
+        `SELECT CONSTRAINT_NAME 
+         FROM information_schema.TABLE_CONSTRAINTS 
+         WHERE TABLE_SCHEMA = DATABASE() 
+           AND TABLE_NAME = 'production_template_editing_idempotency' 
+           AND CONSTRAINT_TYPE = 'FOREIGN KEY' 
+           AND CONSTRAINT_NAME = 'FK_template_editing_idempotency_user'`
+      );
+      assert.ok(fks.length > 0, 'FK_template_editing_idempotency_user must exist');
+    });
+
+    it('Test F9 — Existing database migration compatibility', async () => {
+      // Verify all entities metadata match database columns without discrepancies
+      const idempotencyMeta = AppDataSource.getMetadata(ProductionTemplateEditingIdempotencyEntity);
+      const dbColumns: any[] = await AppDataSource.query(
+        `SELECT COLUMN_NAME 
+         FROM information_schema.COLUMNS 
+         WHERE TABLE_SCHEMA = DATABASE() 
+           AND TABLE_NAME = 'production_template_editing_idempotency'`
+      );
+      const dbColNames = new Set(dbColumns.map((c) => c.COLUMN_NAME.toLowerCase()));
+      for (const col of idempotencyMeta.columns) {
+        assert.ok(
+          dbColNames.has(col.databaseName.toLowerCase()),
+          `Database must have column ${col.databaseName} for entity property ${col.propertyName}`
+        );
+      }
     });
   });
 });

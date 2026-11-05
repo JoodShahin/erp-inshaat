@@ -12,7 +12,10 @@ import {
   productionTemplateChangeClassifier,
   TemplateChangeClassification,
 } from './production-template-change-classifier.js';
-import { ProductionTemplateEditingNormalizer } from './production-template-editing-normalizer.js';
+import {
+  ProductionTemplateEditingNormalizer,
+  validateAndNormalizePlannedQuantity,
+} from './production-template-editing-normalizer.js';
 import { ProductionTemplateEditingIdempotencyEntity } from './production-template-editing-idempotency.entity.js';
 import { ProductionTemplateUploadTokenEntity } from './production-template-upload-token.entity.js';
 import {
@@ -934,11 +937,13 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`المرحلة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${stageId}`, 'PRODUCTION_TEMPLATE_STAGE_NOT_FOUND');
         }
         const payload = op.payload || {};
-        const plannedQuantityStr = payload.plannedQuantity != null && String(payload.plannedQuantity).trim() !== ''
-          ? String(payload.plannedQuantity).trim()
-          : payload.quantity != null && String(payload.quantity).trim() !== ''
-            ? String(payload.quantity).trim()
-            : '1';
+        let rawQty: any = '1';
+        if (payload.plannedQuantity !== undefined) {
+          rawQty = payload.plannedQuantity;
+        } else if (payload.quantity !== undefined) {
+          rawQty = payload.quantity;
+        }
+        const plannedQuantityStr = validateAndNormalizePlannedQuantity(rawQty);
 
         const mat = manager.create(ProductionTemplateStageMaterialEntity, {
           id: crypto.randomUUID(),
@@ -983,11 +988,13 @@ export class ProductionTemplateEditingService {
           throw new BusinessRuleError(`المهمة الأب غير موجودة أو لا تنتمي لهذا الإصدار: ${taskId}`, 'PRODUCTION_TEMPLATE_PATTERN_OPTION_TASK_NOT_FOUND');
         }
         const payload = op.payload || {};
-        const plannedQuantityStr = payload.plannedQuantity != null && String(payload.plannedQuantity).trim() !== ''
-          ? String(payload.plannedQuantity).trim()
-          : payload.quantity != null && String(payload.quantity).trim() !== ''
-            ? String(payload.quantity).trim()
-            : '1';
+        let rawQty: any = '1';
+        if (payload.plannedQuantity !== undefined) {
+          rawQty = payload.plannedQuantity;
+        } else if (payload.quantity !== undefined) {
+          rawQty = payload.quantity;
+        }
+        const plannedQuantityStr = validateAndNormalizePlannedQuantity(rawQty);
 
         const mat = manager.create(ProductionTemplatePatternOptionTaskMaterialEntity, {
           id: crypto.randomUUID(),

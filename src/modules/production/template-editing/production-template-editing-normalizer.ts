@@ -35,21 +35,58 @@ export function areCostsEqual(a?: string | number | null, b?: string | number | 
   return Math.abs(numA - numB) < 0.000001;
 }
 
-export function normalizeDecimal(val?: string | number | null, precision = 6): string | null {
+export function normalizeDecimal(
+  val?: string | number | null,
+  precision = 6,
+  maxIntegerDigits = 12
+): string | null {
   if (val === undefined || val === null || val === '') return null;
   const str = String(val).trim();
   if (!str) return null;
+
+  // Strict regex: optional minus, digits, optional dot with digits.
+  // Prohibits signs like '+', scientific notation '1e3', letters, whitespace in middle
+  if (!/^-?\d+(\.\d+)?$/.test(str)) {
+    throw new BusinessRuleError(`صيغة الرقم العشري غير صالحة: ${str}`, 'DECIMAL_FORMAT_INVALID');
+  }
+
   const [intPartRaw, fracPartRaw = ''] = str.split('.');
   const isNegative = intPartRaw.startsWith('-');
-  const intPart = (isNegative ? intPartRaw.slice(1) : intPartRaw).replace(/^0+/, '') || '0';
-  const fracPart = fracPartRaw.padEnd(precision, '0').slice(0, precision);
+  const unsignedIntRaw = isNegative ? intPartRaw.slice(1) : intPartRaw;
+  const intPart = unsignedIntRaw.replace(/^0+/, '') || '0';
+
+  if (intPart.length > maxIntegerDigits) {
+    throw new BusinessRuleError(
+      `تجاوز الحد الأقصى للأرقام الصحيحة (${maxIntegerDigits} رقماً): ${str}`,
+      'DECIMAL_INTEGER_OVERFLOW'
+    );
+  }
+
+  // Check fractional digits beyond allowed precision
+  if (fracPartRaw.length > precision) {
+    const excess = fracPartRaw.slice(precision);
+    if (/[^0]/.test(excess)) {
+      throw new BusinessRuleError(
+        `تجاوز دقة المنازل العشرية المسموح بها (${precision} منازل): ${str}`,
+        'DECIMAL_PRECISION_OVERFLOW'
+      );
+    }
+  }
+
+  const fracPart = fracPartRaw.slice(0, precision).padEnd(precision, '0');
+
+  // Check for negative zero or exact zero
   if (intPart === '0' && /^0+$/.test(fracPart)) {
     return '0.' + ''.padEnd(precision, '0');
   }
+
   return `${isNegative ? '-' : ''}${intPart}.${fracPart}`;
 }
 
-export function areDecimalQuantitiesEqual(a?: string | number | null, b?: string | number | null): boolean {
+export function areDecimalQuantitiesEqual(
+  a?: string | number | null,
+  b?: string | number | null
+): boolean {
   if ((a === undefined || a === null || a === '') && (b === undefined || b === null || b === '')) {
     return true;
   }
@@ -59,6 +96,25 @@ export function areDecimalQuantitiesEqual(a?: string | number | null, b?: string
   const normA = normalizeDecimal(a, 6);
   const normB = normalizeDecimal(b, 6);
   return normA === normB;
+}
+
+export function validateAndNormalizePlannedQuantity(
+  val?: string | number | null
+): string {
+  if (val === undefined || val === null || String(val).trim() === '') {
+    throw new BusinessRuleError('الكمية المخططة للمادة مطلوبة', 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_REQUIRED');
+  }
+  const normalized = normalizeDecimal(val, 6, 12);
+  if (!normalized) {
+    throw new BusinessRuleError('الكمية المخططة للمادة مطلوبة', 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_REQUIRED');
+  }
+  if (normalized.startsWith('-')) {
+    throw new BusinessRuleError('الكمية المخططة للمادة يجب أن تكون موجبة', 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID');
+  }
+  if (normalized === '0.' + ''.padEnd(6, '0')) {
+    throw new BusinessRuleError('الكمية المخططة للمادة يجب أن تكون أكبر من الصفر', 'PRODUCTION_TEMPLATE_MATERIAL_QUANTITY_INVALID');
+  }
+  return normalized;
 }
 
 interface InMemStage {
@@ -895,11 +951,13 @@ export class ProductionTemplateEditingNormalizer {
             }
           }
 
-          const plannedQuantityStr = op.payload?.plannedQuantity != null && String(op.payload.plannedQuantity).trim() !== ''
-            ? String(op.payload.plannedQuantity)
-            : op.payload?.quantity != null && String(op.payload.quantity).trim() !== ''
-              ? String(op.payload.quantity)
-              : '1';
+          let rawQty: any = '1';
+          if (op.payload?.plannedQuantity !== undefined) {
+            rawQty = op.payload.plannedQuantity;
+          } else if (op.payload?.quantity !== undefined) {
+            rawQty = op.payload.quantity;
+          }
+          const plannedQuantityStr = validateAndNormalizePlannedQuantity(rawQty);
 
           const tempId = op.tempClientId || `tmp-mat-${materialsMap.size + 1}`;
           materialsMap.set(tempId, {
