@@ -32,6 +32,12 @@ describe('Template version navigation and historical mode regression', () => {
     assert.match(script, /تعديلات غير محفوظة/);
   });
 
+  it('hides manual new-version creation while no production room references the template', () => {
+    assert.match(script, /const templateHasRoom = Boolean\(previewData\.isTemplateUsedByRoom\)/);
+    assert.match(script, /if \(radioNewVersion\) radioNewVersion\.disabled = !templateHasRoom/);
+    assert.match(script, /لم يرتبط القالب بغرفة إنتاج/);
+  });
+
   it('does not display the historical warning on the latest version', () => {
     assert.match(view, /!template\.currentVersion\.isLatest\) \? 'd-flex' : 'd-none'/);
   });
