@@ -139,8 +139,9 @@ export class ProductionTemplateWebController {
         patterns: template.patterns || [],
         departments,
         initialStages,
-        canUpdateTemplate,
-        canDeleteTemplate,
+        // Historical versions never expose mutation controls, regardless of permissions.
+        canUpdateTemplate: canUpdateTemplate && Boolean(template.currentVersion?.isLatest),
+        canDeleteTemplate: canDeleteTemplate && Boolean(template.currentVersion?.isLatest),
         safeJsonStringify,
       });
     } catch (error) {
