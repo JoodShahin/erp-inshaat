@@ -3968,7 +3968,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (typeBadge) {
             typeBadge.textContent = requiresVersion
               ? 'تعديلات هيكلية (تتطلب إصداراً جديداً)'
-              : 'الإنشاء الأولي للقالب (سيُحفظ في 1.0)';
+              : 'القالب غير مرتبط بغرفة (الحفظ في الإصدار الحالي)';
             typeBadge.className = requiresVersion ? 'badge bg-danger' : 'badge bg-success';
           }
           if (confirmBtn) confirmBtn.disabled = false;
