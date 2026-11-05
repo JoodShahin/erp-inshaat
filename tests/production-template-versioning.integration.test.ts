@@ -254,6 +254,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
 
       const v1 = await versionService.getLatestVersion(created.id);
+      const rev = await getRevision(created.id, v1.id);
       const preview = await editingService.previewEditingSession(
         created.id,
         {
@@ -269,8 +270,6 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual(preview.classification, 'STRUCTURAL');
       assert.strictEqual(preview.isNewVersionMandatory, false);
       assert.strictEqual(preview.allowsOverwrite, true);
-
-      const rev = await getRevision(created.id, v1.id);
 
       const commitRes = await editingService.commitEditingSession(
         created.id,
@@ -369,6 +368,26 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
 
       const v1 = await versionService.getLatestVersion(created.id);
+      const initialRevision = await getRevision(created.id, v1.id);
+
+      // A pristine 1.0 is intentionally editable. First make it nonempty,
+      // then verify a further structural overwrite is rejected.
+      const initialCommit = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: initialRevision,
+          commitDecision: 'AUTO',
+          operations: [{
+            type: 'ADD_STAGE',
+            tempClientId: 'first-stage',
+            payload: { name: 'مرحلة أولية', departmentId: testDepartmentId },
+          }],
+        },
+        testUserId
+      );
+      assert.strictEqual(initialCommit.createdNewVersion, false);
+      assert.strictEqual(initialCommit.targetVersionId, v1.id);
       const rev = await getRevision(created.id, v1.id);
 
       await assert.rejects(
@@ -1414,13 +1433,50 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
 
       assert.strictEqual(previewRes.classification, 'STRUCTURAL');
       assert.strictEqual(previewRes.effectiveChangesCount, 1);
-      assert.strictEqual(previewRes.isNewVersionMandatory, true);
-      assert.strictEqual(previewRes.allowsOverwrite, false);
+      assert.strictEqual(previewRes.isNewVersionMandatory, false);
+      assert.strictEqual(previewRes.allowsOverwrite, true);
       assert.strictEqual(previewRes.conflicts.length, 0);
 
       // Verify no changes were committed to database
       const detail = await templateService.getTemplateById(created.id, v1.id);
       assert.strictEqual(detail.stages.length, 0);
+
+      // Once the initial 1.0 is populated, preview must require a new
+      // version for subsequent structural additions and must remain read-only.
+      const first = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [{
+            type: 'ADD_STAGE',
+            tempClientId: 'seed-preview-stage',
+            payload: { name: 'مرحلة أولية للمعاينة', departmentId: testDepartmentId },
+          }],
+        },
+        testUserId
+      );
+      assert.strictEqual(first.targetVersionNumber, '1.0');
+      const populatedRevision = await getRevision(created.id, v1.id);
+      const previewAfterFirstSave = await editingService.previewEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: populatedRevision,
+          commitDecision: 'AUTO',
+          operations: [{
+            type: 'ADD_STAGE',
+            tempClientId: 'next-preview-stage',
+            payload: { name: 'مرحلة ثانية للمعاينة', departmentId: testDepartmentId },
+          }],
+        },
+        testUserId
+      );
+      assert.strictEqual(previewAfterFirstSave.classification, 'STRUCTURAL');
+      assert.strictEqual(previewAfterFirstSave.isNewVersionMandatory, true);
+      assert.strictEqual(previewAfterFirstSave.allowsOverwrite, false);
+      assert.strictEqual((await templateService.getTemplateById(created.id, v1.id)).stages.length, 1);
     });
 
     it('requires PRODUCTION_TEMPLATE_UPDATE permission on preview route', async () => {
