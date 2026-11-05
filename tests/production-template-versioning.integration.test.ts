@@ -247,7 +247,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   // 3. Atomic Editing Sessions, Change Classification & Normalizer Cases
   // ------------------------------------------------------------------------
   describe('3. Atomic Editing Sessions & Semantic Normalizer', () => {
-    it('STRUCTURAL operation automatically forks next version (1.0 -> 1.1)', async () => {
+    it('first structural AUTO save populates 1.0 instead of creating empty 1.0 and populated 1.1', async () => {
       const created = await templateService.createTemplate({
         name: 'قالب التحرير الذري الهيكلي',
         isActive: true,
@@ -277,17 +277,35 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         testUserId
       );
 
-      assert.strictEqual(commitRes.createdNewVersion, true);
+      assert.strictEqual(commitRes.createdNewVersion, false);
       assert.strictEqual(commitRes.changeType, 'STRUCTURAL');
-      assert.strictEqual(commitRes.targetVersionNumber, '1.1');
+      assert.strictEqual(commitRes.targetVersionNumber, '1.0');
       assert.ok(commitRes.tempClientMap['temp-stage-1']);
 
       const detailV1 = await templateService.getTemplateById(created.id, v1.id);
-      assert.strictEqual(detailV1.stages.length, 0);
+      assert.strictEqual(detailV1.stages.length, 1);
 
-      const detailV11 = await templateService.getTemplateById(created.id, commitRes.targetVersionId);
-      assert.strictEqual(detailV11.stages.length, 1);
-      assert.strictEqual(detailV11.stages[0].name, 'مرحلة الصب الخرساني');
+      assert.strictEqual(commitRes.targetVersionId, v1.id);
+      assert.strictEqual(detailV1.stages[0].name, 'مرحلة الصب الخرساني');
+      assert.strictEqual((await versionService.listVersions(created.id)).length, 1);
+
+      const nextRevision = await getRevision(created.id, v1.id);
+      const second = await editingService.commitEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: nextRevision,
+          commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'second-stage', payload: {
+            name: 'مرحلة لاحقة', departmentId: testDepartmentId,
+          } }],
+        },
+        testUserId
+      );
+      assert.strictEqual(second.createdNewVersion, true);
+      assert.strictEqual(second.targetVersionNumber, '1.1');
+      assert.strictEqual((await templateService.getTemplateById(created.id, v1.id)).stages.length, 1);
+      assert.strictEqual((await templateService.getTemplateById(created.id, second.targetVersionId)).stages.length, 2);
     });
 
     it('MINOR operation with AUTO decision updates in-place on current version', async () => {
@@ -495,8 +513,8 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         testUserId
       );
 
-      assert.strictEqual(res.createdNewVersion, true);
-      assert.strictEqual(res.targetVersionNumber, '1.1');
+      assert.strictEqual(res.createdNewVersion, false);
+      assert.strictEqual(res.targetVersionNumber, '1.0');
 
       const detail = await templateService.getTemplateById(created.id, res.targetVersionId);
       assert.strictEqual(detail.patterns.length, 1);
@@ -976,7 +994,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       };
 
       const firstRes = await editingService.commitEditingSession(created.id, payload, testUserId);
-      assert.strictEqual(firstRes.createdNewVersion, true);
+      assert.strictEqual(firstRes.createdNewVersion, false);
 
       // Re-send with identical payload
       const secondRes = await editingService.commitEditingSession(created.id, payload, testUserId);
@@ -2778,7 +2796,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             // Stage 1
             {
@@ -3083,7 +3101,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط الترتيب' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار أ' } },
@@ -3156,7 +3174,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط مهام' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار المهام' } },
@@ -3228,7 +3246,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'المرحلة الأولى', departmentId: testDepartmentId } },
             { type: 'ADD_STAGE', tempClientId: 's2', payload: { name: 'المرحلة الثانية', departmentId: testDepartmentId } },
@@ -3282,7 +3300,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط تجربة' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار 1' } },
@@ -3345,7 +3363,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط خيارات 3' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار أ' } },
@@ -3408,7 +3426,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
@@ -3470,7 +3488,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'مرحلة قديمة', departmentId: testDepartmentId } },
           ],
@@ -3524,7 +3542,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار 1' } },
@@ -3576,7 +3594,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
@@ -3628,7 +3646,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
@@ -3693,7 +3711,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'مرحلة العزل', departmentId: testDepartmentId } },
             {
@@ -3770,7 +3788,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط' } },
             { type: 'ADD_OPTION', parentId: 'p1', tempClientId: 'o1', payload: { name: 'خيار' } },
@@ -3944,7 +3962,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'المرحلة', departmentId: testDepartmentId } },
           ],
@@ -4012,7 +4030,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             { type: 'ADD_STAGE', tempClientId: 's1', payload: { name: 'مرحلة قديمة', departmentId: testDepartmentId } },
             { type: 'ADD_PATTERN', tempClientId: 'p1', payload: { name: 'نمط قديم' } },
@@ -4113,7 +4131,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         {
           baseVersionId: v1.id,
           baseRevision: rev,
-          commitDecision: 'AUTO',
+          commitDecision: 'NEW_VERSION',
           operations: [
             // Stage 1
             { type: 'ADD_STAGE', tempClientId: 'stg-1', payload: { name: 'المرحلة 1: التجهيز', departmentId: testDepartmentId, estimatedCost: '250.0000' } },
