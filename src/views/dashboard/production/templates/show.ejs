@@ -63,7 +63,7 @@
                 <li><h6 class="dropdown-header small text-muted">سجل إصدارات القالب</h6></li>
                 <% (template.versions || []).forEach(function(v) { %>
                   <li>
-                    <a class="dropdown-item d-flex justify-content-between align-items-center py-2 <%= v.id === template.currentVersion.id ? 'active bg-primary text-white' : '' %>" href="/production/templates/<%= template.id %>?versionId=<%= v.id %>#workflow">
+                    <a class="dropdown-item template-version-link d-flex justify-content-between align-items-center py-2 <%= v.id === template.currentVersion.id ? 'active bg-primary text-white' : '' %>" href="/production/templates/<%= template.id %>?versionId=<%= v.id %>">
                       <span>إصدار <%= v.version %></span>
                       <% if (v.isLatest) { %>
                         <span class="badge <%= v.id === template.currentVersion.id ? 'bg-white text-primary' : 'bg-success-subtle text-success' %> rounded-pill ms-2">الأحدث</span>
