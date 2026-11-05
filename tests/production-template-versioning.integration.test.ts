@@ -2141,6 +2141,11 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const physicalPath = path.resolve(process.cwd(), storedFile.storageKey);
       assert.strictEqual(fs.existsSync(physicalPath), true);
 
+      // Freeze the populated 1.0 by linking it to an actual production room.
+      // An order line alone does not activate historical versioning.
+      const linkedRoomId = await linkTemplateToRoom(created.id);
+      assert.ok(linkedRoomId, 'An actual room must exist before structural changes fork a version');
+
       // Create version 1.1 by forking with a structural change
       const v1Current = await versionService.getLatestVersion(created.id);
       rev = await getRevision(created.id, v1Current.id);
@@ -2679,6 +2684,11 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const storedFileRepo = AppDataSource.getRepository(ProductionTemplateStoredFileEntity);
       const stored = await storedFileRepo.findOneOrFail({ where: { templateId: created.id } });
       const fullPath = path.resolve(process.cwd(), stored.storageKey);
+
+      // Freeze the populated 1.0 by linking it to an actual production room.
+      // An order line alone does not activate historical versioning.
+      const linkedRoomId = await linkTemplateToRoom(created.id);
+      assert.ok(linkedRoomId, 'An actual room must exist before structural changes fork a version');
 
       // Fork to version 1.1
       const v1Current = await versionService.getLatestVersion(created.id);
