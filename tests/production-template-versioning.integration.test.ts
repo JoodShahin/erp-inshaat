@@ -20,6 +20,8 @@ import { ProductionTemplateWorkflowItemEntity } from '../src/modules/production/
 import { ProductionTemplateStageMaterialEntity } from '../src/modules/production/template-stage-material/production-template-stage-material.entity.js';
 import { ProductionTemplatePatternOptionTaskMaterialEntity } from '../src/modules/production/template-pattern-option-task-material/production-template-pattern-option-task-material.entity.js';
 import { ProductionTemplateStoredFileEntity } from '../src/modules/production/template-stored-file/production-template-stored-file.entity.js';
+import { InventoryProductEntity } from '../src/modules/inventory/product/inventory-product.entity.js';
+import { InventoryProductUnitEntity } from '../src/modules/inventory/product/inventory-product-unit.entity.js';
 import { ProductionTemplateUploadTokenEntity } from '../src/modules/production/template-editing/production-template-upload-token.entity.js';
 import { ProductionOrderService } from '../src/modules/production/order/production-order.service.js';
 import { ProductionOrderStatus, ProductionOrderPriority } from '../src/modules/production/order/production-order.entity.js';
@@ -47,6 +49,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
   let testDepartmentId: string;
   let testUserId: string;
   let otherUserId: string;
+  let materialTestProductId: string;
 
   async function getRevision(templateId: string, versionId: string): Promise<string> {
     return await versionService.computeVersionRevision(templateId, versionId);
@@ -92,6 +95,31 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
     versionService = new ProductionTemplateVersionService(AppDataSource);
     guardService = new ProductionTemplateGuardService(AppDataSource);
     sharedFileService = new ProductionTemplateSharedFileService(AppDataSource);
+
+    // The system seed does not populate the inventory catalog. Material tests must
+    // provision their own valid FK targets, even on a freshly migrated database.
+    const productRepo = AppDataSource.getRepository(InventoryProductEntity);
+    const unitRepo = AppDataSource.getRepository(InventoryProductUnitEntity);
+    const materialProduct = await productRepo.save(productRepo.create({
+      id: crypto.randomUUID(),
+      name: 'منتج مخصص لاختبارات مواد القوالب',
+      code: 'IT-MAT-' + crypto.randomUUID().slice(0, 12),
+      categoryId: null,
+      baseUnitId: null,
+      isActive: true,
+    }));
+    const materialUnit = await unitRepo.save(unitRepo.create({
+      id: crypto.randomUUID(),
+      productId: materialProduct.id,
+      name: 'وحدة المواد الاختبارية',
+      barcode: null,
+      price: '1.0000',
+      equivalentToUnitId: null,
+      conversionQuantity: null,
+      specifications: null,
+    }));
+    materialTestProductId = materialProduct.id;
+    assert.equal(materialUnit.productId, materialTestProductId);
 
     // Ensure a test department exists
     const deptRepo = AppDataSource.getRepository(ProductionDepartmentEntity);
@@ -2710,8 +2738,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         `SELECT p.id as productId, u.id as unitId 
          FROM inventory_product p 
          JOIN inventory_product_unit u ON u.product_id = p.id 
-         WHERE p.deleted_at IS NULL AND p.is_active = 1 
-         LIMIT 1`
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 AND u.deleted_at IS NULL AND p.id = ? 
+         LIMIT 1`,
+        [materialTestProductId]
       );
       assert.ok(prodRows.length > 0, 'Must have at least 1 product and unit for material testing');
       const { productId, unitId } = prodRows[0];
@@ -3630,8 +3659,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         `SELECT p.id as productId, u.id as unitId 
          FROM inventory_product p 
          JOIN inventory_product_unit u ON u.product_id = p.id 
-         WHERE p.deleted_at IS NULL AND p.is_active = 1 
-         LIMIT 1`
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 AND u.deleted_at IS NULL AND p.id = ? 
+         LIMIT 1`,
+        [materialTestProductId]
       );
       assert.ok(prodRows.length > 0);
       const { productId, unitId } = prodRows[0];
@@ -3707,8 +3737,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         `SELECT p.id as productId, u.id as unitId 
          FROM inventory_product p 
          JOIN inventory_product_unit u ON u.product_id = p.id 
-         WHERE p.deleted_at IS NULL AND p.is_active = 1 
-         LIMIT 1`
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 AND u.deleted_at IS NULL AND p.id = ? 
+         LIMIT 1`,
+        [materialTestProductId]
       );
       assert.ok(prodRows.length > 0);
       const { productId, unitId } = prodRows[0];
@@ -4043,8 +4074,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         `SELECT p.id as productId, u.id as unitId 
          FROM inventory_product p 
          JOIN inventory_product_unit u ON u.product_id = p.id 
-         WHERE p.deleted_at IS NULL AND p.is_active = 1 
-         LIMIT 2`
+         WHERE p.deleted_at IS NULL AND p.is_active = 1 AND u.deleted_at IS NULL AND p.id = ? 
+         LIMIT 2`,
+        [materialTestProductId]
       );
       assert.ok(prodRows.length >= 1);
       const prod1 = prodRows[0];
@@ -4468,8 +4500,9 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
         `SELECT p.id as productId, u.id as unitId 
          FROM inventory_product p 
          JOIN inventory_product_unit u ON u.product_id = p.id 
-         WHERE p.deleted_at IS NULL AND u.deleted_at IS NULL 
-         LIMIT 1`
+         WHERE p.deleted_at IS NULL AND u.deleted_at IS NULL AND p.id = ? 
+         LIMIT 1`,
+        [materialTestProductId]
       );
       assert.ok(prodRows.length > 0, 'Must have at least 1 product and unit for material testing');
       const { productId, unitId } = prodRows[0];
