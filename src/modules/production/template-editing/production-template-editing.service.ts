@@ -53,6 +53,7 @@ import { ProductionTemplatePatternOptionTaskMaterialEntity } from '../template-p
 import { ProductionTemplatePatternOptionTaskAttachmentEntity } from '../template-pattern-option-task-attachment/production-template-pattern-option-task-attachment.entity.js';
 import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
 import { ProductionTemplateSpecificationEntity } from '../template-specification/production-template-specification.entity.js';
+import { ProductionOrderLineEntity } from '../order-line/production-order-line.entity.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { resolveTaskDuration } from '../task-duration/task-duration.helper.js';
 
@@ -92,6 +93,28 @@ export class ProductionTemplateEditingService {
     this.guardService = guardService;
     this.sharedFileService = sharedFileService;
     this.departmentService = deptService;
+  }
+
+  /**
+   * A brand-new template starts at 1.0 with an empty workflow. Its first
+   * structural draft populates 1.0 instead of producing an empty historical
+   * 1.0 and a populated 1.1. Once content exists, or an order references
+   * the version, normal structural versioning resumes.
+   */
+  private async isPristineInitialVersion(
+    templateId: string,
+    versionId: string,
+    versionNumber: string,
+    manager: EntityManager
+  ): Promise<boolean> {
+    if (versionNumber !== '1.0') return false;
+    const [stages, patterns, workflow, referenced] = await Promise.all([
+      manager.getRepository(ProductionTemplateStageEntity).count({ where: { templateId, versionId } }),
+      manager.getRepository(ProductionTemplatePatternEntity).count({ where: { templateId, versionId } }),
+      manager.getRepository(ProductionTemplateWorkflowItemEntity).count({ where: { templateId, versionId } }),
+      manager.getRepository(ProductionOrderLineEntity).count({ where: { templateVersionId: versionId } }),
+    ]);
+    return stages === 0 && patterns === 0 && workflow === 0 && referenced === 0;
   }
 
   /**
@@ -215,17 +238,21 @@ export class ProductionTemplateEditingService {
         return cleanResult;
       }
 
+      const isInitialDraft = await this.isPristineInitialVersion(
+        templateId, baseVersion.id, baseVersion.version, manager
+      );
+
       // 7. Determine if we must fork a new version
       let shouldCreateNewVersion = false;
       if (normResult.classification === 'STRUCTURAL') {
-        if (dto.commitDecision === 'OVERWRITE_CURRENT') {
+        if (dto.commitDecision === 'OVERWRITE_CURRENT' && !isInitialDraft) {
           throw new BusinessRuleError(
             'التغييرات الهيكلية في بنية القالب تتطلب إنشاء إصدار جديد حتماً ولا يمكن التعديل المباشر على الإصدار الحالي',
             'PRODUCTION_TEMPLATE_STRUCTURAL_CHANGE_REQUIRES_NEW_VERSION'
           );
         }
         // 'AUTO' or 'NEW_VERSION' both fork a new version for STRUCTURAL
-        shouldCreateNewVersion = true;
+        shouldCreateNewVersion = !isInitialDraft && dto.commitDecision !== 'OVERWRITE_CURRENT';
       } else if (normResult.classification === 'MINOR') {
         if (dto.commitDecision === 'NEW_VERSION') {
           shouldCreateNewVersion = true;
@@ -359,11 +386,14 @@ export class ProductionTemplateEditingService {
       manager
     );
 
-    const isNewVersionMandatory = normResult.classification === 'STRUCTURAL';
-    const allowsOverwrite = normResult.classification === 'MINOR';
+    const isInitialDraft = await this.isPristineInitialVersion(
+      templateId, baseVersion.id, baseVersion.version, manager
+    );
+    const isNewVersionMandatory = normResult.classification === 'STRUCTURAL' && !isInitialDraft;
+    const allowsOverwrite = normResult.classification === 'MINOR' || isInitialDraft;
     const summary =
       normResult.classification === 'STRUCTURAL'
-        ? 'تتضمن الجلسة تغييرات هيكلية تتطلب حتماً إنشاء إصدار جديد للقالب'
+        ? (isInitialDraft ? 'هذه أول مراحل القالب؛ سيتم حفظها ضمن الإصدار الأول 1.0' : 'تتضمن الجلسة تغييرات هيكلية تتطلب حتماً إنشاء إصدار جديد للقالب')
         : normResult.classification === 'MINOR'
         ? 'تتضمن الجلسة تغييرات وصفية طفيفة يمكن حفظها في الإصدار الحالي أو إنشاء إصدار جديد'
         : 'لا توجد أي تغييرات صافية فعالة في هذه الجلسة';
