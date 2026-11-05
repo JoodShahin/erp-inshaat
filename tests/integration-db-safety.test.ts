@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { assertIsolatedIntegrationDatabase } from './helpers/integration-db-safety.js';
 
 describe('Integration database safety gate', () => {
@@ -25,4 +26,23 @@ describe('Integration database safety gate', () => {
       assert.throws(() => assertIsolatedIntegrationDatabase(target));
     });
   }
+});
+
+describe('Integration runner preflight wiring', () => {
+  it('runs the database preflight in a separate process before any integration test', () => {
+    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const script = packageJson.scripts['test:integration'];
+    assert.match(script, /^tsx tests\/helpers\/integration-db-guard\.ts && node --import tsx --test /);
+    assert.match(script, /--test-concurrency=1/);
+    assert.doesNotMatch(script, /--import \.\/tests\/helpers\/integration-db-guard/);
+  });
+
+  it('does not bypass the guarded integration command in test:all', () => {
+    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    assert.equal(packageJson.scripts['test:all'], 'npm run test && npm run test:integration');
+  });
 });
