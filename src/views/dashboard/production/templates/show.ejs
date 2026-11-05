@@ -3,8 +3,14 @@
 <style>
   /* Historical snapshots are for inspection, not mutation. Keep tab navigation
      and attachment download links accessible. */
-  #stageModal button:not([data-bs-dismiss]):not([data-bs-toggle]),
-  #taskModal button:not([data-bs-dismiss]):not([data-bs-toggle]),
+  #stageModal button[type="submit"],
+  #taskModal button[type="submit"],
+  #stageModal button[id*="Archive"],
+  #taskModal button[id*="Archive"],
+  #stageModal button[id*="Delete"],
+  #taskModal button[id*="Delete"],
+  #stageModal button[id*="Remove"],
+  #taskModal button[id*="Remove"],
   #editingSessionToolbar,
   #saveSessionModal,
   #pane-template-specifications button[data-action="edit"],
