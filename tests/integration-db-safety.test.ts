@@ -30,7 +30,7 @@ describe('Integration database safety gate', () => {
 
 describe('Integration runner preflight wiring', () => {
   it('runs the database preflight in a separate process before any integration test', () => {
-    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
       scripts: Record<string, string>;
     };
     const script = packageJson.scripts['test:integration'];
@@ -40,7 +40,7 @@ describe('Integration runner preflight wiring', () => {
   });
 
   it('does not bypass the guarded integration command in test:all', () => {
-    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
       scripts: Record<string, string>;
     };
     assert.equal(packageJson.scripts['test:all'], 'npm run test && npm run test:integration');
