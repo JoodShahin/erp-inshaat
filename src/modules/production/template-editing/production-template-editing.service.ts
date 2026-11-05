@@ -96,25 +96,27 @@ export class ProductionTemplateEditingService {
   }
 
   /**
-   * A brand-new template starts at 1.0 with an empty workflow. Its first
-   * structural draft populates 1.0 instead of producing an empty historical
-   * 1.0 and a populated 1.1. Once content exists, or an order references
-   * the version, normal structural versioning resumes.
+   * A template is still mutable in-place until its first physical production
+   * unit exists. Mere inclusion in an order/memorandum does not freeze it.
+   * Include archived/cancelled units: an historical room must never lose its
+   * snapshot guarantees just because it is no longer active.
+   *
+   * Production units are tied to their source template through their
+   * execution plan (production_unit.plan_id -> production_execution_plan.template_id).
    */
-  private async isPristineInitialVersion(
+  private async hasEverBeenAssignedToProductionUnit(
     templateId: string,
-    versionId: string,
-    versionNumber: string,
     manager: EntityManager
   ): Promise<boolean> {
-    if (versionNumber !== '1.0') return false;
-    const [stages, patterns, workflow, referenced] = await Promise.all([
-      manager.getRepository(ProductionTemplateStageEntity).count({ where: { templateId, versionId } }),
-      manager.getRepository(ProductionTemplatePatternEntity).count({ where: { templateId, versionId } }),
-      manager.getRepository(ProductionTemplateWorkflowItemEntity).count({ where: { templateId, versionId } }),
-      manager.getRepository(ProductionOrderLineEntity).count({ where: { templateVersionId: versionId } }),
-    ]);
-    return stages === 0 && patterns === 0 && workflow === 0 && referenced === 0;
+    const rows: Array<{ linked: number }> = await manager.query(
+      `SELECT 1 AS linked
+         FROM production_unit u
+         INNER JOIN production_execution_plan p ON p.id = u.plan_id
+        WHERE p.template_id = ?
+        LIMIT 1`,
+      [templateId]
+    );
+    return rows.length > 0;
   }
 
   /**
@@ -238,28 +240,23 @@ export class ProductionTemplateEditingService {
         return cleanResult;
       }
 
-      const isInitialDraft = await this.isPristineInitialVersion(
-        templateId, baseVersion.id, baseVersion.version, manager
-      );
+      const linkedToRoom = await this.hasEverBeenAssignedToProductionUnit(templateId, manager);
 
-      // 7. Determine if we must fork a new version
+      // 7. Before the first room, all changes (including explicit NEW_VERSION)
+      // update the current latest version in-place. Once a room exists,
+      // restore normal STRUCTURAL/MINOR and explicit versioning rules.
       let shouldCreateNewVersion = false;
-      if (normResult.classification === 'STRUCTURAL') {
-        if (dto.commitDecision === 'OVERWRITE_CURRENT' && !isInitialDraft) {
-          throw new BusinessRuleError(
-            'التغييرات الهيكلية في بنية القالب تتطلب إنشاء إصدار جديد حتماً ولا يمكن التعديل المباشر على الإصدار الحالي',
-            'PRODUCTION_TEMPLATE_STRUCTURAL_CHANGE_REQUIRES_NEW_VERSION'
-          );
-        }
-        // 'AUTO' or 'NEW_VERSION' both fork a new version for STRUCTURAL
-        // AUTO fills an unused 1.0, while an explicit NEW_VERSION still forks.
-        shouldCreateNewVersion = dto.commitDecision === 'NEW_VERSION' || !isInitialDraft;
-      } else if (normResult.classification === 'MINOR') {
-        if (dto.commitDecision === 'NEW_VERSION') {
+      if (linkedToRoom) {
+        if (normResult.classification === 'STRUCTURAL') {
+          if (dto.commitDecision === 'OVERWRITE_CURRENT') {
+            throw new BusinessRuleError(
+              'التغييرات الهيكلية في بنية القالب تتطلب إنشاء إصدار جديد حتماً ولا يمكن التعديل المباشر على الإصدار الحالي',
+              'PRODUCTION_TEMPLATE_STRUCTURAL_CHANGE_REQUIRES_NEW_VERSION'
+            );
+          }
           shouldCreateNewVersion = true;
-        } else {
-          // 'OVERWRITE_CURRENT' or 'AUTO' updates current version in place
-          shouldCreateNewVersion = false;
+        } else if (normResult.classification === 'MINOR') {
+          shouldCreateNewVersion = dto.commitDecision === 'NEW_VERSION';
         }
       }
 
@@ -387,17 +384,16 @@ export class ProductionTemplateEditingService {
       manager
     );
 
-    const isInitialDraft = await this.isPristineInitialVersion(
-      templateId, baseVersion.id, baseVersion.version, manager
-    );
-    const isNewVersionMandatory = normResult.classification === 'STRUCTURAL' && !isInitialDraft;
-    const allowsOverwrite = normResult.classification === 'MINOR' || isInitialDraft;
-    const summary =
-      normResult.classification === 'STRUCTURAL'
-        ? (isInitialDraft ? 'هذه أول مراحل القالب؛ سيتم حفظها ضمن الإصدار الأول 1.0' : 'تتضمن الجلسة تغييرات هيكلية تتطلب حتماً إنشاء إصدار جديد للقالب')
+    const linkedToRoom = await this.hasEverBeenAssignedToProductionUnit(templateId, manager);
+    const isNewVersionMandatory = linkedToRoom && normResult.classification === 'STRUCTURAL';
+    const allowsOverwrite = !linkedToRoom || normResult.classification === 'MINOR';
+    const summary = !linkedToRoom
+      ? 'القالب لم يرتبط بأي غرفة إنتاج بعد؛ ستُحفظ جميع التعديلات داخل الإصدار الحالي دون إنشاء إصدار جديد'
+      : normResult.classification === 'STRUCTURAL'
+        ? 'تتضمن الجلسة تغييرات هيكلية تتطلب حتماً إنشاء إصدار جديد للقالب'
         : normResult.classification === 'MINOR'
-        ? 'تتضمن الجلسة تغييرات وصفية طفيفة يمكن حفظها في الإصدار الحالي أو إنشاء إصدار جديد'
-        : 'لا توجد أي تغييرات صافية فعالة في هذه الجلسة';
+          ? 'تتضمن الجلسة تغييرات وصفية طفيفة يمكن حفظها في الإصدار الحالي أو إنشاء إصدار جديد'
+          : 'لا توجد أي تغييرات صافية فعالة في هذه الجلسة';
 
     return {
       classification: normResult.classification,
