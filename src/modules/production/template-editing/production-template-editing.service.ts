@@ -252,7 +252,8 @@ export class ProductionTemplateEditingService {
           );
         }
         // 'AUTO' or 'NEW_VERSION' both fork a new version for STRUCTURAL
-        shouldCreateNewVersion = !isInitialDraft && dto.commitDecision !== 'OVERWRITE_CURRENT';
+        // AUTO fills an unused 1.0, while an explicit NEW_VERSION still forks.
+        shouldCreateNewVersion = dto.commitDecision === 'NEW_VERSION' || !isInitialDraft;
       } else if (normResult.classification === 'MINOR') {
         if (dto.commitDecision === 'NEW_VERSION') {
           shouldCreateNewVersion = true;
