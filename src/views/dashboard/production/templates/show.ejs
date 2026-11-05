@@ -1,4 +1,24 @@
 <link rel="stylesheet" href="/css/production-templates.css">
+<% if (template.currentVersion && !template.currentVersion.isLatest) { %>
+<style>
+  /* Historical snapshots are for inspection, not mutation. Keep tab navigation
+     and attachment download links accessible. */
+  #stageModal button:not([data-bs-dismiss]):not([data-bs-toggle]),
+  #taskModal button:not([data-bs-dismiss]):not([data-bs-toggle]),
+  #editingSessionToolbar,
+  #saveSessionModal,
+  #pane-template-specifications button[data-action="edit"],
+  #pane-template-specifications button[data-action="delete"] {
+    display: none !important;
+  }
+  #stageModal input, #stageModal textarea, #stageModal select,
+  #taskModal input, #taskModal textarea, #taskModal select {
+    pointer-events: none;
+    background-color: var(--bs-secondary-bg);
+  }
+</style>
+<% } %>
+
 
 <!-- 1. Template Master Header -->
 <div class="card border-0 shadow-sm mb-3" style="border-radius: 12px; border-right: 5px solid #0984E3 !important;">
