@@ -79,14 +79,23 @@ document.addEventListener('DOMContentLoaded', () => {
     isActive: Boolean(config.templateIsActive),
   };
 
-  const canUpdate = Boolean(config.canUpdateTemplate);
-  const canDelete = Boolean(config.canDeleteTemplate);
+  const isHistoricalView = Boolean(config.currentVersion && !config.currentVersion.isLatest);
+  const canUpdate = Boolean(config.canUpdateTemplate) && !isHistoricalView;
+  const canDelete = Boolean(config.canDeleteTemplate) && !isHistoricalView;
 
   const departmentsMap = new Map();
   (config.departments || []).forEach((d) => departmentsMap.set(d.id, d));
 
   const currentVersion = config.currentVersion;
-  const isLatestVersion = !currentVersion || Boolean(currentVersion.isLatest);
+  const isLatestVersion = !isHistoricalView;
+
+  // Historical snapshots may be explored, but never edited from their detail dialogs.
+  if (isHistoricalView) {
+    document.body.classList.add('template-historical-readonly');
+    document.querySelectorAll('#stageModal input, #stageModal select, #stageModal textarea, #taskModal input, #taskModal select, #taskModal textarea').forEach((field) => {
+      field.disabled = true;
+    });
+  }
 
   // Editing Session Manager for atomic draft workspace
   const editingSession = {
@@ -124,6 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     addOperation(op) {
+      if (!canUpdate) return;
       this.operations.push(op);
       this.updateCounterUI();
     },
@@ -161,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     async commit(decision) {
-      if (!currentVersion) return;
+      if (!currentVersion || !canUpdate) return;
       const spinner = document.getElementById('commitSessionSpinner');
       const confirmBtn = document.getElementById('btnConfirmCommitSession');
       if (spinner) spinner.classList.remove('d-none');
@@ -198,7 +208,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? 'تم حفظ التعديلات بنجاح في إصدار جديد (' + json.data.targetVersionNumber + ')'
             : 'تم حفظ كافة تعديلات القالب بنجاح';
           sessionStorage.setItem('pendingToast', toastMsg);
-          window.location.href = '/production/templates/' + templateId + '?versionId=' + json.data.targetVersionId;
+          window.location.href = '/production/templates/' + templateId + '?versionId=' + encodeURIComponent(json.data.targetVersionId) + '#workflow';
         } else {
           if (json.code === 'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT') {
             Swal.fire({
@@ -3839,14 +3849,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (versionSelect) {
     versionSelect.addEventListener('change', (e) => {
       const selectedVerId = e.target.value;
-      window.location.href = '/production/templates/' + templateId + '?versionId=' + selectedVerId;
+      window.location.href = '/production/templates/' + templateId + '?versionId=' + encodeURIComponent(selectedVerId) + '#workflow';
     });
   }
 
   const btnSwitchToLatest = document.getElementById('btnSwitchToLatestVersion');
   if (btnSwitchToLatest) {
     btnSwitchToLatest.addEventListener('click', () => {
-      window.location.href = '/production/templates/' + templateId;
+      window.location.href = '/production/templates/' + templateId + '#workflow';
     });
   }
 
