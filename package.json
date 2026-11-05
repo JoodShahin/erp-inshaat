@@ -9,8 +9,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"tests/**/!(*.integration).test.ts\"",
-    "test:integration": "node --import tsx --test --test-concurrency=1 \"tests/**/*.integration.test.ts\"",
-    "test:all": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "test:integration": "node --import tsx --import ./tests/helpers/integration-db-guard.ts --test --test-concurrency=1 \"tests/**/*.integration.test.ts\"",
+    "test:all": "npm run test && npm run test:integration",
     "seed": "tsx src/database/seeds/system-initial.seed.ts",
     "migration:run": "tsx src/database/run-migrations.ts",
     "production:cleanup-files": "tsx src/scripts/production-cleanup-files.ts"
