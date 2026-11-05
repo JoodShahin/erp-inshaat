@@ -23,7 +23,7 @@ export class CreateProductionTemplateStoredFiles1710000000024 implements Migrati
         INDEX \`IDX_production_template_stored_file_deleted_at\` (\`deleted_at\`),
         CONSTRAINT \`FK_stored_file_template\` FOREIGN KEY (\`template_id\`) REFERENCES \`production_template\` (\`id\`) ON DELETE RESTRICT ON UPDATE RESTRICT,
         CONSTRAINT \`FK_stored_file_user\` FOREIGN KEY (\`created_by_user_id\`) REFERENCES \`system_user\` (\`id\`) ON DELETE SET NULL ON UPDATE RESTRICT
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
     // 2. Add file_id to production_template_stage_attachment
