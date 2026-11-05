@@ -160,6 +160,20 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
     }
   });
 
+  it('provisions a valid material product and unit without relying on catalog seed data', async () => {
+    const rows: Array<{ productId: string; unitId: string }> = await AppDataSource.query(
+      `SELECT p.id AS productId, u.id AS unitId
+       FROM inventory_product p
+       JOIN inventory_product_unit u ON u.product_id = p.id
+       WHERE p.id = ? AND p.is_active = 1
+         AND p.deleted_at IS NULL AND u.deleted_at IS NULL`,
+      [materialTestProductId]
+    );
+    assert.equal(rows.length, 1, 'Test setup must create its own active product and unit');
+    assert.equal(rows[0].productId, materialTestProductId);
+    assert.ok(rows[0].unitId);
+  });
+
   // ------------------------------------------------------------------------
   // 1. Auto-Code Sequence & Initial 1.0 Version
   // ------------------------------------------------------------------------
