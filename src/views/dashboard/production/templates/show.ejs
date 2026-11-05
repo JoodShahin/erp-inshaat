@@ -4,12 +4,12 @@
 <div class="card border-0 shadow-sm mb-3" style="border-radius: 12px; border-right: 5px solid #0984E3 !important;">
   <div class="card-body p-4">
         <!-- Historical Version Warning Banner -->
-        <div id="historicalVersionBanner" class="alert alert-warning border-0 shadow-sm <%= (template.currentVersion && !template.currentVersion.isLatest) ? '' : 'd-none' %> d-flex align-items-center justify-content-between p-3 mb-4" style="border-radius: 10px;">
+        <div id="historicalVersionBanner" class="alert alert-warning border-0 shadow-sm <%= (template.currentVersion && !template.currentVersion.isLatest) ? 'd-flex' : 'd-none' %> align-items-center justify-content-between p-3 mb-4" style="border-radius: 10px;">
           <div class="d-flex align-items-center gap-3">
             <i class="fa-solid fa-clock-rotate-left fs-3 text-warning"></i>
             <div>
               <strong class="d-block text-dark">أنت تستعرض إصداراً تاريخياً قديماً (v<%= template.currentVersion ? template.currentVersion.version : '1.0' %>) للقالب</strong>
-              <span class="small text-muted">هذا الإصدار للقراءة فقط ومقفل ضد التعديل للحفاظ على سلامة البيانات التاريخية لأوامر الإنتاج. لإجراء تعديلات، انتقل إلى أحدث إصدار.</span>
+              <span class="small text-muted">هذا الإصدار للعرض فقط، ولا يمكن تعديل المراحل أو حذفها. انتقل إلى أحدث إصدار لمتابعة التحرير.</span>
             </div>
           </div>
           <button type="button" class="btn btn-warning btn-sm fw-semibold text-dark shadow-sm" id="btnSwitchToLatestVersion">الانتقال إلى أحدث إصدار</button>
@@ -37,7 +37,7 @@
                 <li><h6 class="dropdown-header small text-muted">سجل إصدارات القالب</h6></li>
                 <% (template.versions || []).forEach(function(v) { %>
                   <li>
-                    <a class="dropdown-item d-flex justify-content-between align-items-center py-2 <%= v.id === template.currentVersion.id ? 'active bg-primary text-white' : '' %>" href="/production/templates/<%= template.id %>?versionId=<%= v.id %>">
+                    <a class="dropdown-item d-flex justify-content-between align-items-center py-2 <%= v.id === template.currentVersion.id ? 'active bg-primary text-white' : '' %>" href="/production/templates/<%= template.id %>?versionId=<%= v.id %>#workflow">
                       <span>إصدار <%= v.version %></span>
                       <% if (v.isLatest) { %>
                         <span class="badge <%= v.id === template.currentVersion.id ? 'bg-white text-primary' : 'bg-success-subtle text-success' %> rounded-pill ms-2">الأحدث</span>
@@ -332,7 +332,7 @@
         <!-- Empty Stages State Notice -->
         <div id="emptyStagesNotice" class="text-center py-5 text-muted border border-dashed rounded-3 bg-light bg-opacity-50 <%= template.stages && template.stages.length > 0 ? 'd-none' : '' %>">
           <i class="fa-solid fa-diagram-project fs-1 mb-3 text-secondary opacity-50"></i>
-          <h5 class="fw-bold mb-1 text-dark">لم يتم إضافة مراحل إنتاج لهذا القالب بعد.</h5>
+          <h5 class="fw-bold mb-1 text-dark">لم يتم إضافة مراحل إنتاج لهذا الإصدار بعد.</h5>
           <p class="small text-muted mb-3">ابدأ بإضافة أول مرحلة إلى سير العمل وتحديد القسم التشغيلي والمواد والوثائق التنفيذية.</p>
           <% if (typeof canUpdateTemplate !== 'undefined' && canUpdateTemplate) { %>
             <button type="button" class="btn production-theme-btn px-4" onclick="document.getElementById('btnOpenAddStageModal').click()">
