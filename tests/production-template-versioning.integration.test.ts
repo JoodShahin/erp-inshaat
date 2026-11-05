@@ -254,6 +254,22 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       });
 
       const v1 = await versionService.getLatestVersion(created.id);
+      const preview = await editingService.previewEditingSession(
+        created.id,
+        {
+          baseVersionId: v1.id,
+          baseRevision: rev,
+          commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'preview-stage', payload: {
+            name: 'مرحلة معاينة أولية', departmentId: testDepartmentId,
+          } }],
+        },
+        testUserId
+      );
+      assert.strictEqual(preview.classification, 'STRUCTURAL');
+      assert.strictEqual(preview.isNewVersionMandatory, false);
+      assert.strictEqual(preview.allowsOverwrite, true);
+
       const rev = await getRevision(created.id, v1.id);
 
       const commitRes = await editingService.commitEditingSession(
