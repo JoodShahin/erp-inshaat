@@ -7,15 +7,29 @@ const view = readFileSync('src/views/dashboard/production/templates/show.ejs', '
 const controller = readFileSync('src/modules/production/template/production-template.web.controller.ts', 'utf8');
 
 describe('Template version navigation and historical mode regression', () => {
-  it('opens the workflow tab after selecting any template version', () => {
-    assert.match(view, /versionId=<%= v\.id %>#workflow/);
-    assert.match(script, /encodeURIComponent\(selectedVerId\) \+ '#workflow'/);
+  it('keeps the selected information, specifications, or workflow workspace tab', () => {
+    assert.match(view, /template-version-link/);
+    assert.doesNotMatch(view, /versionId=<%= v\.id %>#workflow/);
+    assert.match(script, /function currentWorkspaceHash\(\)/);
+    assert.match(script, /#pane-template-info/);
+    assert.match(script, /#pane-template-specifications/);
+    assert.match(script, /#pane-template-workflow/);
+    assert.match(script, /link\.href = link\.href\.split\('#'\)\[0\] \+ currentWorkspaceHash\(\)/);
+    assert.match(script, /encodeURIComponent\(selectedVerId\) \+ currentWorkspaceHash\(\)/);
     assert.match(script, /const currentHash = window\.location\.hash\.toLowerCase\(\)/);
-    assert.match(script, /currentHash === '#workflow'/);
   });
 
-  it('returns to the latest version in workflow rather than the info tab', () => {
-    assert.match(script, /templateId \+ '#workflow'/);
+  it('returns to latest version in the currently selected tab', () => {
+    assert.match(script, /templateId \+ currentWorkspaceHash\(\)/);
+  });
+
+  it('keeps workflow open after saving a workflow editing session', () => {
+    assert.match(script, /encodeURIComponent\(json\.data\.targetVersionId\) \+ currentWorkspaceHash\(\)/);
+  });
+
+  it('prevents version switching with unsaved draft changes', () => {
+    assert.match(script, /if \(editingSession\.getPendingCount\(\) > 0\)/);
+    assert.match(script, /تعديلات غير محفوظة/);
   });
 
   it('does not display the historical warning on the latest version', () => {
