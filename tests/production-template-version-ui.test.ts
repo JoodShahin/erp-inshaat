@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const script = readFileSync('src/public/js/production-template-detail.js', 'utf8');
 const view = readFileSync('src/views/dashboard/production/templates/show.ejs', 'utf8');
 const controller = readFileSync('src/modules/production/template/production-template.web.controller.ts', 'utf8');
+const routes = readFileSync('src/modules/production/template/production-template.route.ts', 'utf8');
 
 describe('Template version navigation and historical mode regression', () => {
   it('keeps the selected information, specifications, or workflow workspace tab', () => {
@@ -36,6 +37,14 @@ describe('Template version navigation and historical mode regression', () => {
     assert.match(script, /const templateHasRoom = Boolean\(previewData\.isTemplateUsedByRoom\)/);
     assert.match(script, /if \(radioNewVersion\) radioNewVersion\.disabled = !templateHasRoom/);
     assert.match(script, /لم يرتبط القالب بغرفة إنتاج/);
+  });
+
+  it('requires versioned editing for direct workflow API mutations once a room exists', () => {
+    assert.match(routes, /productionTemplateApiRouter\.use\('\/:id', async \(req, _res, next\)/);
+    assert.match(routes, /hasEverBeenAssignedToProductionUnit\(templateId\)/);
+    assert.match(routes, /PRODUCTION_TEMPLATE_VERSIONED_EDIT_REQUIRED/);
+    assert.ok(routes.indexOf("'/\:id/editing/commit'") < routes.indexOf("productionTemplateApiRouter.use('/:id'"));
+    assert.ok(routes.indexOf("productionTemplateApiRouter.use('/:id'") < routes.indexOf("'/\:id/stages'"));
   });
 
   it('does not display the historical warning on the latest version', () => {
