@@ -12,7 +12,7 @@ export class CreateProductionTemplateVersionAndSequence1710000000023 implements 
         \`current_value\` BIGINT NOT NULL DEFAULT 0,
         \`updated_at\` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
         PRIMARY KEY (\`id\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
     // Determine initial sequence value from any existing PT-XXXXXX codes
@@ -51,7 +51,7 @@ export class CreateProductionTemplateVersionAndSequence1710000000023 implements 
         KEY \`IDX_production_template_version_deleted_at\` (\`deleted_at\`),
         CONSTRAINT \`FK_prod_template_version_template\` FOREIGN KEY (\`template_id\`)
           REFERENCES \`production_template\` (\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
     // 3. Add version_id column to stage, pattern, and workflow_item
