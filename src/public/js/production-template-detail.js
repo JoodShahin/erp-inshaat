@@ -3965,10 +3965,8 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         }
 
-        const radioAuto = document.getElementById('radioDecisionAuto');
         const radioOverwrite = document.getElementById('radioDecisionOverwrite');
         const radioNewVersion = document.getElementById('radioDecisionNewVersion');
-        if (radioAuto) radioAuto.disabled = true;
         if (radioOverwrite) {
           radioOverwrite.disabled = false;
           radioOverwrite.checked = true;
