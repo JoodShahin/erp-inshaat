@@ -98,11 +98,38 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Editing Session Manager for atomic draft workspace
+  // Keep the mobile save bar responsive and prevent duplicate submissions.
+  function setSessionSaveBusy(isBusy) {
+    const saveBtn = document.getElementById('btnReviewAndSaveSession');
+    const cancelBtn = document.getElementById('btnCancelEditingSession');
+    const label = document.getElementById('editingSessionSaveLabel');
+    const spinner = document.getElementById('editingSessionSaveSpinner');
+    if (saveBtn) {
+      saveBtn.disabled = isBusy;
+      saveBtn.setAttribute('aria-busy', String(isBusy));
+    }
+    if (cancelBtn) cancelBtn.disabled = isBusy;
+    if (label) label.textContent = isBusy ? 'جارٍ حفظ التعديلات...' : 'حفظ التعديلات';
+    if (spinner) spinner.classList.toggle('d-none', !isBusy);
+  }
+
   const editingSession = {
     isActive: false,
+    isSaving: false,
     operations: [],
     tempCounter: 0,
     sessionId: null,
+
+    // A successful server commit must end the editing session immediately;
+    // do not leave the floating toolbar waiting for a manual page refresh.
+    finishSavedSession() {
+      this.operations = [];
+      this.isActive = false;
+      this.sessionId = null;
+      this.updateCounterUI();
+      const toolbar = document.getElementById('editingSessionToolbar');
+      if (toolbar) toolbar.classList.add('d-none');
+    },
 
     getPendingCount() {
       return this.operations.length;
@@ -171,7 +198,9 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     async commit(decision) {
-      if (!currentVersion || !canUpdate) return;
+      if (!currentVersion || !canUpdate || this.isSaving || this.getPendingCount() === 0) return;
+      this.isSaving = true;
+      setSessionSaveBusy(true);
       const spinner = document.getElementById('commitSessionSpinner');
       const confirmBtn = document.getElementById('btnConfirmCommitSession');
       if (spinner) spinner.classList.remove('d-none');
@@ -198,7 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const json = await res.json();
         if (res.ok && json.success) {
-          this.operations = [];
+          this.finishSavedSession();
           const modalEl = document.getElementById('saveSessionModal');
           if (modalEl) {
             const modal = bootstrap.Modal.getInstance(modalEl);
@@ -207,8 +236,19 @@ document.addEventListener('DOMContentLoaded', () => {
           const toastMsg = json.data?.createdNewVersion
             ? 'تم حفظ التعديلات بنجاح في إصدار جديد (' + json.data.targetVersionNumber + ')'
             : 'تم حفظ كافة تعديلات القالب بنجاح';
-          sessionStorage.setItem('pendingToast', toastMsg);
-          window.location.href = '/production/templates/' + templateId + '?versionId=' + encodeURIComponent(json.data.targetVersionId) + currentWorkspaceHash();
+          showToast(toastMsg);
+          try {
+            sessionStorage.setItem('pendingToast', toastMsg);
+          } catch (storageError) {
+            // The save succeeded; blocked browser storage must not mask success.
+            console.warn('Could not persist template save notification:', storageError);
+          }
+          // Reload the server-rendered snapshot without relying on a manual refresh
+          // or a potentially stale browser cache; retain the active workspace tab.
+          const updatedUrl = '/production/templates/' + encodeURIComponent(templateId)
+            + '?versionId=' + encodeURIComponent(json.data.targetVersionId)
+            + '&saved=' + Date.now() + currentWorkspaceHash();
+          window.location.replace(updatedUrl);
         } else {
           if (json.code === 'PRODUCTION_TEMPLATE_CONCURRENT_EDIT_CONFLICT') {
             Swal.fire({
@@ -235,6 +275,8 @@ document.addEventListener('DOMContentLoaded', () => {
           confirmButtonText: 'حسناً',
         });
       } finally {
+        this.isSaving = false;
+        setSessionSaveBusy(false);
         if (spinner) spinner.classList.add('d-none');
         if (confirmBtn) confirmBtn.disabled = false;
       }
