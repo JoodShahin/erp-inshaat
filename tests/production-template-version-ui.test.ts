@@ -6,6 +6,7 @@ const script = readFileSync('src/public/js/production-template-detail.js', 'utf8
 const view = readFileSync('src/views/dashboard/production/templates/show.ejs', 'utf8');
 const controller = readFileSync('src/modules/production/template/production-template.web.controller.ts', 'utf8');
 const routes = readFileSync('src/modules/production/template/production-template.route.ts', 'utf8');
+const stylesheet = readFileSync('src/public/css/production-templates.css', 'utf8');
 
 describe('Template version navigation and historical mode regression', () => {
   it('keeps the selected information, specifications, or workflow workspace tab', () => {
@@ -52,6 +53,44 @@ describe('Template version navigation and historical mode regression', () => {
     assert.match(view, /id="radioDecisionOverwrite" value="OVERWRITE_CURRENT" checked/);
     assert.match(view, /id="radioDecisionNewVersion" value="NEW_VERSION"/);
     assert.doesNotMatch(view, /id="radioDecisionAuto"/);
+  });
+
+  it('clears the editing session and hides the bottom toolbar on successful save', () => {
+    assert.match(script, /finishSavedSession\(\) \{/);
+    assert.match(script, /this\.operations = \[\];\s*this\.isActive = false;\s*this\.sessionId = null;/);
+    assert.match(script, /this\.updateCounterUI\(\)/);
+    assert.match(script, /toolbar\.classList\.add\('d-none'\)/);
+    assert.match(script, /if \(res\.ok && json\.success\) \{\s*this\.finishSavedSession\(\)/);
+    assert.match(script, /document\.body\.classList\.toggle\('template-has-pending-edits', cnt > 0\)/);
+  });
+
+  it('updates the visible template automatically and preserves the current tab after save', () => {
+    assert.match(script, /showToast\(toastMsg\)/);
+    assert.match(script, /window\.location\.replace\(updatedUrl\)/);
+    assert.match(script, /json\.data\.targetVersionId/);
+    assert.match(script, /\+ '&saved=' \+ Date\.now\(\) \+ currentWorkspaceHash\(\)/);
+    assert.match(script, /catch \(storageError\)/);
+  });
+
+  it('shows busy feedback and prevents duplicate save requests on mobile', () => {
+    assert.match(script, /function setSessionSaveBusy\(isBusy\)/);
+    assert.match(script, /if \(!currentVersion \|\| !canUpdate \|\| this\.isSaving/);
+    assert.match(script, /this\.isSaving = true;\s*setSessionSaveBusy\(true\)/);
+    assert.match(script, /this\.isSaving = false;\s*setSessionSaveBusy\(false\)/);
+    assert.match(view, /id="editingSessionSaveSpinner"/);
+    assert.match(view, /id="editingSessionSaveLabel"/);
+  });
+
+  it('provides phone layouts, touch targets, safe areas and accessible focus states', () => {
+    assert.match(stylesheet, /@media \(max-width: 767\.98px\)/);
+    assert.match(stylesheet, /env\(safe-area-inset-bottom/);
+    assert.match(stylesheet, /\.template-editing-toolbar-actions/);
+    assert.match(stylesheet, /#templateWorkspaceTabs/);
+    assert.match(stylesheet, /\.stage-card/);
+    assert.match(stylesheet, /min-height: 44px/);
+    assert.match(stylesheet, /:focus-visible/);
+    assert.match(stylesheet, /\.template-has-pending-edits/);
+    assert.match(view, /class="card template-master-card/);
   });
 
   it('requires versioned editing for direct workflow API mutations once a room exists', () => {
