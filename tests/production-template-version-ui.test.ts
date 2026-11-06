@@ -76,6 +76,7 @@ describe('Template version navigation and historical mode regression', () => {
     assert.match(script, /function setSessionSaveBusy\(isBusy\)/);
     assert.match(script, /if \(!currentVersion \|\| !canUpdate \|\| this\.isSaving/);
     assert.match(script, /this\.isSaving = true;\s*setSessionSaveBusy\(true\)/);
+    assert.match(script, /setSessionSaveBusy\(true\);\s*try \{\s*const previewPayload/);
     assert.match(script, /this\.isSaving = false;\s*setSessionSaveBusy\(false\)/);
     assert.match(view, /id="editingSessionSaveSpinner"/);
     assert.match(view, /id="editingSessionSaveLabel"/);
