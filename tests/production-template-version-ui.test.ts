@@ -26,7 +26,7 @@ describe('Template version navigation and historical mode regression', () => {
   });
 
   it('keeps workflow open after saving a workflow editing session', () => {
-    assert.match(script, /encodeURIComponent\(json\.data\.targetVersionId\) \+ currentWorkspaceHash\(\)/);
+    assert.match(script, /encodeURIComponent\(json\.data\.targetVersionId\)\s*\+\s*'&saved='\s*\+\s*Date\.now\(\)\s*\+\s*currentWorkspaceHash\(\)/);
   });
 
   it('prevents version switching with unsaved draft changes', () => {
