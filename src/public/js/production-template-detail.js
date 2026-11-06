@@ -3948,7 +3948,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Only the latest version can be saved. The server preview is the
       // authoritative classifier and room-link check; never guess from UI.
-      btnReviewSave.disabled = true;
+      setSessionSaveBusy(true);
       try {
         const previewPayload = {
           baseVersionId: currentVersion.id,
@@ -4021,7 +4021,8 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (err) {
         Swal.fire('خطأ في الاتصال', 'تعذر الاتصال بالخادم لتحليل التعديلات.', 'error');
       } finally {
-        btnReviewSave.disabled = false;
+        // When AUTO commit is in progress it owns the busy state.
+        if (!editingSession.isSaving) setSessionSaveBusy(false);
       }
     });
   }
