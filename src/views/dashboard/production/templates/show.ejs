@@ -1210,9 +1210,9 @@
 </div>
 
 <!-- Floating Editing Session Toolbar -->
-<div id="editingSessionToolbar" class="fixed-bottom bg-dark text-white py-3 px-4 shadow-lg d-none" style="z-index: 1050; border-top: 3px solid #0984E3;">
-  <div class="container-fluid d-flex flex-wrap justify-content-between align-items-center gap-3">
-    <div class="d-flex align-items-center gap-3">
+<div id="editingSessionToolbar" class="template-editing-toolbar fixed-bottom text-white d-none" role="region" aria-label="أدوات حفظ مسودة القالب" aria-live="polite">
+  <div class="template-editing-toolbar-inner container-fluid d-flex flex-wrap justify-content-between align-items-center gap-3">
+    <div class="template-editing-toolbar-summary d-flex align-items-center gap-3">
       <span class="badge bg-warning text-dark px-3 py-2 rounded-pill fw-bold" id="unsavedChangesBadge">
         <i class="fa-solid fa-pen-ruler me-1"></i> مسودة قيد التحرير
       </span>
@@ -1220,13 +1220,14 @@
         يوجد لديك <strong id="unsavedCount" class="text-warning fs-6">0</strong> تعديل غير محفوظ في مساحة العمل
       </span>
     </div>
-    <div class="d-flex align-items-center gap-2">
+    <div class="template-editing-toolbar-actions d-flex align-items-center gap-2">
       <button type="button" class="btn btn-outline-light btn-sm px-3" id="btnCancelEditingSession">
         <i class="fa-solid fa-rotate-left me-1"></i> إلغاء التعديلات
       </button>
-      <button type="button" class="btn btn-primary btn-sm px-4 fw-bold d-inline-flex align-items-center gap-2 shadow" id="btnReviewAndSaveSession" style="background-color: #0984E3; border-color: #0984E3;">
-        <i class="fa-solid fa-cloud-arrow-up"></i>
-        <span>حفظ التعديلات نهائياً</span>
+      <button type="button" class="btn btn-primary btn-sm px-4 fw-bold d-inline-flex align-items-center justify-content-center gap-2 shadow" id="btnReviewAndSaveSession" aria-busy="false">
+        <span class="spinner-border spinner-border-sm d-none" id="editingSessionSaveSpinner" aria-hidden="true"></span>
+        <i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i>
+        <span id="editingSessionSaveLabel">حفظ التعديلات</span>
       </button>
     </div>
   </div>
