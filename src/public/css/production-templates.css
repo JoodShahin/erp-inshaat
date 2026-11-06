@@ -734,3 +734,54 @@
     transform: none !important;
   }
 }
+
+/* Template identity header, action grouping, and floating draft space. */
+.template-master-card {
+  border: 1px solid #e0eaf4 !important;
+  border-right: 5px solid var(--prod-primary) !important;
+  border-radius: 16px !important;
+  background: linear-gradient(115deg, #fff 60%, #f5faff 100%);
+  box-shadow: 0 9px 26px rgba(20, 46, 80, .055) !important;
+}
+.template-master-card h2 {
+  font-size: clamp(1.2rem, 2.4vw, 1.8rem);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.template-master-card .btn {
+  min-height: 40px;
+  border-radius: 10px !important;
+}
+.template-has-pending-edits {
+  padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 767.98px) {
+  .template-master-card .card-body {
+    padding: 1rem !important;
+  }
+  .template-master-card .card-body > .d-flex {
+    align-items: stretch !important;
+  }
+  .template-master-card .card-body > .d-flex > div {
+    min-width: 0;
+    width: 100%;
+  }
+  .template-master-card .card-body > .d-flex > div:last-child {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: .5rem !important;
+  }
+  .template-master-card .card-body > .d-flex > div:last-child .btn {
+    min-width: 0;
+    width: 100%;
+    justify-content: center;
+    padding: .55rem .65rem;
+    font-size: .85rem;
+  }
+  .template-master-card .card-body > .d-flex > div:last-child .btn:first-child:last-child {
+    grid-column: 1 / -1;
+  }
+  .template-has-pending-edits {
+    padding-bottom: calc(205px + env(safe-area-inset-bottom, 0px));
+  }
+}
