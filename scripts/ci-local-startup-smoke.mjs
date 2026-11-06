@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { spawn } from 'node:child_process';
 import dotenv from 'dotenv';
 
@@ -9,8 +8,8 @@ if (!fs.existsSync(sourceEnvPath)) {
   process.exit(1);
 }
 const parsed = dotenv.parse(fs.readFileSync(sourceEnvPath));
-if (parsed.DB_DATABASE !== 'erp_actions_smoke') {
-  console.error('Startup test requires DB_DATABASE=erp_actions_smoke in the local .env file. No application started.');
+if (parsed.DB_DATABASE !== 'erp_actions_smoke' || !['127.0.0.1', 'localhost'].includes(parsed.DB_HOST) || !parsed.DB_USERNAME || !parsed.DB_PASSWORD) {
+  console.error('Startup requires local MySQL (localhost), an isolated erp_actions_smoke database, and dedicated credentials. No application started.');
   process.exit(1);
 }
 const env = { ...process.env, ...parsed, NODE_ENV: 'test', PORT: '3099' };
