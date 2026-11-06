@@ -1,0 +1,45 @@
+name: ERP Local Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: erp-local-tests
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Typecheck, unit tests, and build
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check development tools
+        run: |
+          node --version
+          npm --version
+          git --version
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
