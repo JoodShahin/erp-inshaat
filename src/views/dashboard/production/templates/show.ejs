@@ -1180,14 +1180,7 @@
           <ul class="mb-0 small text-muted ps-3" id="modalChangeReasonsList"></ul>
         </div>
         <div class="mb-3">
-          <label class="form-label fw-bold text-dark">قرار الحفظ والإصدار:</label>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="radio" name="commitDecisionRadio" id="radioDecisionAuto" value="AUTO" checked>
-            <label class="form-check-label" for="radioDecisionAuto">
-              <strong>تلقائي (موصى به)</strong>
-              <div class="small text-muted">إنشاء إصدار جديد تلقائياً في حال وجود تعديلات هيكلية، أو التحديث المباشر للتعديلات الطفيفة.</div>
-            </label>
-          </div>
+          <label class="form-label fw-bold text-dark">اختر طريقة حفظ التعديلات الطفيفة:</label>
           <div class="form-check mb-2">
             <input class="form-check-input" type="radio" name="commitDecisionRadio" id="radioDecisionNewVersion" value="NEW_VERSION">
             <label class="form-check-label" for="radioDecisionNewVersion">
@@ -1196,7 +1189,7 @@
             </label>
           </div>
           <div class="form-check">
-            <input class="form-check-input" type="radio" name="commitDecisionRadio" id="radioDecisionOverwrite" value="OVERWRITE_CURRENT">
+            <input class="form-check-input" type="radio" name="commitDecisionRadio" id="radioDecisionOverwrite" value="OVERWRITE_CURRENT" checked>
             <label class="form-check-label" for="radioDecisionOverwrite">
               <strong>تحديث الإصدار الحالي مباشرة</strong>
               <div class="small text-muted">تحديث السجلات الحالية في هذا الإصدار بدون إنشاء نسخة جديدة.</div>
