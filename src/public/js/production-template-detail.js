@@ -3896,28 +3896,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnReviewSave = document.getElementById('btnReviewAndSaveSession');
   if (btnReviewSave) {
     btnReviewSave.addEventListener('click', async () => {
-      const modalEl = document.getElementById('saveSessionModal');
-      if (!modalEl) return;
+      if (!canUpdate || btnReviewSave.disabled) return;
       const count = editingSession.getPendingCount();
       if (count === 0) {
-        Swal.fire('تنبيه', 'لا توجد أي تعديلات معلقة لحفظها.', 'info');
+        showToast('لا توجد تعديلات معلقة للحفظ');
         return;
       }
 
-      // Show loading indicator in modal
-      const countEl = document.getElementById('modalChangeCountText');
-      if (countEl) countEl.textContent = 'جاري تحليل وفحص التعديلات من الخادم...';
-      const typeBadge = document.getElementById('modalChangeTypeBadge');
-      if (typeBadge) {
-        typeBadge.textContent = 'جاري التحليل...';
-        typeBadge.className = 'badge bg-secondary';
-      }
-      const reasonsList = document.getElementById('modalChangeReasonsList');
-      if (reasonsList) reasonsList.innerHTML = '<li class="text-muted">جاري فحص التعديلات من الخادم...</li>';
-
-      const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-      modal.show();
-
+      // Only the latest version can be saved. The server preview is the
+      // authoritative classifier and room-link check; never guess from UI.
+      btnReviewSave.disabled = true;
       try {
         const previewPayload = {
           baseVersionId: currentVersion.id,
@@ -3931,78 +3919,68 @@ document.addEventListener('DOMContentLoaded', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(previewPayload),
         });
-
         const json = await res.json();
         if (!res.ok || !json.success) {
           const errMsg = extractApiErrorMessage(json, 'فشل في تحليل التعديلات');
-          modal.hide();
-          Swal.fire('خطأ في التحليل', errMsg, 'error');
+          Swal.fire('تعذر تحليل التعديلات', errMsg, 'error');
           return;
         }
 
         const previewData = json.data;
-        const confirmBtn = document.getElementById('btnConfirmCommitSession');
-        const radioOverwrite = document.getElementById('radioDecisionOverwrite');
-        const radioAuto = document.getElementById('radioDecisionAuto');
-        const radioNewVersion = document.getElementById('radioDecisionNewVersion');
-        const templateHasRoom = Boolean(previewData.isTemplateUsedByRoom);
-        // A template cannot generate a new version before its first room exists,
-        // even if the user manually selects the NEW_VERSION decision.
-        if (radioNewVersion) radioNewVersion.disabled = !templateHasRoom;
-        if (!templateHasRoom && radioAuto) radioAuto.checked = true;
-
-        if (countEl) {
-          countEl.textContent = 'عدد التغييرات الصافية الفعالة: ' + previewData.effectiveChangesCount;
+        if (previewData.conflicts && previewData.conflicts.length > 0) {
+          Swal.fire('تعارض في التزامن', 'تم تعديل القالب بالتزامن. يرجى تحديث الصفحة قبل الحفظ.', 'warning');
+          return;
+        }
+        if (previewData.classification === 'NONE' || !previewData.effectiveChangesCount) {
+          showToast('لا توجد تغييرات مؤثرة للحفظ');
+          return;
         }
 
-        if (previewData.classification === 'NONE') {
-          if (typeBadge) {
-            typeBadge.textContent = 'لا توجد تغييرات مؤثرة';
-            typeBadge.className = 'badge bg-secondary';
-          }
-          if (confirmBtn) confirmBtn.disabled = true;
-          if (radioOverwrite) radioOverwrite.disabled = true;
-          if (radioAuto) radioAuto.disabled = true;
-        } else if (previewData.classification === 'STRUCTURAL') {
-          const requiresVersion = Boolean(previewData.isNewVersionMandatory);
-          if (typeBadge) {
-            typeBadge.textContent = requiresVersion
-              ? 'تعديلات هيكلية (تتطلب إصداراً جديداً)'
-              : 'القالب غير مرتبط بغرفة (الحفظ في الإصدار الحالي)';
-            typeBadge.className = requiresVersion ? 'badge bg-danger' : 'badge bg-success';
-          }
-          if (confirmBtn) confirmBtn.disabled = false;
-          if (radioOverwrite) {
-            radioOverwrite.disabled = requiresVersion;
-            if (requiresVersion && radioOverwrite.checked && radioAuto) radioAuto.checked = true;
-          }
-        } else {
-          // MINOR
-          if (typeBadge) {
-            typeBadge.textContent = 'تعديلات طفيفة (بيانات وصفية)';
-            typeBadge.className = 'badge bg-info text-dark';
-          }
-          if (confirmBtn) confirmBtn.disabled = false;
-          if (radioOverwrite) radioOverwrite.disabled = false;
+        // A template with no rooms always stays in its current version.
+        // After room linkage, structural changes always fork automatically.
+        // Neither scenario needs a choice dialog.
+        if (!previewData.isTemplateUsedByRoom || previewData.isNewVersionMandatory) {
+          await editingSession.commit('AUTO');
+          return;
         }
 
-        // Render server reasons
+        // Only a linked template with MINOR changes permits a user choice.
+        // Do not show the AUTO option or leave a stale radio selection.
+        const modalEl = document.getElementById('saveSessionModal');
+        if (!modalEl) return;
+        const countEl = document.getElementById('modalChangeCountText');
+        if (countEl) countEl.textContent = 'عدد التعديلات: ' + previewData.effectiveChangesCount;
+        const typeBadge = document.getElementById('modalChangeTypeBadge');
+        if (typeBadge) {
+          typeBadge.textContent = 'تعديلات طفيفة — اختر طريقة الحفظ';
+          typeBadge.className = 'badge bg-info text-dark';
+        }
+        const reasonsList = document.getElementById('modalChangeReasonsList');
         if (reasonsList) {
-          reasonsList.innerHTML = '';
-          if (!templateHasRoom) {
-            const note = document.createElement('li');
-            note.textContent = 'لم يرتبط القالب بغرفة إنتاج؛ كل التعديلات ستُحفظ في الإصدار الحالي.';
-            reasonsList.appendChild(note);
-          }
+          reasonsList.textContent = '';
           (previewData.reasons || []).forEach((reason) => {
             const li = document.createElement('li');
             li.textContent = reason;
             reasonsList.appendChild(li);
           });
         }
+
+        const radioAuto = document.getElementById('radioDecisionAuto');
+        const radioOverwrite = document.getElementById('radioDecisionOverwrite');
+        const radioNewVersion = document.getElementById('radioDecisionNewVersion');
+        if (radioAuto) radioAuto.disabled = true;
+        if (radioOverwrite) {
+          radioOverwrite.disabled = false;
+          radioOverwrite.checked = true;
+        }
+        if (radioNewVersion) radioNewVersion.disabled = false;
+        const confirmBtn = document.getElementById('btnConfirmCommitSession');
+        if (confirmBtn) confirmBtn.disabled = false;
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
       } catch (err) {
-        modal.hide();
         Swal.fire('خطأ في الاتصال', 'تعذر الاتصال بالخادم لتحليل التعديلات.', 'error');
+      } finally {
+        btnReviewSave.disabled = false;
       }
     });
   }
