@@ -137,6 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateCounterUI() {
       const cnt = this.getPendingCount();
+      document.body.classList.toggle('template-has-pending-edits', cnt > 0);
       const countEl = document.getElementById('unsavedCount');
       if (countEl) countEl.textContent = cnt;
       const toolbar = document.getElementById('editingSessionToolbar');
