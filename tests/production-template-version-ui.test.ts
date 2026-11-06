@@ -33,10 +33,25 @@ describe('Template version navigation and historical mode regression', () => {
     assert.match(script, /تعديلات غير محفوظة/);
   });
 
-  it('hides manual new-version creation while no production room references the template', () => {
-    assert.match(script, /const templateHasRoom = Boolean\(previewData\.isTemplateUsedByRoom\)/);
-    assert.match(script, /if \(radioNewVersion\) radioNewVersion\.disabled = !templateHasRoom/);
-    assert.match(script, /لم يرتبط القالب بغرفة إنتاج/);
+  it('saves edits directly when the template has no production room', () => {
+    assert.match(script, /!previewData\.isTemplateUsedByRoom \|\| previewData\.isNewVersionMandatory/);
+    assert.match(script, /await editingSession\.commit\('AUTO'\)/);
+    assert.match(script, /if \(previewData\.classification === 'NONE'/);
+  });
+
+  it('automatically forks structural edits after the first room, without a decision dialog', () => {
+    assert.match(script, /if \(!previewData\.isTemplateUsedByRoom \|\| previewData\.isNewVersionMandatory\) \{/);
+    assert.match(script, /await editingSession\.commit\('AUTO'\);\s*return;/);
+  });
+
+  it('shows only two choices for MINOR edits on a template linked to a room', () => {
+    assert.match(script, /const radioOverwrite = document\.getElementById\('radioDecisionOverwrite'\)/);
+    assert.match(script, /const radioNewVersion = document\.getElementById\('radioDecisionNewVersion'\)/);
+    assert.match(script, /radioOverwrite\.checked = true/);
+    assert.match(script, /bootstrap\.Modal\.getOrCreateInstance\(modalEl\)\.show\(\)/);
+    assert.match(view, /id="radioDecisionOverwrite" value="OVERWRITE_CURRENT" checked/);
+    assert.match(view, /id="radioDecisionNewVersion" value="NEW_VERSION"/);
+    assert.doesNotMatch(view, /id="radioDecisionAuto"/);
   });
 
   it('requires versioned editing for direct workflow API mutations once a room exists', () => {
