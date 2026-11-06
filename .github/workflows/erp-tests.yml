@@ -12,20 +12,53 @@ concurrency:
 
 jobs:
   startup:
-    name: Build and verify server startup
+    name: Start ERP from local Windows project
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
+
     defaults:
       run:
         shell: cmd
+
     steps:
-      - name: Checkout repository
+      - name: Checkout workflow support files
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Install dependencies
+
+      - name: Check local repository and update main safely
+        working-directory: 'C:\Users\abo jood\Desktop\erp'
+        run: |
+          git rev-parse --is-inside-work-tree
+          if errorlevel 1 exit /b 1
+          git symbolic-ref --quiet --short HEAD | findstr /x /c:"main" >nul
+          if errorlevel 1 (
+            echo ERROR: Local ERP project must be on main; refusing to switch branches automatically.
+            exit /b 1
+          )
+          git diff --quiet
+          if errorlevel 1 (
+            echo ERROR: Local repository has unstaged changes. No update attempted.
+            exit /b 1
+          )
+          git diff --cached --quiet
+          if errorlevel 1 (
+            echo ERROR: Local repository has staged changes. No update attempted.
+            exit /b 1
+          )
+          git fetch origin main
+          if errorlevel 1 exit /b 1
+          git merge --ff-only FETCH_HEAD
+          if errorlevel 1 exit /b 1
+
+      - name: Install dependencies in local project
+        working-directory: 'C:\Users\abo jood\Desktop\erp'
         run: npm ci --ignore-scripts
-      - name: Build
+
+      - name: Build local project
+        working-directory: 'C:\Users\abo jood\Desktop\erp'
         run: npm run build
-      - name: Verify server startup with isolated local database
-        run: node scripts/ci-local-startup-smoke.mjs
+
+      - name: Verify local server startup (isolated DB only)
+        working-directory: 'C:\Users\abo jood\Desktop\erp'
+        run: node "%GITHUB_WORKSPACE%\scripts\ci-local-startup-smoke.mjs"
