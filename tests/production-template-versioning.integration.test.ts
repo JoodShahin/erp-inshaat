@@ -3270,6 +3270,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
 
       // 4. Execute Second Session: Mutations across the whole graph
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       const secondCommit = await editingService.commitEditingSession(
@@ -3647,6 +3654,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const o2Id = initCommit.tempClientMap['o2'];
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // Single session: Add Option 3, and reorder to [opt3, opt1, opt2]
@@ -3714,6 +3728,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const o3Id = initCommit.tempClientMap['o3'];
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // Single session: Delete o2, reorder to [o3, o1]
@@ -3778,6 +3799,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const t2Id = initCommit.tempClientMap['t2'];
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // Single session: Delete t1, Add t3, Reorder to [t3, t2]
@@ -3837,6 +3865,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const s1Id = initCommit.tempClientMap['s1'];
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // Single session: Add s2, reorder workflow to [s2, s1]
@@ -4075,6 +4110,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const initialMat = await stageMatRepo.findOneOrFail({ where: { stageId: s1Id } });
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // Replace material for the exact same product & unit in a single session
@@ -4156,6 +4198,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const initialMat = await taskMatRepo.findOneOrFail({ where: { taskId: t1Id } });
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // Replace task material in single session
@@ -4399,6 +4448,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const o2Id = initCommit.tempClientMap['o2'];
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // Mixed session:
@@ -4537,6 +4593,13 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       const stage1Att = await stageAttRepo.findOneOrFail({ where: { stageId: stg1Id } });
 
       const vLatest = await versionService.getLatestVersion(template.id);
+      // The next structural edit must fork only after a real room uses THIS
+      // latest version; rooms from older versions do not freeze it.
+      const currentVersionRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(currentVersionRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(
+        template.id, AppDataSource.manager, vLatest.id
+      ), true);
       rev = await getRevision(template.id, vLatest.id);
 
       // 2. Second Session: Complex Multi-Operation Mutation
