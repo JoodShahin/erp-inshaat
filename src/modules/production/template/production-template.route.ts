@@ -197,7 +197,7 @@ productionTemplateApiRouter.delete(
 );
 
 // Legacy direct stage/pattern/task mutation endpoints are allowed while a template
-// has never been used by a room. Once used, structural changes must flow through
+// its latest version has not been used by a room. Once used, changes must flow through
 // /:id/editing/commit so the snapshot/versioning policy cannot be bypassed.
 // The atomic editing routes and descriptive specification routes are registered above.
 productionTemplateApiRouter.use('/:id', async (req, _res, next) => {
@@ -208,9 +208,9 @@ productionTemplateApiRouter.use('/:id', async (req, _res, next) => {
   try {
     const templateId = req.params.id;
     if (typeof templateId === 'string' &&
-        await productionTemplateEditingService.hasEverBeenAssignedToProductionUnit(templateId)) {
+        await productionTemplateEditingService.hasProductionUnitForTemplateVersion(templateId)) {
       next(new BusinessRuleError(
-        'هذا القالب مرتبط بغرفة إنتاج. يجب حفظ تعديلات مراحل الإنتاج والأنماط عبر جلسة التحرير لإنشاء الإصدار المناسب.',
+        'الإصدار الحالي للقالب مرتبط بغرفة إنتاج. يجب حفظ تعديلات مراحل الإنتاج والأنماط عبر جلسة التحرير لتطبيق قواعد الإصدارات.',
         'PRODUCTION_TEMPLATE_VERSIONED_EDIT_REQUIRED'
       ));
       return;
