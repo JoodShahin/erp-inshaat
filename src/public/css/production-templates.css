@@ -434,3 +434,354 @@
   border-top: 3px solid #6366F1 !important;
 }
 
+
+
+/* =========================================================
+   Template workspace refresh — mobile-first visual system
+   Only targets the template detail workspace and its dialogs.
+   ========================================================= */
+#templateWorkspaceContent {
+  --template-surface: #ffffff;
+  --template-border: #e1e9f2;
+  --template-shadow: 0 8px 26px rgba(24, 51, 91, .055);
+}
+#templateWorkspaceContent > .tab-pane > .card,
+#templateWorkspaceContent > .tab-pane > div > .card,
+#templateWorkspaceContent #template-info,
+#templateWorkspaceContent #template-specifications,
+#templateWorkspaceContent #template-workflow {
+  border: 1px solid var(--template-border) !important;
+  border-radius: 16px !important;
+  box-shadow: var(--template-shadow) !important;
+  overflow: hidden;
+}
+#templateWorkspaceContent .card-header {
+  background: linear-gradient(135deg, #ffffff, #f8fbff) !important;
+  padding: 1.1rem 1.35rem !important;
+  gap: .8rem;
+}
+#templateWorkspaceContent .card-header h5 {
+  font-size: 1.06rem;
+  line-height: 1.5;
+}
+#templateWorkspaceContent .spec-item {
+  border: 1px solid #e3eaf3 !important;
+  background: #fff;
+  padding: .85rem 1rem !important;
+  box-shadow: 0 2px 7px rgba(15, 23, 42, .025);
+}
+#templateWorkspaceContent .spec-item:hover {
+  border-color: #aed5f7 !important;
+  background: #fbfdff;
+}
+#templateWorkspaceContent .stage-card,
+#templateWorkspaceContent .option-task-card {
+  border-color: #dce6f1;
+  box-shadow: 0 2px 9px rgba(15, 23, 42, .035);
+}
+#templateWorkspaceContent .stage-actions .btn,
+#templateWorkspaceContent .pattern-option-header .btn,
+#templateWorkspaceContent .spec-item .btn,
+#templateWorkspaceContent .option-task-card .btn {
+  min-width: 34px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.template-builder-nav {
+  border-color: #dce6f1;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .07);
+}
+.workspace-tabs .nav-link:focus-visible,
+#templateWorkspaceContent button:focus-visible,
+.template-editing-toolbar button:focus-visible {
+  outline: 3px solid rgba(9,132,227,.36);
+  outline-offset: 2px;
+}
+/* Floating save bar: independent of navbar height and iOS safe area. */
+.template-editing-toolbar {
+  z-index: 1040;
+  bottom: 0;
+  padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(120deg, #17304c, #1b456a);
+  border-top: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 -10px 34px rgba(12, 28, 48, .2);
+}
+.template-editing-toolbar-inner {
+  max-width: 1320px;
+  margin-inline: auto;
+}
+.template-editing-toolbar .btn {
+  min-height: 44px;
+  border-radius: 10px;
+}
+.template-editing-toolbar #btnReviewAndSaveSession {
+  background: #1689df;
+  border-color: #1689df;
+  min-width: 175px;
+}
+.template-editing-toolbar #btnReviewAndSaveSession:hover {
+  background: #0874c6;
+}
+.template-editing-toolbar-summary {
+  min-width: 0;
+}
+.template-editing-toolbar-summary .small {
+  line-height: 1.55;
+}
+#templateWorkspaceTabs,
+.stage-modal .stage-modal-tabs {
+  scrollbar-width: thin;
+}
+/* Touch-first behavior: no horizontal page overflow or tiny action targets. */
+@media (max-width: 767.98px) {
+  .template-builder-nav {
+    position: sticky;
+    top: 0;
+    padding: .45rem !important;
+    margin-bottom: 1rem !important;
+    border-radius: 13px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .template-builder-nav > div:first-child {
+    width: 100%;
+    min-width: 0;
+  }
+  #templateWorkspaceTabs {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    gap: .4rem !important;
+    padding: .12rem .1rem .4rem;
+  }
+  #templateWorkspaceTabs .nav-item {
+    flex: 0 0 auto;
+  }
+  #templateWorkspaceTabs .nav-link {
+    min-height: 44px;
+    padding: .6rem .75rem;
+    white-space: nowrap;
+    font-size: .83rem;
+    border-radius: 10px;
+  }
+  #templateWorkspaceContent .card-header {
+    padding: .85rem .9rem !important;
+    flex-wrap: wrap;
+    align-items: flex-start !important;
+  }
+  #templateWorkspaceContent .card-header > div {
+    min-width: 0;
+    max-width: 100%;
+  }
+  #templateWorkspaceContent .card-header h5 {
+    font-size: .98rem;
+  }
+  #templateWorkspaceContent .card-header .btn,
+  #templateWorkspaceContent .card-body .btn {
+    min-height: 42px;
+  }
+  #templateWorkspaceContent .card-body.p-4 {
+    padding: .85rem !important;
+  }
+  .department-workflow-group,
+  .pattern-workflow-card {
+    margin-bottom: 1rem;
+    border-radius: 12px;
+  }
+  .department-workflow-header,
+  .pattern-workflow-header {
+    padding: .8rem;
+    flex-wrap: wrap;
+    gap: .6rem;
+  }
+  .department-workflow-title,
+  .pattern-workflow-title {
+    font-size: .96rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .department-workflow-body,
+  .pattern-workflow-body {
+    padding: .65rem;
+    gap: .6rem;
+  }
+  .stage-card,
+  .option-task-card {
+    padding: .85rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: .65rem;
+    border-radius: 11px;
+  }
+  .stage-info {
+    flex: 1 1 calc(100% - 65px);
+    overflow-wrap: anywhere;
+  }
+  .stage-actions {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    padding-top: .6rem;
+    border-top: 1px solid #eff3f8;
+  }
+  .stage-actions .btn,
+  .pattern-option-header .btn,
+  .spec-item .btn,
+  .option-task-card .btn {
+    min-width: 42px !important;
+    min-height: 42px !important;
+  }
+  .stage-meta {
+    column-gap: .55rem;
+    row-gap: .45rem;
+  }
+  .pattern-option-header {
+    padding: .75rem;
+    flex-wrap: wrap;
+  }
+  .pattern-option-title {
+    overflow-wrap: anywhere;
+  }
+  .pattern-option-body {
+    padding: .7rem;
+  }
+  #templateWorkspaceContent .spec-item > .d-flex {
+    flex-wrap: wrap;
+    gap: .65rem;
+  }
+  #templateWorkspaceContent .spec-item > .d-flex > div:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .stage-modal .modal-dialog,
+  #saveSessionModal .modal-dialog {
+    margin: .5rem;
+    max-width: calc(100% - 1rem);
+  }
+  .stage-modal .modal-content,
+  #saveSessionModal .modal-content {
+    border-radius: 13px;
+    max-height: calc(100dvh - 1rem);
+    overflow-y: auto;
+  }
+  .stage-modal .modal-header,
+  #saveSessionModal .modal-header {
+    padding: .85rem 1rem !important;
+  }
+  .stage-modal .modal-body,
+  #saveSessionModal .modal-body {
+    padding: .9rem !important;
+  }
+  .stage-modal .stage-modal-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .stage-modal .stage-modal-tabs .nav-link {
+    white-space: nowrap;
+    padding: .75rem .8rem;
+    min-height: 44px;
+  }
+  .template-editing-toolbar {
+    padding: .65rem .7rem calc(.7rem + env(safe-area-inset-bottom, 0px));
+  }
+  .template-editing-toolbar-inner {
+    gap: .65rem !important;
+  }
+  .template-editing-toolbar-summary {
+    width: 100%;
+    gap: .6rem !important;
+    justify-content: space-between;
+  }
+  .template-editing-toolbar-summary .badge {
+    padding: .45rem .7rem !important;
+    white-space: nowrap;
+  }
+  .template-editing-toolbar-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0,1fr) minmax(0,1.5fr);
+    width: 100%;
+  }
+  .template-editing-toolbar-actions .btn {
+    width: 100%;
+    min-width: 0 !important;
+    min-height: 48px;
+    font-size: .88rem;
+    padding: .6rem !important;
+  }
+}
+@media (max-width: 380px) {
+  .template-editing-toolbar-summary {
+    align-items: flex-start !important;
+    flex-direction: column;
+    gap: .25rem !important;
+  }
+  #templateWorkspaceTabs .nav-link {
+    font-size: .79rem;
+    padding-inline: .6rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-card, .pattern-workflow-card, .workspace-tabs .nav-link {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* Template identity header, action grouping, and floating draft space. */
+.template-master-card {
+  border: 1px solid #e0eaf4 !important;
+  border-right: 5px solid var(--prod-primary) !important;
+  border-radius: 16px !important;
+  background: linear-gradient(115deg, #fff 60%, #f5faff 100%);
+  box-shadow: 0 9px 26px rgba(20, 46, 80, .055) !important;
+}
+.template-master-card h2 {
+  font-size: clamp(1.2rem, 2.4vw, 1.8rem);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.template-master-card .btn {
+  min-height: 40px;
+  border-radius: 10px !important;
+}
+.template-has-pending-edits {
+  padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 767.98px) {
+  .template-master-card .card-body {
+    padding: 1rem !important;
+  }
+  .template-master-card .card-body > .d-flex {
+    align-items: stretch !important;
+  }
+  .template-master-card .card-body > .d-flex > div {
+    min-width: 0;
+    width: 100%;
+  }
+  .template-master-card .card-body > .d-flex > div:last-child {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: .5rem !important;
+  }
+  .template-master-card .card-body > .d-flex > div:last-child .btn {
+    min-width: 0;
+    width: 100%;
+    justify-content: center;
+    padding: .55rem .65rem;
+    font-size: .85rem;
+  }
+  .template-master-card .card-body > .d-flex > div:last-child .btn:first-child:last-child {
+    grid-column: 1 / -1;
+  }
+  .template-has-pending-edits {
+    padding-bottom: calc(205px + env(safe-area-inset-bottom, 0px));
+  }
+}

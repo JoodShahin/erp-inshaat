@@ -9,17 +9,19 @@ export interface PatternSelectionReference {
  * Produces a stable, deterministic canonical string representation of a production order line's configuration.
  *
  * Rules:
- * 1. Only immutable IDs are used (templateId, templatePatternId, selectedOptionId). Names are NEVER used.
+ * 1. Only immutable IDs are used (templateId, templatePatternId, selectedOptionId, versionId). Names are NEVER used.
  * 2. Quantity is strictly excluded from configuration identity.
  * 3. Selections are always sorted deterministically by templatePatternId ASC.
- * 4. For templates without patterns (empty selections), templateId alone forms the canonical representation.
+ * 4. Backward compatibility: if versionId is omitted/undefined, hash remains 100% identical to legacy format.
  */
 export function canonicalizeLineConfiguration(
   templateId: string,
-  selections: PatternSelectionReference[] = []
+  selections: PatternSelectionReference[] = [],
+  versionId?: string
 ): string {
+  const versionPrefix = versionId ? `${versionId}:` : '';
   if (!selections || selections.length === 0) {
-    return templateId;
+    return `${versionPrefix}${templateId}`;
   }
 
   const sortedSelections = [...selections].sort((a, b) =>
@@ -27,7 +29,7 @@ export function canonicalizeLineConfiguration(
   );
 
   const parts = sortedSelections.map((s) => `${s.templatePatternId}:${s.selectedOptionId}`);
-  return `${templateId}|${parts.join('|')}`;
+  return `${versionPrefix}${templateId}|${parts.join('|')}`;
 }
 
 /**
@@ -35,8 +37,9 @@ export function canonicalizeLineConfiguration(
  */
 export function hashLineConfiguration(
   templateId: string,
-  selections: PatternSelectionReference[] = []
+  selections: PatternSelectionReference[] = [],
+  versionId?: string
 ): string {
-  const canonical = canonicalizeLineConfiguration(templateId, selections);
+  const canonical = canonicalizeLineConfiguration(templateId, selections, versionId);
   return createHash('sha256').update(canonical, 'utf8').digest('hex').toLowerCase();
 }

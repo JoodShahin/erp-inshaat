@@ -39,15 +39,14 @@
           </div>
 
           <div class="row g-3 mb-4">
-            <!-- Technical Code -->
+            <!-- Technical Code Notice (Auto-Generated) -->
             <div class="col-md-6">
-              <label for="templateCode" class="form-label fw-bold text-dark">الكود التقني (Code) <span class="text-danger">*</span></label>
-              <div class="input-group has-validation">
+              <label class="form-label fw-bold text-dark">الكود التقني (Code)</label>
+              <div class="input-group">
                 <span class="input-group-text bg-light text-muted"><i class="fa-solid fa-barcode"></i></span>
-                <input type="text" class="form-control text-uppercase font-monospace" id="templateCode" name="code" required maxlength="50" pattern="^[A-Za-z][A-Za-z0-9_-]*$" placeholder="مثال: ROOM-A">
-                <div class="invalid-feedback">يرجى إدخال كود تقني صالح (أحرف إنجليزية وأرقام وشرطات).</div>
+                <input type="text" class="form-control bg-light text-muted font-monospace" disabled value="توليد تلقائي (مثل PT-000001)">
               </div>
-              <div class="form-text text-muted">رمز فريد وثابت يبدأ بحرف إنجليزي ولا يمكن تغييره لاحقاً.</div>
+              <div class="form-text text-muted">يولده الخادم تلقائياً بصيغة تسلسلية مع إنشاء الإصدار الأولي 1.0.</div>
             </div>
 
             <!-- Reference Number -->
@@ -57,7 +56,7 @@
                 <span class="input-group-text bg-light text-muted"><i class="fa-solid fa-hashtag"></i></span>
                 <input type="text" class="form-control" id="templateReferenceNumber" name="referenceNumber" maxlength="100" placeholder="مثال: REF-A01-2026">
               </div>
-              <div class="form-text text-muted">الرقم المرجعي المستخدم في المخططات أو دفاتر الشروط.</div>
+              <div class="form-text text-muted">الرقم المرجعي الاختياري المستخدم في المخططات أو دفاتر الشروط.</div>
             </div>
           </div>
 
@@ -109,14 +108,12 @@
       }
 
       const name = document.getElementById('templateName').value.trim();
-      const code = document.getElementById('templateCode').value.trim().toUpperCase();
       const referenceNumber = document.getElementById('templateReferenceNumber').value.trim() || undefined;
       const description = document.getElementById('templateDescription').value.trim() || undefined;
       const isActive = document.getElementById('templateIsActive').checked;
 
       const payload = {
         name,
-        code,
         referenceNumber,
         description,
         isActive
@@ -135,7 +132,7 @@
         const data = await res.json();
         if (res.ok && data.success) {
           const createdTemplateId = data.data.id;
-          sessionStorage.setItem('pendingToast', 'تم إنشاء هوية القالب بنجاح. يمكنك الآن إكمال المواصفات ومراحل الإنتاج.');
+          sessionStorage.setItem('pendingToast', 'تم إنشاء هوية القالب بنجاح مع الإصدار الأولي 1.0.');
           window.location.href = `/production/templates/${createdTemplateId}`;
         } else {
           const msg = data.message || (data.errors ? Object.values(data.errors).flat().join('، ') : 'حدث خطأ أثناء حفظ القالب');

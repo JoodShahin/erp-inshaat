@@ -14,6 +14,8 @@ import { InventoryCategoryEntity } from '../modules/inventory/category/inventory
 import { InventoryProductEntity } from '../modules/inventory/product/inventory-product.entity.js';
 import { InventoryProductUnitEntity } from '../modules/inventory/product/inventory-product-unit.entity.js';
 import { ProductionTemplateEntity } from '../modules/production/template/production-template.entity.js';
+import { ProductionTemplateVersionEntity } from '../modules/production/template-version/production-template-version.entity.js';
+import { ProductionTemplateSequenceEntity } from '../modules/production/template/production-template-sequence.entity.js';
 import { ProductionTemplateSpecificationEntity } from '../modules/production/template-specification/production-template-specification.entity.js';
 import { ProductionTemplateStageEntity } from '../modules/production/template-stage/production-template-stage.entity.js';
 import { ProductionTemplateStageMaterialEntity } from '../modules/production/template-stage-material/production-template-stage-material.entity.js';
@@ -56,6 +58,17 @@ import { AddSpecificationsToExecutionPlan1710000000018 } from '../database/migra
 import { AddAvailablePatternOptionsToExecutionPlan1710000000019 } from '../database/migrations/1710000000019-AddAvailablePatternOptionsToExecutionPlan.js';
 import { AddTaskDurationUnitFields1710000000020 } from '../database/migrations/1710000000020-AddTaskDurationUnitFields.js';
 import { MakeProductionUnitOrderNullable1710000000022 } from '../database/migrations/1710000000022-MakeProductionUnitOrderNullable.js';
+import { CreateProductionTemplateVersionAndSequence1710000000023 } from '../database/migrations/1710000000023-CreateProductionTemplateVersionAndSequence.js';
+import { CreateProductionTemplateStoredFiles1710000000024 } from '../database/migrations/1710000000024-CreateProductionTemplateStoredFiles.js';
+import { AddTemplateVersionToProductionOrderLine1710000000025 } from '../database/migrations/1710000000025-AddTemplateVersionToProductionOrderLine.js';
+import { CreateProductionTemplateEditingIdempotencyAndTokens1710000000026 } from '../database/migrations/1710000000026-CreateProductionTemplateEditingIdempotencyAndTokens.js';
+import { OptimizeProductionTemplateVersioningIndexes1710000000027 } from '../database/migrations/1710000000027-OptimizeProductionTemplateVersioningIndexes.js';
+import { CreateProductionTemplateFileCleanupQueue1710000000028 } from '../database/migrations/1710000000028-CreateProductionTemplateFileCleanupQueue.js';
+import { HardenProductionTemplateFileCleanup1710000000029 } from '../database/migrations/1710000000029-HardenProductionTemplateFileCleanup.js';
+import { ProductionTemplateStoredFileEntity } from '../modules/production/template-stored-file/production-template-stored-file.entity.js';
+import { ProductionTemplateFileCleanupQueueEntity } from '../modules/production/template-stored-file/production-template-file-cleanup-queue.entity.js';
+import { ProductionTemplateEditingIdempotencyEntity } from '../modules/production/template-editing/production-template-editing-idempotency.entity.js';
+import { ProductionTemplateUploadTokenEntity } from '../modules/production/template-editing/production-template-upload-token.entity.js';
 
 export const databaseConfig: DataSourceOptions = {
   type: 'mysql',
@@ -81,6 +94,8 @@ export const databaseConfig: DataSourceOptions = {
     InventoryProductEntity,
     InventoryProductUnitEntity,
     ProductionTemplateEntity,
+    ProductionTemplateVersionEntity,
+    ProductionTemplateSequenceEntity,
     ProductionTemplateSpecificationEntity,
     ProductionTemplateStageEntity,
     ProductionTemplateStageMaterialEntity,
@@ -91,6 +106,10 @@ export const databaseConfig: DataSourceOptions = {
     ProductionTemplatePatternOptionTaskEntity,
     ProductionTemplatePatternOptionTaskMaterialEntity,
     ProductionTemplatePatternOptionTaskAttachmentEntity,
+    ProductionTemplateStoredFileEntity,
+    ProductionTemplateFileCleanupQueueEntity,
+    ProductionTemplateEditingIdempotencyEntity,
+    ProductionTemplateUploadTokenEntity,
     ProductionOrderSequenceEntity,
     ProductionOrderEntity,
     ProductionOrderLineEntity,
@@ -125,6 +144,13 @@ export const databaseConfig: DataSourceOptions = {
     AddTaskDurationUnitFields1710000000020,
     CreateProductionYardTemplate1710000000021,
     MakeProductionUnitOrderNullable1710000000022,
+    CreateProductionTemplateVersionAndSequence1710000000023,
+    CreateProductionTemplateStoredFiles1710000000024,
+    AddTemplateVersionToProductionOrderLine1710000000025,
+    CreateProductionTemplateEditingIdempotencyAndTokens1710000000026,
+    OptimizeProductionTemplateVersioningIndexes1710000000027,
+    CreateProductionTemplateFileCleanupQueue1710000000028,
+    HardenProductionTemplateFileCleanup1710000000029,
   ],
   subscribers: [],
 };

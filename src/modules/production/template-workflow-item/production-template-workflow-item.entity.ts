@@ -11,6 +11,7 @@ import {
   Index,
 } from 'typeorm';
 import { ProductionTemplateEntity } from '../template/production-template.entity.js';
+import { ProductionTemplateVersionEntity } from '../template-version/production-template-version.entity.js';
 import { ProductionTemplateStageEntity } from '../template-stage/production-template-stage.entity.js';
 import { ProductionTemplatePatternEntity } from '../template-pattern/production-template-pattern.entity.js';
 
@@ -24,6 +25,10 @@ export class ProductionTemplateWorkflowItemEntity {
   @Index('IDX_production_template_workflow_item_template_id')
   @Column({ name: 'template_id', type: 'varchar', length: 36 })
   templateId!: string;
+
+  @Index('IDX_production_template_workflow_item_version_id')
+  @Column({ name: 'version_id', type: 'varchar', length: 36, nullable: true })
+  versionId!: string | null;
 
   @Column({ name: 'item_type', type: 'varchar', length: 20 })
   itemType!: ProductionTemplateWorkflowItemType;
@@ -57,6 +62,15 @@ export class ProductionTemplateWorkflowItemEntity {
   })
   @JoinColumn({ name: 'template_id' })
   template?: ProductionTemplateEntity;
+
+  @ManyToOne(() => ProductionTemplateVersionEntity, (ver) => ver.workflowItems, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    eager: false,
+    nullable: true,
+  })
+  @JoinColumn({ name: 'version_id' })
+  version?: ProductionTemplateVersionEntity;
 
   @OneToOne(() => ProductionTemplateStageEntity, (stage) => stage.workflowItem, {
     onDelete: 'CASCADE',

@@ -18,6 +18,7 @@ import { ProductionOrderSequenceEntity } from './production-order-sequence.entit
 import { ProductionOrderLineEntity } from '../order-line/production-order-line.entity.js';
 import { ProductionOrderLinePatternSelectionEntity } from '../order-line-pattern-selection/production-order-line-pattern-selection.entity.js';
 import { ProductionTemplateEntity } from '../template/production-template.entity.js';
+import { ProductionTemplateVersionEntity } from '../template-version/production-template-version.entity.js';
 import { ProductionTemplatePatternEntity } from '../template-pattern/production-template-pattern.entity.js';
 import { ProductionTemplatePatternOptionEntity } from '../template-pattern-option/production-template-pattern-option.entity.js';
 import { ProductionTemplateWorkflowItemEntity } from '../template-workflow-item/production-template-workflow-item.entity.js';
@@ -52,6 +53,7 @@ import {
 } from './production-order-guard.service.js';
 import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 import { NotFoundError } from '../../../common/errors/not-found.error.js';
+import { compareVersions } from '../template-version/version-number.helper.js';
 
 export class ProductionOrderService {
   private orderRepo: Repository<ProductionOrderEntity>;
@@ -383,9 +385,11 @@ export class ProductionOrderService {
    */
   private async resolveLineConfigurationInternal(
     dto: AddProductionOrderLineDto,
-    manager: EntityManager
+    manager: EntityManager,
+    existingVersionId?: string | null
   ): Promise<{
     templateId: string;
+    versionId: string | null;
     quantity: number;
     selectionsToCreate: Array<{ templatePatternId: string; selectedOptionId: string }>;
     configHash: string;
@@ -406,10 +410,39 @@ export class ProductionOrderService {
       throw new BusinessRuleError('لا يمكن إضافة قالب تصنيع غير فعال إلى طلب الإنتاج', 'PRODUCTION_ORDER_TEMPLATE_INACTIVE');
     }
 
-    // Load active patterns and their active options
+    // Resolve templateVersionId: explicit on dto, existingVersionId, or latest version
+    const versionRepo = manager.getRepository(ProductionTemplateVersionEntity);
+    let resolvedVersionId: string | null = null;
+    const requestedVersionId = (dto as any).templateVersionId || existingVersionId;
+    if (requestedVersionId) {
+      const explicitVer = await versionRepo.findOne({
+        where: { id: requestedVersionId, templateId: dto.templateId, deletedAt: IsNull() },
+      });
+      if (!explicitVer) {
+        throw new BusinessRuleError(
+          `إصدار القالب المحدد (${requestedVersionId}) غير موجود أو لا ينتمي لهذا القالب`,
+          'PRODUCTION_TEMPLATE_VERSION_INVALID'
+        );
+      }
+      resolvedVersionId = explicitVer.id;
+    } else {
+      const activeVersions = await versionRepo.find({
+        where: { templateId: dto.templateId, deletedAt: IsNull() },
+      });
+      if (activeVersions.length > 0) {
+        activeVersions.sort((a, b) => compareVersions(b.version, a.version));
+        resolvedVersionId = activeVersions[0].id;
+      }
+    }
+
+    // Load active patterns filtered by versionId if available
     const patternRepo = manager.getRepository(ProductionTemplatePatternEntity);
+    const patternWhere: any = { templateId: dto.templateId, deletedAt: IsNull() };
+    if (resolvedVersionId) {
+      patternWhere.versionId = resolvedVersionId;
+    }
     const activePatterns = await patternRepo.find({
-      where: { templateId: dto.templateId, deletedAt: IsNull() },
+      where: patternWhere,
       relations: { options: true },
       order: { createdAt: 'ASC' },
     });
@@ -504,10 +537,11 @@ export class ProductionOrderService {
       }
     }
 
-    const configHash = hashLineConfiguration(dto.templateId, selectionsToCreate);
+    const configHash = hashLineConfiguration(dto.templateId, selectionsToCreate, resolvedVersionId || undefined);
 
     return {
       templateId: dto.templateId,
+      versionId: resolvedVersionId,
       quantity: dto.quantity,
       selectionsToCreate,
       configHash,
@@ -543,6 +577,7 @@ export class ProductionOrderService {
       const newLine = lineRepo.create({
         orderId,
         templateId: resolved.templateId,
+        templateVersionId: resolved.versionId,
         quantity: resolved.quantity,
         sortOrder: nextSortOrder,
         activeConfigurationHash: resolved.configHash,
@@ -604,6 +639,7 @@ export class ProductionOrderService {
       // 2. Resolve configuration for each line & detect intra-batch duplicates
       const resolvedLines: Array<{
         templateId: string;
+        versionId: string | null;
         quantity: number;
         selectionsToCreate: Array<{ templatePatternId: string; selectedOptionId: string }>;
         configHash: string;
@@ -644,6 +680,7 @@ export class ProductionOrderService {
         const newLine = lineRepo.create({
           orderId,
           templateId: resLine.templateId,
+          templateVersionId: resLine.versionId,
           quantity: resLine.quantity,
           sortOrder: nextSortOrder,
           activeConfigurationHash: resLine.configHash,
@@ -843,8 +880,12 @@ export class ProductionOrderService {
 
       // 3. Validate Pattern belongs to Line's Template and is active
       const patternRepo = manager.getRepository(ProductionTemplatePatternEntity);
+      const patternWhere: any = { id: patternId, templateId: line.templateId, deletedAt: IsNull() };
+      if (line.templateVersionId) {
+        patternWhere.versionId = line.templateVersionId;
+      }
       const pattern = await patternRepo.findOne({
-        where: { id: patternId, templateId: line.templateId, deletedAt: IsNull() },
+        where: patternWhere,
       });
 
       if (!pattern) {
@@ -898,7 +939,7 @@ export class ProductionOrderService {
         });
       }
 
-      const wouldBeHash = hashLineConfiguration(line.templateId, wouldBeSelections);
+      const wouldBeHash = hashLineConfiguration(line.templateId, wouldBeSelections, line.templateVersionId || undefined);
       await this.assertConfigurationAvailable(orderId, wouldBeHash, lineId, manager);
 
       // 6. Find or create selection record
@@ -981,8 +1022,12 @@ export class ProductionOrderService {
 
       // 4. Load active patterns and active options
       const patternRepo = manager.getRepository(ProductionTemplatePatternEntity);
+      const reconcilePatternWhere: any = { templateId: line.templateId, deletedAt: IsNull() };
+      if (line.templateVersionId) {
+        reconcilePatternWhere.versionId = line.templateVersionId;
+      }
       const activePatterns = await patternRepo.find({
-        where: { templateId: line.templateId, deletedAt: IsNull() },
+        where: reconcilePatternWhere,
         relations: { options: true },
         order: { createdAt: 'ASC' },
       });
@@ -1076,7 +1121,7 @@ export class ProductionOrderService {
         }
       }
 
-      const resultingHash = hashLineConfiguration(line.templateId, resultingSelections);
+      const resultingHash = hashLineConfiguration(line.templateId, resultingSelections, line.templateVersionId || undefined);
       await this.assertConfigurationAvailable(orderId, resultingHash, lineId, manager);
 
       // 7. Remove obsolete selections (pointing to patterns no longer active)
@@ -1198,6 +1243,7 @@ export class ProductionOrderService {
         isExisting: boolean;
         lineId?: string;
         templateId: string;
+        versionId: string | null;
         quantity: number;
         selectionsToCreate: Array<{ templatePatternId: string; selectedOptionId: string }>;
         configHash: string;
@@ -1207,13 +1253,15 @@ export class ProductionOrderService {
       const targetConfigHashes = new Set<string>();
 
       for (const lineItem of dto.lines) {
+        const existingLine = lineItem.id ? currentLines.find(cl => cl.id === lineItem.id) : null;
         const resolved = await this.resolveLineConfigurationInternal(
           {
             templateId: lineItem.templateId,
             quantity: lineItem.quantity,
             patternSelections: lineItem.patternSelections,
           },
-          manager
+          manager,
+          existingLine ? existingLine.templateVersionId : undefined
         );
 
         if (targetConfigHashes.has(resolved.configHash)) {
@@ -1229,6 +1277,7 @@ export class ProductionOrderService {
           isExisting: Boolean(lineItem.id),
           lineId: lineItem.id,
           templateId: resolved.templateId,
+          versionId: resolved.versionId,
           quantity: resolved.quantity,
           selectionsToCreate: resolved.selectionsToCreate,
           configHash: resolved.configHash,
@@ -1276,6 +1325,7 @@ export class ProductionOrderService {
           const newLine = lineRepo.create({
             orderId,
             templateId: r.templateId,
+            templateVersionId: r.versionId,
             quantity: r.quantity,
             sortOrder: denseSortOrder,
             activeConfigurationHash: null,
@@ -1882,6 +1932,7 @@ export class ProductionOrderService {
     // 2. Fetch active Lines
     const lines = await lineRepo.find({
       where: { orderId, deletedAt: IsNull() },
+      relations: { templateVersion: true },
       order: { sortOrder: 'ASC', createdAt: 'ASC' },
     });
 
@@ -2137,6 +2188,10 @@ export class ProductionOrderService {
         id: line.id,
         orderId: line.orderId,
         templateId: line.templateId,
+        templateVersionId: line.templateVersionId,
+        templateVersion: line.templateVersion
+          ? { id: line.templateVersion.id, version: line.templateVersion.version }
+          : null,
         quantity: line.quantity,
         requestedQuantity,
         linkedQuantity,

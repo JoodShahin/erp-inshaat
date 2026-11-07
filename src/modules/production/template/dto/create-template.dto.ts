@@ -4,8 +4,6 @@ import {
   IsOptional,
   IsBoolean,
   MaxLength,
-  Length,
-  Matches,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
@@ -28,15 +26,6 @@ export class CreateProductionTemplateDto {
   })
   referenceNumber?: string | null;
 
-  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
-  @IsString({ message: 'رمز القالب التقني يجب أن يكون نصاً' })
-  @IsNotEmpty({ message: 'رمز القالب التقني مطلوب' })
-  @Length(2, 50, { message: 'رمز القالب التقني يجب أن يتكون من حرفين إلى 50 حرفاً' })
-  @Matches(/^[A-Z][A-Z0-9_-]*$/, {
-    message: 'رمز القالب التقني يجب أن يبدأ بحرف إنجليزي كبير ويحتوي فقط على أحرف كبيرة وأرقام وشرطات سفلية أو واصلات',
-  })
-  code!: string;
-
   @IsOptional()
   @IsString({ message: 'وصف القالب يجب أن يكون نصاً' })
   @Transform(({ value }: { value: unknown }) => {
@@ -56,6 +45,6 @@ export class CreateProductionTemplateDto {
     }
     return value;
   })
-  @IsBoolean({ message: 'حالة القالب يجب أن تكون قيمة منطقية' })
+  @IsBoolean({ message: 'حالة نشاط القالب يجب أن تكون قيمة منطقية' })
   isActive?: boolean;
 }

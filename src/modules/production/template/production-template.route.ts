@@ -33,6 +33,9 @@ import { UpdateTemplatePatternOptionTaskMaterialDto } from '../template-pattern-
 import { UpdatePatternOptionTaskAttachmentDto } from '../template-pattern-option-task-attachment/dto/update-task-attachment.dto.js';
 import { ReorderPatternOptionTaskAttachmentsDto } from '../template-pattern-option-task-attachment/dto/reorder-task-attachments.dto.js';
 import { upload } from '../../../config/multer.config.js';
+import { CommitTemplateEditingSessionDto } from '../template-editing/dto/commit-template-editing-session.dto.js';
+import { productionTemplateEditingService } from '../template-editing/production-template-editing.service.js';
+import { BusinessRuleError } from '../../../common/errors/business-rule.error.js';
 
 const productionTemplateApiRouter: Router = Router();
 
@@ -73,6 +76,50 @@ productionTemplateApiRouter.get(
   ]),
   validateUuidParam('id'),
   productionTemplateController.getOrderConfiguration
+);
+
+// POST /api/production/templates/:id/editing/commit - Commit atomic editing session
+productionTemplateApiRouter.post(
+  '/:id/editing/commit',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_UPDATE),
+  validateUuidParam('id'),
+  validateDto(CommitTemplateEditingSessionDto),
+  productionTemplateController.commitEditingSession
+);
+
+// POST /api/production/templates/:id/editing/preview - Preview atomic editing session
+productionTemplateApiRouter.post(
+  '/:id/editing/preview',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_UPDATE),
+  validateUuidParam('id'),
+  validateDto(CommitTemplateEditingSessionDto),
+  productionTemplateController.previewEditingSession
+);
+
+// POST /api/production/templates/:id/editing/upload - Upload file for editing session
+productionTemplateApiRouter.post(
+  '/:id/editing/upload',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_UPDATE),
+  validateUuidParam('id'),
+  upload.single('file'),
+  productionTemplateController.uploadEditingAttachment
+);
+
+// GET /api/production/templates/:id/versions - List template versions
+productionTemplateApiRouter.get(
+  '/:id/versions',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_VIEW),
+  validateUuidParam('id'),
+  productionTemplateController.listTemplateVersions
+);
+
+// GET /api/production/templates/:id/versions/:versionId - Get template details for a specific version
+productionTemplateApiRouter.get(
+  '/:id/versions/:versionId',
+  requirePermission(SystemPermission.PRODUCTION_TEMPLATE_VIEW),
+  validateUuidParam('id'),
+  validateUuidParam('versionId'),
+  productionTemplateController.getTemplateVersionById
 );
 
 // GET /api/production/templates/:id - Get template details with stages & specifications
@@ -148,6 +195,31 @@ productionTemplateApiRouter.delete(
   validateUuidParam('specId'),
   productionTemplateController.deleteSpecification
 );
+
+// Legacy direct stage/pattern/task mutation endpoints are allowed while a template
+// its latest version has not been used by a room. Once used, changes must flow through
+// /:id/editing/commit so the snapshot/versioning policy cannot be bypassed.
+// The atomic editing routes and descriptive specification routes are registered above.
+productionTemplateApiRouter.use('/:id', async (req, _res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    next();
+    return;
+  }
+  try {
+    const templateId = req.params.id;
+    if (typeof templateId === 'string' &&
+        await productionTemplateEditingService.hasProductionUnitForTemplateVersion(templateId)) {
+      next(new BusinessRuleError(
+        'الإصدار الحالي للقالب مرتبط بغرفة إنتاج. يجب حفظ تعديلات مراحل الإنتاج والأنماط عبر جلسة التحرير لتطبيق قواعد الإصدارات.',
+        'PRODUCTION_TEMPLATE_VERSIONED_EDIT_REQUIRED'
+      ));
+      return;
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 // ==========================================
 // 3. STAGES ENDPOINTS

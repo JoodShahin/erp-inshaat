@@ -13,6 +13,7 @@ export interface ProductionOrderLineDto {
   id: string;
   orderId: string;
   templateId: string;
+  templateVersionId?: string | null;
   quantity: number;
   requestedQuantity: number;
   linkedQuantity: number;
@@ -23,6 +24,7 @@ export interface ProductionOrderLineDto {
   createdAt: Date;
   updatedAt: Date;
   template?: ProductionOrderLineTemplateSummaryDto;
+  templateVersion?: { id: string; version: string } | null;
   patternSelections: ProductionOrderLinePatternSelectionDto[];
   executionPlan?: ExecutionPlanSummaryDto | null;
   unitCount?: number;

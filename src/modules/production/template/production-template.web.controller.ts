@@ -86,7 +86,8 @@ export class ProductionTemplateWebController {
       const currentUser = req.user as AuthPrincipal;
       const { id } = req.params;
 
-      const template = await this.templateService.getTemplateById(id as string);
+      const versionId = typeof req.query.versionId === 'string' ? req.query.versionId : undefined;
+      const template = await this.templateService.getTemplateById(id as string, versionId);
 
       const canUpdateTemplate = await authorizationService.hasPermission(
         currentUser,
@@ -138,8 +139,9 @@ export class ProductionTemplateWebController {
         patterns: template.patterns || [],
         departments,
         initialStages,
-        canUpdateTemplate,
-        canDeleteTemplate,
+        // Historical versions never expose mutation controls, regardless of permissions.
+        canUpdateTemplate: canUpdateTemplate && Boolean(template.currentVersion?.isLatest),
+        canDeleteTemplate: canDeleteTemplate && Boolean(template.currentVersion?.isLatest),
         safeJsonStringify,
       });
     } catch (error) {
