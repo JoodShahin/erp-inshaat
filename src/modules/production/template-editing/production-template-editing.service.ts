@@ -95,25 +95,33 @@ export class ProductionTemplateEditingService {
   }
 
   /**
-   * A template is still mutable in-place until its first physical production
-   * unit exists. Mere inclusion in an order/memorandum does not freeze it.
-   * Include archived/cancelled units: an historical room must never lose its
-   * snapshot guarantees just because it is no longer active.
+   * A version becomes immutable once a physical production room was created
+   * from THAT version. Rooms using older versions do not freeze the latest.
    *
-   * Production units are tied to their source template through their
-   * execution plan (production_unit.plan_id -> production_execution_plan.template_id).
+   * A unit refers to a production plan and order line; the line stores its
+   * selected template_version_id. An order line or plan without a unit is
+   * never sufficient. Include archived/cancelled units to preserve history.
+   *
+   * When no version is supplied, resolve latest for legacy route guards.
    */
-  async hasEverBeenAssignedToProductionUnit(
+  async hasProductionUnitForTemplateVersion(
     templateId: string,
-    manager: EntityManager = this.dataSource.manager
+    manager: EntityManager = this.dataSource.manager,
+    versionId?: string
   ): Promise<boolean> {
+    const resolvedVersionId = versionId ||
+      (await this.versionService.getLatestVersion(templateId, manager)).id;
     const rows: Array<{ linked: number }> = await manager.query(
       `SELECT 1 AS linked
          FROM production_unit u
          INNER JOIN production_execution_plan p ON p.id = u.plan_id
+         INNER JOIN production_order_line l
+           ON l.id = u.order_line_id AND l.id = p.order_line_id
         WHERE p.template_id = ?
+          AND l.template_id = ?
+          AND l.template_version_id = ?
         LIMIT 1`,
-      [templateId]
+      [templateId, templateId, resolvedVersionId]
     );
     return rows.length > 0;
   }
@@ -239,11 +247,11 @@ export class ProductionTemplateEditingService {
         return cleanResult;
       }
 
-      const linkedToRoom = await this.hasEverBeenAssignedToProductionUnit(templateId, manager);
+      const linkedToRoom = await this.hasProductionUnitForTemplateVersion(templateId, manager, baseVersion.id);
 
-      // 7. Before the first room, all changes (including explicit NEW_VERSION)
-      // update the current latest version in-place. Once a room exists,
-      // restore normal STRUCTURAL/MINOR and explicit versioning rules.
+      // 7. If no room used the LATEST version, all changes (including explicit
+      // NEW_VERSION) stay in that version. Rooms using historical versions
+      // must not force a new version for changes to this unused one.
       let shouldCreateNewVersion = false;
       if (linkedToRoom) {
         if (normResult.classification === 'STRUCTURAL') {
@@ -384,11 +392,11 @@ export class ProductionTemplateEditingService {
       manager
     );
 
-    const linkedToRoom = await this.hasEverBeenAssignedToProductionUnit(templateId, manager);
+    const linkedToRoom = await this.hasProductionUnitForTemplateVersion(templateId, manager, baseVersion.id);
     const isNewVersionMandatory = linkedToRoom && normResult.classification === 'STRUCTURAL';
     const allowsOverwrite = !linkedToRoom || normResult.classification === 'MINOR';
     const summary = !linkedToRoom
-      ? 'القالب لم يرتبط بأي غرفة إنتاج بعد؛ ستُحفظ جميع التعديلات داخل الإصدار الحالي دون إنشاء إصدار جديد'
+      ? 'هذا الإصدار لم يرتبط بأي غرفة إنتاج بعد؛ ستُحفظ جميع التعديلات داخله دون إنشاء إصدار جديد'
       : normResult.classification === 'STRUCTURAL'
         ? 'تتضمن الجلسة تغييرات هيكلية تتطلب حتماً إنشاء إصدار جديد للقالب'
         : normResult.classification === 'MINOR'
