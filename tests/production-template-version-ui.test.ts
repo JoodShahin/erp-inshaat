@@ -96,7 +96,7 @@ describe('Template version navigation and historical mode regression', () => {
 
   it('requires versioned editing for direct workflow API mutations once a room exists', () => {
     assert.match(routes, /productionTemplateApiRouter\.use\('\/:id', async \(req, _res, next\)/);
-    assert.match(routes, /hasEverBeenAssignedToProductionUnit\(templateId\)/);
+    assert.match(routes, /hasProductionUnitForTemplateVersion\(templateId\)/);
     assert.match(routes, /PRODUCTION_TEMPLATE_VERSIONED_EDIT_REQUIRED/);
     assert.ok(routes.indexOf("'/:id/editing/commit'") < routes.indexOf("productionTemplateApiRouter.use('/:id'"));
     assert.ok(routes.indexOf("productionTemplateApiRouter.use('/:id'") < routes.indexOf("'/:id/stages'"));
