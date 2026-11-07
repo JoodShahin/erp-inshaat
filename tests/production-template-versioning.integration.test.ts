@@ -457,6 +457,110 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
       assert.strictEqual((await templateService.getTemplateById(template.id, third.targetVersionId)).stages.length, 3);
     });
 
+    it('checks room linkage per latest VERSION, not across the whole template', async () => {
+      const template = await templateService.createTemplate({
+        name: 'قالب ارتباط الغرف بكل إصدار',
+        isActive: true,
+      });
+      const v1 = await versionService.getLatestVersion(template.id);
+      const firstRevision = await getRevision(template.id, v1.id);
+      await editingService.commitEditingSession(
+        template.id,
+        { baseVersionId: v1.id, baseRevision: firstRevision, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'v1-stage',
+            payload: { name: 'مرحلة النسخة الأولى', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+
+      // An actual room using 1.0 freezes 1.0.
+      const oldRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(oldRoomId);
+      let rev = await getRevision(template.id, v1.id);
+      const fork = await editingService.commitEditingSession(
+        template.id,
+        { baseVersionId: v1.id, baseRevision: rev, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'v11-stage',
+            payload: { name: 'مرحلة جديدة للإصدار الثاني', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(fork.createdNewVersion, true);
+      assert.strictEqual(fork.targetVersionNumber, '1.1');
+      const v11 = await versionService.getLatestVersion(template.id);
+      assert.strictEqual(v11.id, fork.targetVersionId);
+
+      // An archived room using historical 1.0 must not freeze unused 1.1.
+      await AppDataSource.getRepository(ProductionUnitEntity).softDelete({ id: oldRoomId! });
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(template.id), false);
+      rev = await getRevision(template.id, v11.id);
+      const preview = await editingService.previewEditingSession(
+        template.id,
+        { baseVersionId: v11.id, baseRevision: rev, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'still-v11',
+            payload: { name: 'مرحلة إضافية دون غرفة للإصدار الثاني', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(preview.classification, 'STRUCTURAL');
+      assert.strictEqual(preview.isTemplateUsedByRoom, false);
+      assert.strictEqual(preview.isNewVersionMandatory, false);
+      assert.strictEqual(preview.allowsOverwrite, true);
+
+      // Even explicit NEW_VERSION must update UNUSED 1.1 in place.
+      const direct = await editingService.commitEditingSession(
+        template.id,
+        { baseVersionId: v11.id, baseRevision: rev, commitDecision: 'NEW_VERSION',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'still-v11',
+            payload: { name: 'مرحلة إضافية دون غرفة للإصدار الثاني', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(direct.createdNewVersion, false);
+      assert.strictEqual(direct.targetVersionId, v11.id);
+      assert.strictEqual(direct.targetVersionNumber, '1.1');
+      assert.strictEqual((await versionService.listVersions(template.id)).length, 2);
+      assert.strictEqual((await templateService.getTemplateById(template.id, v1.id)).stages.length, 1);
+      assert.strictEqual((await templateService.getTemplateById(template.id, v11.id)).stages.length, 3);
+
+      // After a room uses 1.1, normal structural versioning resumes.
+      const newRoomId = await linkTemplateToRoom(template.id);
+      assert.ok(newRoomId);
+      assert.strictEqual(await editingService.hasProductionUnitForTemplateVersion(template.id), true);
+      rev = await getRevision(template.id, v11.id);
+      const afterRoomPreview = await editingService.previewEditingSession(
+        template.id,
+        { baseVersionId: v11.id, baseRevision: rev, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'v12-stage',
+            payload: { name: 'مرحلة تستلزم إصدارًا ثالثًا', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(afterRoomPreview.isNewVersionMandatory, true);
+      assert.strictEqual(afterRoomPreview.allowsOverwrite, false);
+      const newFork = await editingService.commitEditingSession(
+        template.id,
+        { baseVersionId: v11.id, baseRevision: rev, commitDecision: 'AUTO',
+          operations: [{ type: 'ADD_STAGE', tempClientId: 'v12-stage',
+            payload: { name: 'مرحلة تستلزم إصدارًا ثالثًا', departmentId: testDepartmentId } }] },
+        testUserId
+      );
+      assert.strictEqual(newFork.createdNewVersion, true);
+      assert.strictEqual(newFork.targetVersionNumber, '1.2');
+      assert.strictEqual((await templateService.getTemplateById(template.id, v11.id)).stages.length, 3);
+
+      // Neither 1.0 nor 1.1 can be edited after becoming historical,
+      // including the version whose room was archived.
+      for (const historicId of [v1.id, v11.id]) {
+        const historicRev = await getRevision(template.id, historicId);
+        await assert.rejects(
+          () => editingService.commitEditingSession(
+            template.id,
+            { baseVersionId: historicId, baseRevision: historicRev, commitDecision: 'OVERWRITE_CURRENT',
+              operations: [{ type: 'ADD_STAGE', tempClientId: 'forbidden',
+                payload: { name: 'محاولة تعديل إصدار تاريخي', departmentId: testDepartmentId } }] },
+            testUserId
+          ),
+          (error: any) => error?.code === 'PRODUCTION_TEMPLATE_VERSION_NOT_LATEST'
+        );
+      }
+    });
+
     it('MINOR operation with AUTO decision updates in-place on current version', async () => {
       const created = await templateService.createTemplate({
         name: 'قالب التحرير الطفيف',
