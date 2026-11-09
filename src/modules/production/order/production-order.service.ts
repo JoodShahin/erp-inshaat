@@ -1946,7 +1946,6 @@ export class ProductionOrderService {
       return {
         id: order.id,
         orderNumber: order.orderNumber,
-      title: order.title,
         title: order.title,
         status: order.status,
         priority: order.priority,
