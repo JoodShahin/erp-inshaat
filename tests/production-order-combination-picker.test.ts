@@ -10,7 +10,7 @@ interface Picker {
   pickUnusedCombination(line: Line): boolean;
 }
 
-const source = readFileSync('src/public/js/production-order-edit.js', 'utf8');
+const source = readFileSync('src/public/js/production-order-edit.js', 'utf8').replace(/\r\n?/g, '\n');
 const start = source.indexOf('  function optionHasUnusedCompletion(');
 const end = source.indexOf('  /**\n   * Evaluates all lines', start);
 assert.ok(start >= 0 && end > start, 'combination picker source must be present');
