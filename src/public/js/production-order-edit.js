@@ -689,13 +689,15 @@ document.addEventListener('DOMContentLoaded', () => {
             select.appendChild(optEl);
           });
           if (!availableForPrefix.some((opt) => opt.id === pat.selectedOptionId)) {
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            placeholder.textContent = availableForPrefix.length
+              ? '— اختر تركيبة متاحة —'
+              : '— لا توجد تركيبة متاحة —';
+            select.insertBefore(placeholder, select.firstChild);
             select.value = '';
-            if (!select.options.length) {
-              const noOptions = document.createElement('option');
-              noOptions.value = '';
-              noOptions.textContent = '— لا توجد تركيبة متاحة —';
-              select.appendChild(noOptions);
-            }
           }
 
           if (pat.isHistorical || pat.availableOptions.length === 0) {
