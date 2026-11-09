@@ -245,7 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const tdDesc = document.createElement('td');
       tdDesc.className = 'py-3 px-3 text-muted small';
       tdDesc.style.maxWidth = '250px';
-      tdDesc.textContent = order.description || '—';
+      tdDesc.textContent = order.title || '—';
       tr.appendChild(tdDesc);
 
       // 4. Line Count
