@@ -223,6 +223,52 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${templateId}|${parts.join('|')}`;
   }
 
+  // The exclusion rule applies to COMPLETE template/option combinations.
+  // Prefix filtering leaves an option visible only if at least one unused
+  // completion remains for the patterns that follow it.
+  function optionHasUnusedCompletion(line, patternIndex, optionId) {
+    const prefix = line.patterns.slice(0, patternIndex).map((p) => p.selectedOptionId);
+    if (prefix.some((id) => !id)) return true;
+    prefix.push(optionId);
+
+    const otherLines = lines.filter((other) =>
+      other !== line && other.template.id === line.template.id &&
+      other.patterns.length === line.patterns.length
+    );
+    const usedSuffixes = new Set();
+    for (const other of otherLines) {
+      const samePrefix = prefix.every((id, i) =>
+        other.patterns[i].patternId === line.patterns[i].patternId &&
+        other.patterns[i].selectedOptionId === id
+      );
+      if (samePrefix) {
+        usedSuffixes.add(other.patterns.slice(patternIndex + 1)
+          .map((p) => p.patternId + ':' + p.selectedOptionId).join('|'));
+      }
+    }
+
+    const remaining = line.patterns.slice(patternIndex + 1);
+    const combinations = remaining.reduce((count, p) =>
+      count * (p.availableOptions || []).length, 1);
+    return combinations > usedSuffixes.size;
+  }
+
+  function pickUnusedCombination(line) {
+    if (!line.patterns.length) {
+      return !lines.some((l) => l !== line && l.template.id === line.template.id);
+    }
+    for (let i = 0; i < line.patterns.length; i++) {
+      const pat = line.patterns[i];
+      const available = (pat.availableOptions || []).filter((opt) =>
+        optionHasUnusedCompletion(line, i, opt.id));
+      if (!available.length) return false;
+      if (!available.some((opt) => opt.id === pat.selectedOptionId)) {
+        pat.selectedOptionId = available[0].id;
+      }
+    }
+    return true;
+  }
+
   /**
    * Evaluates all lines for validity and duplicates across the entire order.
    * Returns true if all lines are valid.
@@ -629,13 +675,26 @@ document.addEventListener('DOMContentLoaded', () => {
             select.appendChild(placeholderOpt);
           }
 
-          (pat.availableOptions || []).forEach((opt) => {
+          const patternIndex = line.patterns.indexOf(pat);
+          const availableForPrefix = (pat.availableOptions || []).filter((opt) =>
+            optionHasUnusedCompletion(line, patternIndex, opt.id)
+          );
+          availableForPrefix.forEach((opt) => {
             const optEl = document.createElement('option');
             optEl.value = opt.id;
             optEl.textContent = opt.name;
             if (opt.id === pat.selectedOptionId) optEl.selected = true;
             select.appendChild(optEl);
           });
+          if (!availableForPrefix.some((opt) => opt.id === pat.selectedOptionId)) {
+            select.value = '';
+            if (!select.options.length) {
+              const noOptions = document.createElement('option');
+              noOptions.value = '';
+              noOptions.textContent = '— لا توجد تركيبة متاحة —';
+              select.appendChild(noOptions);
+            }
+          }
 
           if (pat.isHistorical || pat.availableOptions.length === 0) {
             select.disabled = true;
@@ -644,7 +703,12 @@ document.addEventListener('DOMContentLoaded', () => {
           select.addEventListener('change', (e) => {
             pat.selectedOptionId = e.target.value;
             pat.isHistorical = false;
-            revalidateEditor();
+            // Reconcile dependent choices after changing an earlier pattern.
+            for (const later of line.patterns.slice(line.patterns.indexOf(pat) + 1)) {
+              later.selectedOptionId = null;
+            }
+            pickUnusedCombination(line);
+            renderLines();
           });
 
           patField.appendChild(select);
@@ -915,6 +979,13 @@ document.addEventListener('DOMContentLoaded', () => {
         validationErrors: [],
       };
 
+      // A template without patterns can occur once only. For templates
+      // with patterns choose the first unused full combination, not blindly
+      // the first default option (which may already be occupied).
+      if (!pickUnusedCombination(newLine)) {
+        showComposerAlert('جميع تركيبات الأنماط لهذا القالب مستخدمة في بنود أمر الإنتاج.');
+        return;
+      }
       lines.push(newLine);
       renderLines();
 
