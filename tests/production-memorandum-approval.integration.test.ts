@@ -174,7 +174,7 @@ describe('Phase 2.1 Real MySQL Integration Tests: Production Order Approval into
     const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
 
-    const created = await orderService.createOrder({ description: 'Order for memorandum approval' }, testUserId);
+    const created = await orderService.createOrder({ title: 'Order for memorandum approval', description: 'Order for memorandum approval' }, testUserId);
     const orderId = created.id;
     createdOrderIds.push(orderId);
 
@@ -212,7 +212,7 @@ describe('Phase 2.1 Real MySQL Integration Tests: Production Order Approval into
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
     const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
 
-    const created = await orderService.createOrder({ description: 'Order for quantity tracking' }, testUserId);
+    const created = await orderService.createOrder({ title: 'Order for quantity tracking', description: 'Order for quantity tracking' }, testUserId);
     const orderId = created.id;
     createdOrderIds.push(orderId);
 
@@ -287,7 +287,7 @@ describe('Phase 2.1 Real MySQL Integration Tests: Production Order Approval into
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
     const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
 
-    const created = await orderService.createOrder({ description: 'Order for reopen testing' }, testUserId);
+    const created = await orderService.createOrder({ title: 'Order for reopen testing', description: 'Order for reopen testing' }, testUserId);
     const orderId = created.id;
     createdOrderIds.push(orderId);
 
@@ -355,7 +355,7 @@ describe('Phase 2.1 Real MySQL Integration Tests: Production Order Approval into
   // 4. MySQL Concurrency Pessimistic Write Serialization
   // ==========================================
   it('4. Concurrency in MySQL: two concurrent approvals serialize through pessimistic lock; one succeeds and one fails', async () => {
-    const created = await orderService.createOrder({ description: 'Testing concurrent approvals in MySQL' }, testUserId);
+    const created = await orderService.createOrder({ title: 'Testing concurrent approvals in MySQL', description: 'Testing concurrent approvals in MySQL' }, testUserId);
     const orderId = created.id;
     createdOrderIds.push(orderId);
 
