@@ -49,10 +49,15 @@
             <div class="form-text text-muted">تحدد الأولوية التشغيلية لجدولة وتنفيذ أمر الإنتاج (الافتراضي: عادية).</div>
           </div>
 
+          <div class="mb-4">
+            <label for="orderTitle" class="form-label fw-bold text-dark">عنوان أمر الإنتاج <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" id="orderTitle" name="title" maxlength="255" required placeholder="مثال: تصنيع غرف مشروع المجمع السكني">
+          </div>
+
           <!-- Description -->
           <div class="mb-4">
             <label for="orderDescription" class="form-label fw-bold text-dark">وصف أمر الإنتاج <span class="text-muted fw-normal">(اختياري)</span></label>
-            <input type="text" class="form-control" id="orderDescription" name="description" maxlength="500" placeholder="مثال: تصنيع غرف المجمع السكني - المرحلة الأولى">
+            <textarea class="form-control" id="orderDescription" name="description" maxlength="2000" rows="3" placeholder="وصف الطلب والغرض من الإنتاج"></textarea>
             <div class="form-text text-muted">وصف مختصر للغرض التشغيلي من هذا الطلب.</div>
           </div>
 
@@ -86,6 +91,12 @@ document.addEventListener('DOMContentLoaded', () => {
     alertBox.classList.add('d-none');
     alertBox.textContent = '';
 
+    const title = document.getElementById('orderTitle').value.trim();
+    if (!title) {
+      alertBox.textContent = 'عنوان أمر الإنتاج مطلوب';
+      alertBox.classList.remove('d-none');
+      return;
+    }
     const description = document.getElementById('orderDescription').value.trim() || null;
     const notes = document.getElementById('orderNotes').value.trim() || null;
     const priority = document.getElementById('orderPriority').value;
@@ -97,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await window.erpFetch('/api/production/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description, notes, priority }),
+        body: JSON.stringify({ title, description, notes, priority }),
       });
 
       const resJson = await response.json();
