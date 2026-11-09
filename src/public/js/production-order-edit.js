@@ -126,6 +126,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const editHeaderModalEl = document.getElementById('editHeaderModal');
   const editHeaderModal = editHeaderModalEl ? new bootstrap.Modal(editHeaderModalEl) : null;
   const editHeaderForm = document.getElementById('editHeaderForm');
+  const editTitleInput = document.getElementById('editTitleInput');
+  const orderTitleText = document.getElementById('orderTitleText');
   const editDescriptionInput = document.getElementById('editDescriptionInput');
   const editNotesInput = document.getElementById('editNotesInput');
   const editHeaderAlert = document.getElementById('editHeaderAlert');
@@ -1149,6 +1151,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
   if (editHeaderBtn) {
     editHeaderBtn.addEventListener('click', () => {
+      editTitleInput.value = currentOrder.title || '';
       editDescriptionInput.value = currentOrder.description || '';
       editNotesInput.value = currentOrder.notes || '';
       editHeaderAlert.classList.add('d-none');
@@ -1160,6 +1163,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (editHeaderForm) {
     editHeaderForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (!editTitleInput.value.trim()) {
+        editHeaderAlert.textContent = 'عنوان أمر الإنتاج مطلوب';
+        editHeaderAlert.classList.remove('d-none');
+        return;
+      }
       confirmEditHeaderBtn.disabled = true;
       confirmEditHeaderBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> جاري الحفظ...';
 
@@ -1168,6 +1176,7 @@ document.addEventListener('DOMContentLoaded', () => {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            title: editTitleInput.value.trim(),
             description: editDescriptionInput.value.trim() || null,
             notes: editNotesInput.value.trim() || null,
           }),
@@ -1176,6 +1185,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const json = await res.json();
         if (!res.ok || !json.success) throw new Error(getErrorMessage(json, 'فشل تحديث البيانات'));
 
+        currentOrder.title = editTitleInput.value.trim();
+        if (orderTitleText) orderTitleText.textContent = currentOrder.title;
         currentOrder.description = editDescriptionInput.value.trim() || null;
         currentOrder.notes = editNotesInput.value.trim() || null;
 
