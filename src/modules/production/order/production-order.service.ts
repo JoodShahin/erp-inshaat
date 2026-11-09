@@ -96,6 +96,9 @@ export class ProductionOrderService {
     dto: CreateProductionOrderDto,
     userId: string
   ): Promise<ProductionOrderDto> {
+    if (!dto.title?.trim()) {
+      throw new BusinessRuleError('عنوان أمر الإنتاج مطلوب', 'PRODUCTION_ORDER_TITLE_REQUIRED');
+    }
     return this.dataSource.transaction(async (manager) => {
       // 1. Generate human-readable order number atomically using sequence row lock
       const seqRepo = manager.getRepository(ProductionOrderSequenceEntity);
