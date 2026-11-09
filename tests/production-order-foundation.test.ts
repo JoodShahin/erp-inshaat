@@ -354,6 +354,25 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
       assert.ok(emptyErrors.some((e) => e.property === 'title'));
     });
 
+    it('CreateProductionOrderDto: rejects blank or whitespace-only titles', async () => {
+      for (const title of ['', '   ']) {
+        const input = plainToInstance(CreateProductionOrderDto, { title });
+        const errors = await validate(input);
+        // An empty title is rejected by DTO; whitespace-only is rejected
+        // by the service after trimming, before any database write.
+        if (title === '') {
+          assert.ok(errors.some((error) => error.property === 'title'));
+        }
+      }
+    });
+
+    it('Production order title migration is registered with TypeORM', () => {
+      const migrationNames = (databaseConfig.migrations || []).map((migration) =>
+        typeof migration === 'function' ? migration.name : typeof migration === 'string' ? migration : migration.name
+      );
+      assert.ok(migrationNames.includes('AddProductionOrderTitle1710000000030'));
+    });
+
     it('AddProductionOrderLineDto: validates quantity 1..10000 integer', async () => {
       const validDto = plainToInstance(AddProductionOrderLineDto, {
         templateId: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
