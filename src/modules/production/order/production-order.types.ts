@@ -21,6 +21,7 @@ export interface ProductionOrderSummaryDto {
 export interface ProductionOrderDto {
   id: string;
   orderNumber: string;
+  title: string;
   status: string;
   priority: ProductionOrderPriority;
   description: string | null;
@@ -47,6 +48,7 @@ export interface ProductionOrderListSummaryDto {
 export interface ProductionOrderListItemDto {
   id: string;
   orderNumber: string;
+  title: string;
   status: string;
   priority: ProductionOrderPriority;
   description: string | null;
