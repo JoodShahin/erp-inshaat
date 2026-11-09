@@ -1,7 +1,12 @@
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, MaxLength, IsNotEmpty } from 'class-validator';
 import { ProductionOrderPriority } from '../production-order.entity.js';
 
 export class CreateProductionOrderDto {
+  @IsString()
+  @IsNotEmpty({ message: 'عنوان أمر الإنتاج مطلوب' })
+  @MaxLength(255, { message: 'العنوان لا يمكن أن يتجاوز 255 حرفاً' })
+  title!: string;
+
   @IsOptional()
   @IsEnum(ProductionOrderPriority, {
     message: 'يجب اختيار أولوية صالحة (CRITICAL, HIGH, NORMAL, LOW)',
