@@ -1,0 +1,37 @@
+
+name: Run Local ERP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-erp:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+
+    steps:
+      - name: Run ERP from local folder
+        shell: cmd
+        run: |
+          cd /d "C:\Users\abo jood\Desktop\erp-inshaat"
+
+          if not exist package.json (
+            echo ERROR: Project folder not found
+            exit /b 1
+          )
+
+          if not exist .env (
+            echo ERROR: Local .env not found
+            exit /b 1
+          )
+
+          if not exist node_modules (
+            call npm ci
+            if errorlevel 1 exit /b 1
+          )
+
+          echo Starting ERP from local folder...
+          call npm run dev
