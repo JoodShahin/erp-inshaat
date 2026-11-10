@@ -1,16 +1,33 @@
-name: Check Local Runner
+
+name: Test ERP Startup
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  check:
-    runs-on: self-hosted
+  startup:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+
+    env:
+      NODE_ENV: development
+      PORT: "3000"
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_USERNAME: ${{ secrets.DB_USERNAME }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_DATABASE: ${{ secrets.DB_DATABASE }}
+      AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+      AUTH_CSRF_SECRET: ${{ secrets.AUTH_CSRF_SECRET }}
+      AUTH_SESSION_TTL_DAYS: "30"
 
     steps:
-      - name: Check Runner
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
         shell: cmd
-        run: |
-          echo Runner connected successfully
-          echo Computer: %COMPUTERNAME%
-          npm run dev
+        run: npm run dev
