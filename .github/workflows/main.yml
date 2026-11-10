@@ -10,7 +10,7 @@ jobs:
 
     steps:
       - name: Check Windows
-        shell: powershell
+        shell: cmd
         run: |
           Write-Host "Runner connected successfully"
           Write-Host "Computer: $env:COMPUTERNAME"
