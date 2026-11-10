@@ -1,4 +1,3 @@
-
 name: Check Local Runner
 
 on:
@@ -9,15 +8,10 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Check Windows
+      - name: Check Runner
         shell: cmd
         run: |
-          Write-Host "Runner connected successfully"
-          Write-Host "Computer: $env:COMPUTERNAME"
-          Write-Host "Directory: $PWD"
-
-      - name: Check Node.js
-        shell: powershell
-        run: |
+          echo Runner connected successfully
+          echo Computer: %COMPUTERNAME%
           node --version
           npm --version
