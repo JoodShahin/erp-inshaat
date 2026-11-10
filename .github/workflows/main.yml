@@ -1,0 +1,23 @@
+
+name: Check Local Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: self-hosted
+
+    steps:
+      - name: Check Windows
+        shell: powershell
+        run: |
+          Write-Host "Runner connected successfully"
+          Write-Host "Computer: $env:COMPUTERNAME"
+          Write-Host "Directory: $PWD"
+
+      - name: Check Node.js
+        shell: powershell
+        run: |
+          node --version
+          npm --version
