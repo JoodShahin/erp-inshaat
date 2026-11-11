@@ -75,8 +75,9 @@
       <div class="col-12 col-lg-7">
         <div class="d-flex align-items-center gap-2 text-muted small fw-semibold mb-1">
           <i class="fa-solid fa-circle-info text-primary"></i>
-          <span>الوصف والملاحظات:</span>
+          <span>العنوان والوصف والملاحظات:</span>
         </div>
+        <p class="fw-bold text-dark mb-1" id="orderTitleText"><%= order.title %></p>
         <p class="text-dark mb-2 small" id="orderDescriptionText">
           <%= order.description || 'لا يوجد وصف محدد لهذا الطلب.' %>
         </p>
@@ -244,8 +245,12 @@
         <div id="editHeaderAlert" class="alert alert-danger d-none mb-3" role="alert"></div>
         <form id="editHeaderForm">
           <div class="mb-3">
+            <label for="editTitleInput" class="form-label fw-bold text-dark">عنوان أمر الإنتاج:</label>
+            <input type="text" id="editTitleInput" class="form-control" maxlength="255" required value="<%= order.title %>">
+          </div>
+          <div class="mb-3">
             <label for="editDescriptionInput" class="form-label fw-bold text-dark">الوصف:</label>
-            <input type="text" id="editDescriptionInput" class="form-control" maxlength="500">
+            <textarea id="editDescriptionInput" class="form-control" maxlength="2000" rows="3"></textarea>
           </div>
           <div class="mb-3">
             <label for="editNotesInput" class="form-label fw-bold text-dark">الملاحظات:</label>

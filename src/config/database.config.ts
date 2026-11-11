@@ -65,6 +65,7 @@ import { CreateProductionTemplateEditingIdempotencyAndTokens1710000000026 } from
 import { OptimizeProductionTemplateVersioningIndexes1710000000027 } from '../database/migrations/1710000000027-OptimizeProductionTemplateVersioningIndexes.js';
 import { CreateProductionTemplateFileCleanupQueue1710000000028 } from '../database/migrations/1710000000028-CreateProductionTemplateFileCleanupQueue.js';
 import { HardenProductionTemplateFileCleanup1710000000029 } from '../database/migrations/1710000000029-HardenProductionTemplateFileCleanup.js';
+import { AddProductionOrderTitle1710000000030 } from '../database/migrations/1710000000030-AddProductionOrderTitle.js';
 import { ProductionTemplateStoredFileEntity } from '../modules/production/template-stored-file/production-template-stored-file.entity.js';
 import { ProductionTemplateFileCleanupQueueEntity } from '../modules/production/template-stored-file/production-template-file-cleanup-queue.entity.js';
 import { ProductionTemplateEditingIdempotencyEntity } from '../modules/production/template-editing/production-template-editing-idempotency.entity.js';
@@ -151,6 +152,7 @@ export const databaseConfig: DataSourceOptions = {
     OptimizeProductionTemplateVersioningIndexes1710000000027,
     CreateProductionTemplateFileCleanupQueue1710000000028,
     HardenProductionTemplateFileCleanup1710000000029,
+    AddProductionOrderTitle1710000000030,
   ],
   subscribers: [],
 };

@@ -96,6 +96,9 @@ export class ProductionOrderService {
     dto: CreateProductionOrderDto,
     userId: string
   ): Promise<ProductionOrderDto> {
+    if (!dto.title?.trim()) {
+      throw new BusinessRuleError('عنوان أمر الإنتاج مطلوب', 'PRODUCTION_ORDER_TITLE_REQUIRED');
+    }
     return this.dataSource.transaction(async (manager) => {
       // 1. Generate human-readable order number atomically using sequence row lock
       const seqRepo = manager.getRepository(ProductionOrderSequenceEntity);
@@ -121,6 +124,7 @@ export class ProductionOrderService {
       const orderRepo = manager.getRepository(ProductionOrderEntity);
       const order = orderRepo.create({
         orderNumber,
+        title: dto.title.trim(),
         status: ProductionOrderStatus.DRAFT,
         priority: dto.priority ?? ProductionOrderPriority.NORMAL,
         description: dto.description?.trim() || null,
@@ -153,7 +157,7 @@ export class ProductionOrderService {
 
     if (query.search && query.search.trim()) {
       const s = `%${query.search.trim()}%`;
-      qb.andWhere('(o.order_number LIKE :s OR o.description LIKE :s)', { s });
+      qb.andWhere('(o.order_number LIKE :s OR o.title LIKE :s OR o.description LIKE :s)', { s });
     }
 
     if (query.priority) {
@@ -207,6 +211,7 @@ export class ProductionOrderService {
       return {
         id: o.id,
         orderNumber: o.orderNumber,
+        title: o.title,
         status: o.status,
         priority: o.priority,
         description: o.description,
@@ -238,7 +243,7 @@ export class ProductionOrderService {
 
     if (query.search && query.search.trim()) {
       const s = `%${query.search.trim()}%`;
-      summaryQb.andWhere('(o.order_number LIKE :s OR o.description LIKE :s)', { s });
+      summaryQb.andWhere('(o.order_number LIKE :s OR o.title LIKE :s OR o.description LIKE :s)', { s });
     }
 
     if (query.priority) {
@@ -288,6 +293,10 @@ export class ProductionOrderService {
       const order = await this.guardService.lockMutableOrder(orderId, manager);
 
       // 2. Apply modifications explicitly
+      if (dto.title !== undefined) {
+        if (!dto.title.trim()) throw new BusinessRuleError('عنوان أمر الإنتاج مطلوب', 'PRODUCTION_ORDER_TITLE_REQUIRED');
+        order.title = dto.title.trim();
+      }
       if (dto.description !== undefined) {
         order.description = dto.description === null ? null : dto.description.trim() || null;
       }
@@ -1940,6 +1949,7 @@ export class ProductionOrderService {
       return {
         id: order.id,
         orderNumber: order.orderNumber,
+        title: order.title,
         status: order.status,
         priority: order.priority,
         description: order.description,
@@ -2234,6 +2244,7 @@ export class ProductionOrderService {
     return {
       id: order.id,
       orderNumber: order.orderNumber,
+      title: order.title,
       status: order.status,
       priority: order.priority,
       description: order.description,

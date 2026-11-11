@@ -2928,6 +2928,7 @@ describe('Production Template Versioning & Atomic Editing Integration Suite', ()
 
       const order = await orderService.createOrder(
         {
+          title: 'Version-pinned production order',
           orderNumber: 'ORD-PIN-' + Date.now(),
           status: ProductionOrderStatus.DRAFT,
           priority: ProductionOrderPriority.MEDIUM,

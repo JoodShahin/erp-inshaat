@@ -126,6 +126,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const editHeaderModalEl = document.getElementById('editHeaderModal');
   const editHeaderModal = editHeaderModalEl ? new bootstrap.Modal(editHeaderModalEl) : null;
   const editHeaderForm = document.getElementById('editHeaderForm');
+  const editTitleInput = document.getElementById('editTitleInput');
+  const orderTitleText = document.getElementById('orderTitleText');
   const editDescriptionInput = document.getElementById('editDescriptionInput');
   const editNotesInput = document.getElementById('editNotesInput');
   const editHeaderAlert = document.getElementById('editHeaderAlert');
@@ -221,6 +223,52 @@ document.addEventListener('DOMContentLoaded', () => {
     const sorted = [...selections].sort((a, b) => a.patternId.localeCompare(b.patternId));
     const parts = sorted.map((s) => `${s.patternId}:${s.optionId}`);
     return `${templateId}|${parts.join('|')}`;
+  }
+
+  // The exclusion rule applies to COMPLETE template/option combinations.
+  // Prefix filtering leaves an option visible only if at least one unused
+  // completion remains for the patterns that follow it.
+  function optionHasUnusedCompletion(line, patternIndex, optionId) {
+    const prefix = line.patterns.slice(0, patternIndex).map((p) => p.selectedOptionId);
+    if (prefix.some((id) => !id)) return true;
+    prefix.push(optionId);
+
+    const otherLines = lines.filter((other) =>
+      other !== line && other.template.id === line.template.id &&
+      other.patterns.length === line.patterns.length
+    );
+    const usedSuffixes = new Set();
+    for (const other of otherLines) {
+      const samePrefix = prefix.every((id, i) =>
+        other.patterns[i].patternId === line.patterns[i].patternId &&
+        other.patterns[i].selectedOptionId === id
+      );
+      if (samePrefix) {
+        usedSuffixes.add(other.patterns.slice(patternIndex + 1)
+          .map((p) => p.patternId + ':' + p.selectedOptionId).join('|'));
+      }
+    }
+
+    const remaining = line.patterns.slice(patternIndex + 1);
+    const combinations = remaining.reduce((count, p) =>
+      count * (p.availableOptions || []).length, 1);
+    return combinations > usedSuffixes.size;
+  }
+
+  function pickUnusedCombination(line) {
+    if (!line.patterns.length) {
+      return !lines.some((l) => l !== line && l.template.id === line.template.id);
+    }
+    for (let i = 0; i < line.patterns.length; i++) {
+      const pat = line.patterns[i];
+      const available = (pat.availableOptions || []).filter((opt) =>
+        optionHasUnusedCompletion(line, i, opt.id));
+      if (!available.length) return false;
+      if (!available.some((opt) => opt.id === pat.selectedOptionId)) {
+        pat.selectedOptionId = available[0].id;
+      }
+    }
+    return true;
   }
 
   /**
@@ -629,13 +677,28 @@ document.addEventListener('DOMContentLoaded', () => {
             select.appendChild(placeholderOpt);
           }
 
-          (pat.availableOptions || []).forEach((opt) => {
+          const patternIndex = line.patterns.indexOf(pat);
+          const availableForPrefix = (pat.availableOptions || []).filter((opt) =>
+            optionHasUnusedCompletion(line, patternIndex, opt.id)
+          );
+          availableForPrefix.forEach((opt) => {
             const optEl = document.createElement('option');
             optEl.value = opt.id;
             optEl.textContent = opt.name;
             if (opt.id === pat.selectedOptionId) optEl.selected = true;
             select.appendChild(optEl);
           });
+          if (!availableForPrefix.some((opt) => opt.id === pat.selectedOptionId)) {
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            placeholder.textContent = availableForPrefix.length
+              ? '— اختر تركيبة متاحة —'
+              : '— لا توجد تركيبة متاحة —';
+            select.insertBefore(placeholder, select.firstChild);
+            select.value = '';
+          }
 
           if (pat.isHistorical || pat.availableOptions.length === 0) {
             select.disabled = true;
@@ -644,7 +707,12 @@ document.addEventListener('DOMContentLoaded', () => {
           select.addEventListener('change', (e) => {
             pat.selectedOptionId = e.target.value;
             pat.isHistorical = false;
-            revalidateEditor();
+            // Reconcile dependent choices after changing an earlier pattern.
+            for (const later of line.patterns.slice(line.patterns.indexOf(pat) + 1)) {
+              later.selectedOptionId = null;
+            }
+            pickUnusedCombination(line);
+            renderLines();
           });
 
           patField.appendChild(select);
@@ -915,6 +983,13 @@ document.addEventListener('DOMContentLoaded', () => {
         validationErrors: [],
       };
 
+      // A template without patterns can occur once only. For templates
+      // with patterns choose the first unused full combination, not blindly
+      // the first default option (which may already be occupied).
+      if (!pickUnusedCombination(newLine)) {
+        showComposerAlert('جميع تركيبات الأنماط لهذا القالب مستخدمة في بنود أمر الإنتاج.');
+        return;
+      }
       lines.push(newLine);
       renderLines();
 
@@ -1078,6 +1153,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
   if (editHeaderBtn) {
     editHeaderBtn.addEventListener('click', () => {
+      editTitleInput.value = currentOrder.title || '';
       editDescriptionInput.value = currentOrder.description || '';
       editNotesInput.value = currentOrder.notes || '';
       editHeaderAlert.classList.add('d-none');
@@ -1089,6 +1165,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (editHeaderForm) {
     editHeaderForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (!editTitleInput.value.trim()) {
+        editHeaderAlert.textContent = 'عنوان أمر الإنتاج مطلوب';
+        editHeaderAlert.classList.remove('d-none');
+        return;
+      }
       confirmEditHeaderBtn.disabled = true;
       confirmEditHeaderBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> جاري الحفظ...';
 
@@ -1097,6 +1178,7 @@ document.addEventListener('DOMContentLoaded', () => {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            title: editTitleInput.value.trim(),
             description: editDescriptionInput.value.trim() || null,
             notes: editNotesInput.value.trim() || null,
           }),
@@ -1105,6 +1187,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const json = await res.json();
         if (!res.ok || !json.success) throw new Error(getErrorMessage(json, 'فشل تحديث البيانات'));
 
+        currentOrder.title = editTitleInput.value.trim();
+        if (orderTitleText) orderTitleText.textContent = currentOrder.title;
         currentOrder.description = editDescriptionInput.value.trim() || null;
         currentOrder.notes = editNotesInput.value.trim() || null;
 

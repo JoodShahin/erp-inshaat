@@ -244,7 +244,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
     const eventRepo = AppDataSource.getRepository(ProductionUnitEventEntity);
 
-    const created = await orderService.createOrder({ notes: 'Testing rollback atomicity' }, testUser1Id);
+    const created = await orderService.createOrder({ title: 'Testing rollback atomicity', notes: 'Testing rollback atomicity' }, testUser1Id);
     const orderId = created.id;
     createdOrderIds.push(orderId);
 
@@ -293,7 +293,7 @@ describe('Phase 1 Real MySQL Integration Tests: Execution Plans, Units, Concurre
     const planRepo = AppDataSource.getRepository(ProductionExecutionPlanEntity);
     const unitRepo = AppDataSource.getRepository(ProductionUnitEntity);
 
-    const created = await orderService.createOrder({ notes: 'Testing concurrent approvals' }, testUser1Id);
+    const created = await orderService.createOrder({ title: 'Testing concurrent approvals', notes: 'Testing concurrent approvals' }, testUser1Id);
     const orderId = created.id;
     createdOrderIds.push(orderId);
 

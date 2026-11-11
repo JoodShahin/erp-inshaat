@@ -1,5 +1,15 @@
 # Project Technical Map
 
+## Production Order Titles & Combination-Aware Draft Editor (in progress)
+
+- Production orders now define a required `title` separate from optional `description` and `notes`. The new migration `1710000000030-AddProductionOrderTitle.ts` backfills existing orders using their description (or order number) and makes the new title non-null. Creation, draft header editing, order lists/detail and search use the new field.
+- Draft editor `src/public/js/production-order-edit.js` retains the search-first template selection and existing full-configuration duplicate validation. It now preselects an UNUSED complete combination, and filters dependent pattern selections by the chosen prefix, offering only options that still admit at least one unused full combination. A template with no patterns may be selected once per order.
+- The server's existing `PRODUCTION_ORDER_LINE_DUPLICATE_CONFIGURATION` validation and atomic `PUT /api/production/orders/:orderId/draft-lines` route remain authoritative. No runtime room allocation, order approval behavior, or existing room snapshot is changed by this UI task.
+- **Post-test report repairs:** registered migration 0030 explicitly in `src/config/database.config.ts` (previous omission caused `No pending migrations to run` and `Unknown column title` in integration). Updated the option-picker regression test to normalize CRLF/LF on Windows; updated order-foundation test fixtures to supply the newly required title and added migration-registration coverage. These source/test corrections must be re-verified by the dedicated execution agent before release.
+- **Integration fixture compatibility (Nov 2026):** The second validation run passed TypeScript, build and 495 unit tests, and applied migration 0030 to `erp_inshaat_test`, but seven integration scenarios still instantiated orders without the required title. Updated those seven fixtures in `production-execution-plans-and-units.integration.test.ts` (2), `production-memorandum-approval.integration.test.ts` (4), and `production-template-versioning.integration.test.ts` (1). Pending a fresh integration run; never execute against `erp_db1`.
+- **Verification pending:** run typecheck, build, unit and MySQL integration tests on `erp_inshaat_test` only, check manual editor scenarios for 2x2 patterns, zero patterns, exhaustions, deletion, modification and historic selections. Never connect to `erp_db1`.
+
+
 ## Production Template Versioning — Current Architecture
 
 - **`src/modules/production/template-editing/production-template-editing.service.ts` — `ProductionTemplateEditingService`**: Atomic editing session manager and preview. `commitEditingSession(templateId, dto, userId?)` and `previewEditingSession(templateId, dto, userId?)` assert the **latest** active template version, compute a revision hash, normalize the requested operations, and apply structural/minor version decisions. Sessions are applied transactionally and support idempotency; preview remains read-only. Historical versions cannot be edited even when unused.

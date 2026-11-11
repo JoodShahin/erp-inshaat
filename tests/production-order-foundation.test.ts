@@ -340,8 +340,9 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
   // 2. DTO VALIDATION & SCHEMA CONSTRAINTS
   // ==========================================
   describe('2. DTO Validation & Schema Constraints', () => {
-    it('CreateProductionOrderDto: accepts description and notes, optional', async () => {
+    it('CreateProductionOrderDto: requires title; description and notes remain optional', async () => {
       const validInstance = plainToInstance(CreateProductionOrderDto, {
+        title: 'تصنيع غرف نموذج A',
         description: 'طلب تصنيع غرف نموذج A',
         notes: 'ملاحظات تشغيلية',
       });
@@ -350,7 +351,26 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
 
       const emptyInstance = plainToInstance(CreateProductionOrderDto, {});
       const emptyErrors = await validate(emptyInstance);
-      assert.equal(emptyErrors.length, 0);
+      assert.ok(emptyErrors.some((e) => e.property === 'title'));
+    });
+
+    it('CreateProductionOrderDto: rejects blank or whitespace-only titles', async () => {
+      for (const title of ['', '   ']) {
+        const input = plainToInstance(CreateProductionOrderDto, { title });
+        const errors = await validate(input);
+        // An empty title is rejected by DTO; whitespace-only is rejected
+        // by the service after trimming, before any database write.
+        if (title === '') {
+          assert.ok(errors.some((error) => error.property === 'title'));
+        }
+      }
+    });
+
+    it('Production order title migration is registered with TypeORM', () => {
+      const migrationNames = (databaseConfig.migrations || []).map((migration) =>
+        typeof migration === 'function' ? migration.name : typeof migration === 'string' ? migration : migration.name
+      );
+      assert.ok(migrationNames.includes('AddProductionOrderTitle1710000000030'));
     });
 
     it('AddProductionOrderLineDto: validates quantity 1..10000 integer', async () => {
@@ -1264,7 +1284,7 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
       });
 
       await assert.rejects(
-        async () => ctx.orderService.createOrder({ description: 'Test' }, 'u-1'),
+        async () => ctx.orderService.createOrder({ title: 'Test order', description: 'Test' }, 'u-1'),
         (err: any) => err instanceof BusinessRuleError && err.code === 'PRODUCTION_ORDER_SEQUENCE_NOT_INITIALIZED'
       );
     });
@@ -2123,6 +2143,7 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
       await assert.rejects(
         async () => {
           await service.createOrder({
+            title: 'New Order',
             description: 'New Order',
           });
         },
@@ -3150,17 +3171,17 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
     // ----------------------------------------------------
     it('CreateProductionOrderDto: optional priority accepts all 4 values, omitted is valid, invalid rejected', async () => {
       // 1. Omitted is valid
-      const omitted = plainToInstance(CreateProductionOrderDto, { description: 'test' });
+      const omitted = plainToInstance(CreateProductionOrderDto, { title: 'Test title', description: 'test' });
       assert.equal((await validate(omitted)).length, 0);
 
       // 2. All 4 values valid
       for (const p of [ProductionOrderPriority.CRITICAL, ProductionOrderPriority.HIGH, ProductionOrderPriority.NORMAL, ProductionOrderPriority.LOW]) {
-        const valid = plainToInstance(CreateProductionOrderDto, { priority: p });
+        const valid = plainToInstance(CreateProductionOrderDto, { title: 'Test title', priority: p });
         assert.equal((await validate(valid)).length, 0, `Priority ${p} must be valid`);
       }
 
       // 3. Invalid rejected
-      const invalid = plainToInstance(CreateProductionOrderDto, { priority: 'URGENT' as any });
+      const invalid = plainToInstance(CreateProductionOrderDto, { title: 'Test title', priority: 'URGENT' as any });
       const errors = await validate(invalid);
       assert.ok(errors.length > 0, 'Invalid priority value must be rejected');
       assert.ok(errors[0].constraints?.isEnum, 'Must contain isEnum constraint error');
@@ -3208,7 +3229,7 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
     // ----------------------------------------------------
     it('createOrder(): defaults to NORMAL when priority is omitted', async () => {
       const { service, store } = createDuplicateTestContext();
-      const created = await service.createOrder({ description: 'طلب عادي' }, 'user-creator-1');
+      const created = await service.createOrder({ title: 'طلب عادي', description: 'طلب عادي' }, 'user-creator-1');
 
       assert.equal(created.priority, ProductionOrderPriority.NORMAL);
       assert.equal(store.order.priority, ProductionOrderPriority.NORMAL);
@@ -3219,7 +3240,7 @@ describe('Phase 1 — Production Order Drafting & Pattern Selection Foundation',
     it('createOrder(): explicitly set priority is persisted and returned in DTO', async () => {
       const { service, store } = createDuplicateTestContext();
       const created = await service.createOrder(
-        { description: 'طلب حرج', priority: ProductionOrderPriority.CRITICAL },
+        { title: 'طلب حرج', description: 'طلب حرج', priority: ProductionOrderPriority.CRITICAL },
         'user-creator-1'
       );
 

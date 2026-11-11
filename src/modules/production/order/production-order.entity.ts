@@ -49,6 +49,9 @@ export class ProductionOrderEntity {
   })
   priority!: ProductionOrderPriority;
 
+  @Column({ type: 'varchar', length: 255 })
+  title!: string;
+
   @Column({ type: 'text', nullable: true })
   description!: string | null;
 
